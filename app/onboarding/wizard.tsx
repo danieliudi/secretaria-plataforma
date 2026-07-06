@@ -21,7 +21,7 @@ const PROVIDER_OPTIONS: Array<{
     placeholder: '{"pessoal": "IDdaSuaListaAqui"}',
     tokenSteps: null,
     helpLink: null,
-    mapHint: "Abra tasks.google.com, escolha a lista que quer usar e copia o código que aparece na URL depois de \"/lists/\".",
+    mapHint: "O Google Tasks não mostra esse código na tela pra quem não é programador (só via ferramenta técnica) — pode deixar em branco tranquilo; quem administra a plataforma resolve isso depois.",
   },
   {
     value: "clickup",
