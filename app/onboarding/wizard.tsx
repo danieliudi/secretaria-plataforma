@@ -4,30 +4,75 @@ import { useState } from "react";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 
-const PROVIDER_OPTIONS: Array<{ value: Provider; label: string; hint: string; placeholder: string }> = [
+const PROVIDER_OPTIONS: Array<{
+  value: Provider;
+  label: string;
+  hint: string;
+  placeholder: string;
+  tokenSteps: string[] | null;
+  helpLink: { href: string; label: string } | null;
+  mapHint: string;
+}> = [
   {
     value: "google_tasks",
     label: "Google Tasks",
     hint: "Grátis e já pronto — reusa o login que você acabou de fazer, sem token extra. Recomendado se você não usa nenhuma das outras plataformas ainda.",
     placeholder: '{"pessoal": "IDdaSuaListaAqui"}',
+    tokenSteps: null,
+    helpLink: null,
+    mapHint: "Abra tasks.google.com, escolha a lista que quer usar e copia o código que aparece na URL depois de \"/lists/\".",
   },
   {
     value: "clickup",
     label: "ClickUp",
     hint: "Cole seu token pessoal (app.clickup.com/settings/apps) e o mapa de frente → lists.",
     placeholder: '{"resibag": {"Pauta & Reuniões": "901700000000"}}',
+    tokenSteps: [
+      "Entra na sua conta do ClickUp pelo navegador.",
+      "Clica no seu avatar (canto superior direito) → Settings.",
+      "No menu da esquerda, desce até \"Apps\".",
+      "Em \"API Token\", clica em \"Generate\" (ou \"Regenerate\" se já tiver um).",
+      "Copia o token gerado e cola no campo acima.",
+    ],
+    helpLink: {
+      href: "https://help.clickup.com/hc/en-us/articles/6303422883095-Create-your-own-app-with-the-ClickUp-API",
+      label: "Guia oficial do ClickUp (com imagens)",
+    },
+    mapHint: "O ID de cada lista aparece na URL quando você abre ela no navegador (depois de \"/li/\").",
   },
   {
     value: "notion",
     label: "Notion",
     hint: "Token de uma integração interna (notion.so/my-integrations) — compartilhe cada database com ela antes.",
     placeholder: '{"resibag": "databaseIdAqui"}',
+    tokenSteps: [
+      "Acessa notion.so/my-integrations (logado com a conta certa).",
+      "Clica em \"+ New integration\".",
+      "Dá um nome, escolhe o workspace e o tipo \"Internal\".",
+      "Depois de criada, clica em \"Show\" no token e copia (começa com \"secret_\" ou \"ntn_\").",
+      "Importante: isso sozinho não dá acesso a nada — abre cada database que a secretária vai usar, clica nos \"...\" no canto superior direito → \"Connections\" → \"Connect to\" → escolhe a integração que você acabou de criar.",
+    ],
+    helpLink: {
+      href: "https://www.notion.com/help/create-integrations-with-the-notion-api",
+      label: "Guia oficial do Notion (com imagens)",
+    },
+    mapHint: "O ID é a sequência de letras/números na URL do database, logo antes de \"?v=\".",
   },
   {
     value: "trello",
     label: "Trello",
     hint: "Token de acesso pessoal. (A API key do app fica combinada por enquanto — se precisar, fale com quem administra a plataforma.)",
     placeholder: '{"resibag": {"A Fazer": "60a1b2c3d4e5f6"}}',
+    tokenSteps: [
+      "Quem administra a plataforma já tem uma chave de API do Trello configurada — você não precisa criar uma.",
+      "Peça pra essa pessoa o link de autorização pronto (usa a chave dela). Ao abrir e clicar em \"Allow\", o Trello mostra seu token pessoal.",
+      "Se você já tiver uma API key própria do Trello, também pode gerar por conta própria — veja o guia oficial abaixo.",
+    ],
+    helpLink: {
+      href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
+      label: "Guia oficial do Trello (com imagens)",
+    },
+    mapHint: "Pra achar o ID de uma lista, chama quem administra a plataforma — não é tão simples de achar sozinho no Trello ainda.",
   },
 ];
 
@@ -181,6 +226,28 @@ export default function OnboardingWizard(props: {
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="Cole o token aqui"
               />
+              {providerInfo.tokenSteps && (
+                <details className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-normal text-neutral-500">
+                  <summary className="cursor-pointer font-medium text-neutral-700">
+                    Como conseguir esse token?
+                  </summary>
+                  <ol className="mt-2 list-decimal space-y-1 pl-4">
+                    {providerInfo.tokenSteps.map((step, i) => (
+                      <li key={i}>{step}</li>
+                    ))}
+                  </ol>
+                  {providerInfo.helpLink && (
+                    <a
+                      href={providerInfo.helpLink.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-block underline"
+                    >
+                      {providerInfo.helpLink.label} ↗
+                    </a>
+                  )}
+                </details>
+              )}
             </label>
           )}
           <label className="flex flex-col gap-1 text-sm font-medium">
@@ -192,7 +259,7 @@ export default function OnboardingWizard(props: {
               placeholder={providerInfo.placeholder}
             />
             <span className="text-xs font-normal text-neutral-400">
-              Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
+              {providerInfo.mapHint} Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
             </span>
           </label>
           <div className="mt-2 flex gap-3">
