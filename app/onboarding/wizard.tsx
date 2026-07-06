@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
+type RemoteList = { id: string; name: string; path: string };
 
 const PROVIDER_OPTIONS: Array<{
   value: Provider;
@@ -13,6 +14,8 @@ const PROVIDER_OPTIONS: Array<{
   tokenSteps: string[] | null;
   helpLink: { href: string; label: string } | null;
   mapHint: string;
+  /** Como buscar as listas reais: "flat" (frente → id), "nested" (frente → {nome: id}), ou "manual" (sem busca, cola o JSON). */
+  pickerKind: "flat" | "nested" | "manual";
 }> = [
   {
     value: "google_tasks",
@@ -21,7 +24,8 @@ const PROVIDER_OPTIONS: Array<{
     placeholder: '{"pessoal": "IDdaSuaListaAqui"}',
     tokenSteps: null,
     helpLink: null,
-    mapHint: "O Google Tasks não mostra esse código na tela pra quem não é programador (só via ferramenta técnica) — pode deixar em branco tranquilo; quem administra a plataforma resolve isso depois.",
+    mapHint: "Escolha pra cada frente qual lista do Google Tasks ela usa.",
+    pickerKind: "flat",
   },
   {
     value: "clickup",
@@ -39,7 +43,8 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://help.clickup.com/hc/en-us/articles/6303422883095-Create-your-own-app-with-the-ClickUp-API",
       label: "Guia oficial do ClickUp (com imagens)",
     },
-    mapHint: "O ID de cada lista aparece na URL quando você abre ela no navegador (depois de \"/li/\").",
+    mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
+    pickerKind: "nested",
   },
   {
     value: "notion",
@@ -57,7 +62,8 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://www.notion.com/help/create-integrations-with-the-notion-api",
       label: "Guia oficial do Notion (com imagens)",
     },
-    mapHint: "O ID é a sequência de letras/números na URL do database, logo antes de \"?v=\".",
+    mapHint: "Depois de colar o token e compartilhar os databases com a integração, clica em buscar.",
+    pickerKind: "flat",
   },
   {
     value: "trello",
@@ -73,7 +79,8 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
       label: "Guia oficial do Trello (com imagens)",
     },
-    mapHint: "Pra achar o ID de uma lista, chama quem administra a plataforma — não é tão simples de achar sozinho no Trello ainda.",
+    mapHint: "Pra achar o ID de uma lista, chama quem administra a plataforma — não é tão simples de achar sozinho no Trello ainda (esse aqui ainda não tem busca automática).",
+    pickerKind: "manual",
   },
 ];
 
@@ -134,6 +141,10 @@ export default function OnboardingWizard(props: {
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
   const [listMap, setListMap] = useState("");
+  const [remoteLists, setRemoteLists] = useState<RemoteList[] | null>(null);
+  const [remoteListsLoading, setRemoteListsLoading] = useState(false);
+  const [remoteListsError, setRemoteListsError] = useState<string | null>(null);
+  const [frenteListMap, setFrenteListMap] = useState<Record<string, string>>({});
   const [channel, setChannel] = useState<Channel | null>(props.initialChannelPreference);
   const [telegramToken, setTelegramToken] = useState("");
   const [saving, setSaving] = useState(false);
@@ -144,6 +155,44 @@ export default function OnboardingWizard(props: {
   const channelInfo = CHANNEL_OPTIONS.find((c) => c.value === channel) ?? null;
   const wantsTelegram = channel === "telegram" || channel === "both";
   const wantsWhatsapp = channel === "whatsapp" || channel === "both";
+  const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
+
+  // Reseta a busca de listas sempre que troca de plataforma — a busca anterior
+  // não vale mais. Pro Google Tasks já busca na hora, porque não depende de
+  // token (reusa o login que já aconteceu).
+  useEffect(() => {
+    setRemoteLists(null);
+    setRemoteListsError(null);
+    setFrenteListMap({});
+    if (provider === "google_tasks") {
+      loadRemoteLists();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
+  async function loadRemoteLists() {
+    setRemoteListsLoading(true);
+    setRemoteListsError(null);
+    try {
+      const res = provider === "google_tasks"
+        ? await fetch("/api/onboarding/google-tasks-lists")
+        : await fetch(`/api/onboarding/${provider === "clickup" ? "clickup-lists" : "notion-databases"}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+          });
+      const data = await res.json();
+      if (!res.ok) {
+        setRemoteListsError(data.error ?? "Não conseguimos buscar suas listas.");
+        return;
+      }
+      setRemoteLists(data.lists);
+    } catch {
+      setRemoteListsError("Falha de conexão ao buscar listas.");
+    } finally {
+      setRemoteListsLoading(false);
+    }
+  }
 
   async function submitJson(url: string, body: unknown): Promise<boolean> {
     setSaving(true);
@@ -169,13 +218,33 @@ export default function OnboardingWizard(props: {
   }
 
   async function handlePersonaSubmit() {
-    const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
-    const ok = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArr });
+    const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
+    const ok = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
     if (ok) setStep(2);
   }
 
+  function buildListMapPayload(): string {
+    if (providerInfo.pickerKind === "manual") return listMap;
+
+    const chosen = Object.entries(frenteListMap).filter(([, listId]) => listId);
+    if (providerInfo.pickerKind === "flat") {
+      return JSON.stringify(Object.fromEntries(chosen));
+    }
+    // nested: frente → { nomeDaLista: id }
+    const nested: Record<string, Record<string, string>> = {};
+    for (const [frente, listId] of chosen) {
+      const list = remoteLists?.find((l) => l.id === listId);
+      if (list) nested[frente] = { [list.name]: list.id };
+    }
+    return JSON.stringify(nested);
+  }
+
   async function handleProviderSubmit() {
-    const ok = await submitJson("/api/onboarding/task-provider", { provider, token, list_map: listMap });
+    const ok = await submitJson("/api/onboarding/task-provider", {
+      provider,
+      token,
+      list_map: buildListMapPayload(),
+    });
     if (ok) setStep(3);
   }
 
@@ -315,18 +384,74 @@ export default function OnboardingWizard(props: {
                 )}
               </label>
             )}
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Mapa de frentes (JSON)
-              <textarea
-                className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={listMap}
-                onChange={(e) => setListMap(e.target.value)}
-                placeholder={providerInfo.placeholder}
-              />
+
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-foreground">Mapa de frentes</span>
+              <span className="text-xs font-normal text-muted-2">{providerInfo.mapHint}</span>
+
+              {providerInfo.pickerKind === "manual" ? (
+                <textarea
+                  className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={listMap}
+                  onChange={(e) => setListMap(e.target.value)}
+                  placeholder={providerInfo.placeholder}
+                />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {(provider === "notion" || provider === "clickup") && (
+                    <button
+                      type="button"
+                      onClick={loadRemoteLists}
+                      disabled={remoteListsLoading || !token.trim()}
+                      className="self-start rounded-lg border border-line px-4 py-2 text-xs font-medium text-foreground transition hover:border-cyan disabled:opacity-60"
+                    >
+                      {remoteListsLoading
+                        ? "Buscando…"
+                        : `Buscar minhas ${provider === "notion" ? "databases" : "listas"}`}
+                    </button>
+                  )}
+                  {provider === "google_tasks" && remoteListsLoading && (
+                    <p className="text-xs text-muted">Buscando suas listas…</p>
+                  )}
+                  {remoteListsError && (
+                    <p className="text-xs text-red-300">{remoteListsError}</p>
+                  )}
+                  {remoteLists && remoteLists.length === 0 && (
+                    <p className="text-xs text-muted-2">
+                      {provider === "notion"
+                        ? "Nenhum database compartilhado com essa integração ainda — compartilha um (Connections → Connect to) e clica em buscar de novo."
+                        : "Nenhuma lista encontrada."}
+                    </p>
+                  )}
+                  {remoteLists && remoteLists.length > 0 && frentesArr.length === 0 && (
+                    <p className="text-xs text-muted-2">
+                      Você não cadastrou nenhuma frente no passo 1 — pode voltar lá se quiser mapear alguma, ou seguir sem mapear.
+                    </p>
+                  )}
+                  {remoteLists && remoteLists.length > 0 && frentesArr.map((frente) => (
+                    <label key={frente} className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                      {frente}
+                      <select
+                        className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground focus:border-cyan focus:outline-none"
+                        value={frenteListMap[frente] ?? ""}
+                        onChange={(e) =>
+                          setFrenteListMap((prev) => ({ ...prev, [frente]: e.target.value }))
+                        }
+                      >
+                        <option value="">— não mapear por enquanto —</option>
+                        {remoteLists.map((l) => (
+                          <option key={l.id} value={l.id}>{l.path}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              )}
               <span className="text-xs font-normal text-muted-2">
-                {providerInfo.mapHint} Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
+                Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
               </span>
-            </label>
+            </div>
+
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(1)}

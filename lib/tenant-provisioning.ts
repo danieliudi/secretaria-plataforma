@@ -85,3 +85,10 @@ export async function upsertTenantSecret(
   if (error) throw new Error(`tenant_secret_create falhou: ${error.message}`);
   return data as string;
 }
+
+/** Lê um segredo do tenant no Vault via a RPC tenant_secret_read. */
+export async function readTenantSecret(admin: SupabaseClient, secretId: string): Promise<string> {
+  const { data, error } = await admin.rpc("tenant_secret_read", { p_id: secretId });
+  if (error) throw new Error(`tenant_secret_read falhou: ${error.message}`);
+  return data as string;
+}
