@@ -1,26 +1,81 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #090d14;
+  --foreground: #eaf0f5;
+  --surface: #11161f;
+  --surface-2: #0d1219;
+  --line: #1d2534;
+  --line-soft: #1a2130;
+  --muted: #7c8798;
+  --muted-2: #6b7686;
+  --cyan: #5eead4;
+  --violet: #8b7ff0;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-muted: var(--muted);
+  --color-muted-2: var(--muted-2);
+  --color-cyan: var(--cyan);
+  --color-violet: var(--violet);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono-signal);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+}
+
+.signal-rings {
+  position: absolute;
+  border-radius: 50%;
+  background: repeating-radial-gradient(
+    circle at center,
+    transparent 0,
+    transparent 55px,
+    rgba(94, 234, 212, 0.07) 55px,
+    rgba(94, 234, 212, 0.07) 56px
+  );
+  pointer-events: none;
+}
+
+.signal-sweep {
+  position: absolute;
+  border-radius: 50%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.signal-sweep::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(94, 234, 212, 0.22) 18deg,
+    transparent 40deg,
+    transparent 360deg
+  );
+  animation: signal-spin 7s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes signal-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signal-sweep::before {
+    animation: none !important;
+  }
 }

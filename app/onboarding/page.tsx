@@ -14,18 +14,18 @@ export default async function OnboardingPage() {
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, google_refresh_token_secret_id")
+    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, google_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
   if (error || !tenant) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
-        <h1 className="text-xl font-semibold">Não encontramos sua configuração ainda</h1>
-        <p className="max-w-md text-neutral-500">
+        <h1 className="font-display text-xl font-extrabold text-foreground">Não encontramos sua configuração ainda</h1>
+        <p className="max-w-md text-muted">
           Isso pode acontecer se o login foi interrompido no meio. Tenta entrar de novo?
         </p>
-        <a href="/login" className="underline">Voltar pro login</a>
+        <a href="/login" className="text-cyan underline">Voltar pro login</a>
       </main>
     );
   }
@@ -39,6 +39,8 @@ export default async function OnboardingPage() {
       initialFrentes={(tenant.frentes ?? []).join(", ")}
       initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
+      initialChannelPreference={tenant.channel_preference as "whatsapp" | "telegram" | "both" | null}
+      telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
     />
   );
 }
