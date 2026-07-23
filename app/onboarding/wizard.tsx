@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
@@ -79,8 +79,8 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
       label: "Guia oficial do Trello (com imagens)",
     },
-    mapHint: "Pra achar o ID de uma lista, chama quem administra a plataforma — não é tão simples de achar sozinho no Trello ainda (esse aqui ainda não tem busca automática).",
-    pickerKind: "manual",
+    mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
+    pickerKind: "nested",
   },
 ];
 
@@ -158,12 +158,20 @@ export default function OnboardingWizard(props: {
   const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
 
   // Reseta a busca de listas sempre que troca de plataforma — a busca anterior
-  // não vale mais. Pro Google Tasks já busca na hora, porque não depende de
-  // token (reusa o login que já aconteceu).
-  useEffect(() => {
+  // não vale mais. Ajuste de estado durante o render (em vez de useEffect) é o
+  // padrão recomendado pra "resetar estado quando uma prop muda" — evita o
+  // reflow extra de resetar depois do commit.
+  const prevProviderRef = useRef(provider);
+  if (prevProviderRef.current !== provider) {
+    prevProviderRef.current = provider;
     setRemoteLists(null);
     setRemoteListsError(null);
     setFrenteListMap({});
+  }
+
+  // Pro Google Tasks já busca na hora, porque não depende de token (reusa o
+  // login que já aconteceu) — isso é uma chamada de rede, então fica num efeito.
+  useEffect(() => {
     if (provider === "google_tasks") {
       loadRemoteLists();
     }
@@ -174,9 +182,14 @@ export default function OnboardingWizard(props: {
     setRemoteListsLoading(true);
     setRemoteListsError(null);
     try {
+      const endpoints: Record<Exclude<Provider, "google_tasks">, string> = {
+        clickup: "clickup-lists",
+        notion: "notion-databases",
+        trello: "trello-lists",
+      };
       const res = provider === "google_tasks"
         ? await fetch("/api/onboarding/google-tasks-lists")
-        : await fetch(`/api/onboarding/${provider === "clickup" ? "clickup-lists" : "notion-databases"}`, {
+        : await fetch(`/api/onboarding/${endpoints[provider]}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token }),
@@ -225,6 +238,9 @@ export default function OnboardingWizard(props: {
 
   function buildListMapPayload(): string {
     if (providerInfo.pickerKind === "manual") return listMap;
+    // Busca automática falhou (ex: TRELLO_API_KEY não configurada) e a pessoa
+    // preencheu o textarea de fallback — usa isso em vez do picker.
+    if (remoteListsError && listMap.trim()) return listMap;
 
     const chosen = Object.entries(frenteListMap).filter(([, listId]) => listId);
     if (providerInfo.pickerKind === "flat") {
@@ -398,7 +414,7 @@ export default function OnboardingWizard(props: {
                 />
               ) : (
                 <div className="flex flex-col gap-3">
-                  {(provider === "notion" || provider === "clickup") && (
+                  {(provider === "notion" || provider === "clickup" || provider === "trello") && (
                     <button
                       type="button"
                       onClick={loadRemoteLists}
@@ -414,7 +430,16 @@ export default function OnboardingWizard(props: {
                     <p className="text-xs text-muted">Buscando suas listas…</p>
                   )}
                   {remoteListsError && (
-                    <p className="text-xs text-red-300">{remoteListsError}</p>
+                    <div className="flex flex-col gap-1.5">
+                      <p className="text-xs text-red-300">{remoteListsError}</p>
+                      <span className="text-xs text-muted-2">Enquanto isso, pode colar o mapa manualmente:</span>
+                      <textarea
+                        className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                        value={listMap}
+                        onChange={(e) => setListMap(e.target.value)}
+                        placeholder={providerInfo.placeholder}
+                      />
+                    </div>
                   )}
                   {remoteLists && remoteLists.length === 0 && (
                     <p className="text-xs text-muted-2">
@@ -595,6 +620,15 @@ export default function OnboardingWizard(props: {
                 : "Assim que a ativação do Telegram estiver disponível, sua secretária já vai ter o token dela salvo — sem precisar repetir esse passo."}
             </p>
             <p className="mt-3 text-xs text-muted-2">Seu identificador: {props.slug}</p>
+            <button
+              onClick={() => {
+                setFinished(false);
+                setStep(1);
+              }}
+              className="mt-4 self-start text-xs text-cyan underline underline-offset-2"
+            >
+              Editar configuração
+            </button>
           </section>
         )}
       </div>

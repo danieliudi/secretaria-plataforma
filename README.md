@@ -6,9 +6,11 @@ base multi-tenant do projeto **secretaria-agentic** (tabela `tenants` +
 Vault). Depois do wizard, a pessoa some com o próprio bot funcionando — nunca
 vê nem baixa uma linha de código.
 
-Next.js 16 (App Router, Turbopack) + Supabase Auth (`@supabase/ssr`). Ver
-`AGENTS.md` na raiz — essa versão do Next tem convenções diferentes do usual
-(ex: `middleware.ts` virou `proxy.ts`).
+Next.js 16 (App Router, Turbopack) + Supabase Auth (`@supabase/ssr`). Atenção:
+essa versão do Next tem convenções diferentes do usual — o antigo
+`middleware.ts` virou `proxy.ts` (mesma API, `NextRequest`/`NextResponse`, só
+o nome do arquivo e da função exportada mudou; ver comentário no topo do
+arquivo).
 
 ## Como funciona
 
@@ -18,12 +20,23 @@ Next.js 16 (App Router, Turbopack) + Supabase Auth (`@supabase/ssr`). Ver
 2. **`/auth/callback`** — troca o `code` pela sessão, garante a linha em
    `tenants` (`auth_user_id`) e grava o `refresh_token` do Google no Vault
    (`lib/tenant-provisioning.ts`).
-3. **`/onboarding`** — wizard de 2 passos: persona (nome/cargo/frentes) e
-   gerenciador de tarefas (ClickUp/Notion/Trello/Google Tasks + token +
-   mapa de frentes). Cada passo chama uma API route
-   (`app/api/onboarding/*`) que grava em `tenants` via **service role**
-   (RLS de `tenants` hoje nega tudo pra `authenticated`; toda escrita passa
-   por uma rota server-side que verifica a sessão antes).
+3. **`/onboarding`** — wizard de 3 passos: persona (nome/cargo/frentes),
+   gerenciador de tarefas (ClickUp/Notion/Trello/Google Tasks + token + mapa
+   de frentes) e canal de conversa (WhatsApp/Telegram/ambos). Termina numa
+   tela de recibo com um link "Editar configuração" que volta pro passo 1 —
+   como cada passo faz upsert (não só insert), reabrir `/onboarding` depois
+   (a raiz `/` já redireciona quem está logado pra lá) serve como tela de
+   "gerenciar depois", com os campos pré-preenchidos do que já foi salvo.
+   Cada passo chama uma API route (`app/api/onboarding/*`) que grava em
+   `tenants` via **service role** (RLS de `tenants` hoje nega tudo pra
+   `authenticated`; toda escrita passa por uma rota server-side que verifica
+   a sessão antes).
+   * ClickUp, Notion e Google Tasks buscam as listas/databases reais da
+     pessoa (`app/api/onboarding/{clickup-lists,notion-databases,google-tasks-lists}`)
+     pra ela escolher pelo nome. Trello também busca (`trello-lists`), mas
+     depende de uma `TRELLO_API_KEY` global configurada no ambiente (ver
+     "Setup local" abaixo) — sem ela, cai num textarea de fallback pra colar
+     o mapa em JSON manualmente.
 
 Depois disso o tenant já está pronto pro **backend** (edge functions do
 `secretaria-agentic`) usar — só falta o canal (WhatsApp/Telegram), que ainda
@@ -40,7 +53,10 @@ npm run dev
 Valores de `.env.local`: `NEXT_PUBLIC_SUPABASE_URL` e
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Supabase → Project Settings → Data API) e
 `SUPABASE_SERVICE_ROLE_KEY` (Project Settings → API Keys → `service_role` —
-nunca commitar, nunca usar num Client Component).
+nunca commitar, nunca usar num Client Component). `TRELLO_API_KEY` é
+opcional — só habilita a busca automática de listas do Trello no passo 2 do
+wizard (developer.trello.com/docs/get-started); sem ela o wizard continua
+funcionando, só cai no textarea manual pro Trello.
 
 ## Setup externo pendente (obrigatório antes de qualquer login funcionar)
 
@@ -68,18 +84,16 @@ nunca commitar, nunca usar num Client Component).
   Telegram precisa criar o bot via @BotFather e configurar o webhook
   `/telegram/<slug>`). Automatizar isso é o próximo passo grande desta
   plataforma.
-* Trello precisa de 2 credenciais (`TRELLO_API_KEY` + `TRELLO_API_TOKEN`),
-  mas `tenants` só tem 1 coluna de token por provider — o wizard só grava o
-  token; a API key continua vindo do ambiente global das edge functions (gap
-  já documentado em `secretaria-agentic/docs/multi-tenant.md`).
-* Mapa de frentes é JSON cru no wizard (sem validação de formato nem UI
-  guiada por plataforma) — funcional, mas exige que quem preenche saiba o
-  formato esperado (exemplos aparecem como placeholder no campo). Uma versão
-  futura poderia ter um formulário estruturado por linha em vez de textarea.
-* Sem página de "gerenciar depois" — hoje o wizard só roda uma vez após o
-  login; pra editar a configuração é preciso mexer direto na tabela
-  `tenants` (ou reautorizar o Google, que atualiza o refresh token). Uma
-  tela de configurações pós-onboarding é trabalho futuro.
+* Trello precisa de 2 credenciais (API key da aplicação + token pessoal),
+  mas `tenants` só tem 1 coluna de token por provider — o wizard grava o
+  token pessoal; a API key (`TRELLO_API_KEY`) é global, compartilhada por
+  todos os tenants (gap já documentado em
+  `secretaria-agentic/docs/multi-tenant.md`). Não dá pra um tenant trazer a
+  própria API key do Trello sem uma coluna nova em `tenants` — mudança que
+  pertence à migration do `secretaria-agentic`, não a este repo.
+* Mapa de frentes só é JSON cru no fallback do Trello quando `TRELLO_API_KEY`
+  não está configurada (ClickUp, Notion e Google Tasks sempre têm UI guiada
+  com busca automática; Trello também busca quando a key está configurada).
 
 ## Repositório
 
