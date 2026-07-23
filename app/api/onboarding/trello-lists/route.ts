@@ -36,15 +36,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "não autenticado" }, { status: 401 });
   }
 
-  const apiKey = process.env.TRELLO_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "Busca automática do Trello não está configurada ainda — fale com quem administra a plataforma." },
-      { status: 501 },
-    );
-  }
-
-  let body: { token?: unknown };
+  let body: { token?: unknown; apiKey?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -54,6 +46,18 @@ export async function POST(request: Request) {
   const token = typeof body.token === "string" ? body.token.trim() : "";
   if (!token) {
     return NextResponse.json({ error: "cole seu token do Trello primeiro" }, { status: 400 });
+  }
+
+  // Key própria da pessoa (opcional) tem prioridade sobre a key compartilhada
+  // da plataforma — mesmo fallback usado no runtime (ver buildTenantEnv no
+  // secretaria-agentic).
+  const ownApiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const apiKey = ownApiKey || process.env.TRELLO_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "Busca automática do Trello não está configurada ainda — fale com quem administra a plataforma, ou cole sua própria API key acima." },
+      { status: 501 },
+    );
   }
 
   try {

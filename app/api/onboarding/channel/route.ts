@@ -5,6 +5,27 @@ import { upsertTenantSecret } from "@/lib/tenant-provisioning";
 
 const VALID_CHANNELS = new Set(["whatsapp", "telegram", "both"]);
 
+// Registra o webhook do bot direto na API do Telegram, apontando pra URL
+// tenant-scoped que o secretaria-agentic já sabe rotear (telegram/index.ts
+// extrai o slug do fim do path). Mesmo host das edge functions da mesma
+// instância Supabase usada pro resto do app — sem env var nova.
+async function registerTelegramWebhook(token: string, slug: string): Promise<boolean> {
+  const functionsOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!).origin;
+  const webhookUrl = `${functionsOrigin}/functions/v1/telegram/${slug}`;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl }),
+    });
+    const data = await res.json().catch(() => null);
+    return res.ok && Boolean(data?.ok);
+  } catch (err) {
+    console.error("[onboarding/channel] setWebhook falhou:", String(err));
+    return false;
+  }
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -32,7 +53,7 @@ export async function POST(request: Request) {
   const admin = createServiceClient();
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
-    .select("id, telegram_bot_token_secret_id")
+    .select("id, slug, telegram_bot_token_secret_id")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -64,5 +85,13 @@ export async function POST(request: Request) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ ok: true });
+
+  // Só tenta registrar quando um token NOVO foi colado agora — não temos o
+  // valor em claro de um token já salvo antes (fica só no Vault), e não
+  // precisa: o webhook de uma sessão anterior continua valendo.
+  const telegramWebhook = telegramToken
+    ? (await registerTelegramWebhook(telegramToken, tenant.slug) ? "registered" : "failed")
+    : "skipped";
+
+  return NextResponse.json({ ok: true, telegram_webhook: telegramWebhook });
 }

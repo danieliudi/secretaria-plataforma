@@ -33,14 +33,20 @@ arquivo).
    a sessão antes).
    * ClickUp, Notion e Google Tasks buscam as listas/databases reais da
      pessoa (`app/api/onboarding/{clickup-lists,notion-databases,google-tasks-lists}`)
-     pra ela escolher pelo nome. Trello também busca (`trello-lists`), mas
-     depende de uma `TRELLO_API_KEY` global configurada no ambiente (ver
-     "Setup local" abaixo) — sem ela, cai num textarea de fallback pra colar
-     o mapa em JSON manualmente.
+     pra ela escolher pelo nome. Trello também busca (`trello-lists`), usando
+     a API key própria da pessoa se ela colar uma, senão a `TRELLO_API_KEY`
+     global do ambiente (ver "Setup local" abaixo) — sem nenhuma das duas,
+     cai num textarea de fallback pra colar o mapa em JSON manualmente.
+   * No passo do canal, se a pessoa escolher Telegram, o próprio onboarding
+     chama o `setWebhook` da API do Telegram (`app/api/onboarding/channel`)
+     apontando pra `.../functions/v1/telegram/<slug>` — o bot já sai
+     funcionando, sem precisar de ninguém configurando isso manualmente. Se a
+     chamada falhar (token errado, rede), o onboarding não trava — só avisa
+     na tela de recibo que a ativação automática não rolou.
 
 Depois disso o tenant já está pronto pro **backend** (edge functions do
-`secretaria-agentic`) usar — só falta o canal (WhatsApp/Telegram), que ainda
-é conectado manualmente (ver "Pendências" abaixo).
+`secretaria-agentic`) usar — só falta o WhatsApp, que ainda é conectado
+manualmente (ver "Pendências" abaixo; Telegram já é automático, ver acima).
 
 ## Setup local
 
@@ -54,9 +60,9 @@ Valores de `.env.local`: `NEXT_PUBLIC_SUPABASE_URL` e
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Supabase → Project Settings → Data API) e
 `SUPABASE_SERVICE_ROLE_KEY` (Project Settings → API Keys → `service_role` —
 nunca commitar, nunca usar num Client Component). `TRELLO_API_KEY` é
-opcional — só habilita a busca automática de listas do Trello no passo 2 do
-wizard (developer.trello.com/docs/get-started); sem ela o wizard continua
-funcionando, só cai no textarea manual pro Trello.
+opcional — key compartilhada usada como fallback quando a pessoa não cola a
+própria no wizard (developer.trello.com/docs/get-started); sem nenhuma das
+duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
 
 ## Setup externo pendente (obrigatório antes de qualquer login funcionar)
 
@@ -78,22 +84,19 @@ funcionando, só cai no textarea manual pro Trello.
 
 ## Pendências conhecidas (não bloqueiam o piloto, mas documentar)
 
-* Conexão do canal (WhatsApp/Telegram) ainda é manual. O wizard termina sem
-  provisionar instância do WhatsApp nem bot do Telegram — isso é trabalho de
-  infraestrutura (Evolution API precisa de número dedicado por tenant;
-  Telegram precisa criar o bot via @BotFather e configurar o webhook
-  `/telegram/<slug>`). Automatizar isso é o próximo passo grande desta
-  plataforma.
-* Trello precisa de 2 credenciais (API key da aplicação + token pessoal),
-  mas `tenants` só tem 1 coluna de token por provider — o wizard grava o
-  token pessoal; a API key (`TRELLO_API_KEY`) é global, compartilhada por
-  todos os tenants (gap já documentado em
-  `secretaria-agentic/docs/multi-tenant.md`). Não dá pra um tenant trazer a
-  própria API key do Trello sem uma coluna nova em `tenants` — mudança que
-  pertence à migration do `secretaria-agentic`, não a este repo.
-* Mapa de frentes só é JSON cru no fallback do Trello quando `TRELLO_API_KEY`
-  não está configurada (ClickUp, Notion e Google Tasks sempre têm UI guiada
-  com busca automática; Trello também busca quando a key está configurada).
+* **WhatsApp ainda é manual** — o wizard não provisiona a instância Evolution
+  API (precisa de número dedicado por tenant, linkado por QR code). Telegram
+  já não tem esse problema: o onboarding registra o webhook do bot sozinho
+  (ver "Como funciona" acima).
+* Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
+  própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
+  Google Tasks sempre têm UI guiada com busca automática).
+* **Dependência de deploy**: este repo já lê/grava a coluna
+  `tenants.trello_api_key_secret_id` (API key do Trello por tenant, em vez de
+  só a global). Essa coluna é criada por uma migration no repo
+  `secretaria-agentic` (branch `claude/trello-api-key-per-tenant`, ainda não
+  aplicada em produção neste momento) — depende dela pra funcionar em
+  produção; sem a coluna, os passos de persona/tarefas do onboarding quebram.
 
 ## Repositório
 

@@ -14,7 +14,7 @@ export default async function OnboardingPage() {
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, google_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
+    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -41,6 +41,7 @@ export default async function OnboardingPage() {
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       initialChannelPreference={tenant.channel_preference as "whatsapp" | "telegram" | "both" | null}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
+      trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}
     />
   );
 }

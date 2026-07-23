@@ -133,6 +133,7 @@ export default function OnboardingWizard(props: {
   googleConnected: boolean;
   initialChannelPreference: Channel | null;
   telegramConnected: boolean;
+  trelloApiKeyConfigured: boolean;
 }) {
   const [step, setStep] = useState<Step>(1);
   const [nome, setNome] = useState(props.initialNome);
@@ -140,6 +141,7 @@ export default function OnboardingWizard(props: {
   const [frentes, setFrentes] = useState(props.initialFrentes);
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
+  const [trelloApiKey, setTrelloApiKey] = useState("");
   const [listMap, setListMap] = useState("");
   const [remoteLists, setRemoteLists] = useState<RemoteList[] | null>(null);
   const [remoteListsLoading, setRemoteListsLoading] = useState(false);
@@ -147,6 +149,7 @@ export default function OnboardingWizard(props: {
   const [frenteListMap, setFrenteListMap] = useState<Record<string, string>>({});
   const [channel, setChannel] = useState<Channel | null>(props.initialChannelPreference);
   const [telegramToken, setTelegramToken] = useState("");
+  const [telegramWebhookStatus, setTelegramWebhookStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -192,7 +195,9 @@ export default function OnboardingWizard(props: {
         : await fetch(`/api/onboarding/${endpoints[provider]}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token }),
+            body: JSON.stringify(
+              provider === "trello" ? { token, apiKey: trelloApiKey } : { token },
+            ),
           });
       const data = await res.json();
       if (!res.ok) {
@@ -207,7 +212,7 @@ export default function OnboardingWizard(props: {
     }
   }
 
-  async function submitJson(url: string, body: unknown): Promise<boolean> {
+  async function submitJson(url: string, body: unknown): Promise<Record<string, unknown> | null> {
     setSaving(true);
     setError(null);
     try {
@@ -216,15 +221,15 @@ export default function OnboardingWizard(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Algo deu errado — tenta de novo?");
-        return false;
+        return null;
       }
-      return true;
+      return data;
     } catch {
       setError("Falha de conexão — tenta de novo?");
-      return false;
+      return null;
     } finally {
       setSaving(false);
     }
@@ -232,8 +237,8 @@ export default function OnboardingWizard(props: {
 
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
-    const ok = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
-    if (ok) setStep(2);
+    const result = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
+    if (result) setStep(2);
   }
 
   function buildListMapPayload(): string {
@@ -256,21 +261,23 @@ export default function OnboardingWizard(props: {
   }
 
   async function handleProviderSubmit() {
-    const ok = await submitJson("/api/onboarding/task-provider", {
+    const result = await submitJson("/api/onboarding/task-provider", {
       provider,
       token,
       list_map: buildListMapPayload(),
+      trello_api_key: provider === "trello" ? trelloApiKey : "",
     });
-    if (ok) setStep(3);
+    if (result) setStep(3);
   }
 
   async function handleChannelSubmit() {
     if (!channel) return;
-    const ok = await submitJson("/api/onboarding/channel", {
+    const result = await submitJson("/api/onboarding/channel", {
       channel_preference: channel,
       telegram_bot_token: telegramToken,
     });
-    if (ok) {
+    if (result) {
+      setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
       setStep(4);
       setFinished(true);
     }
@@ -398,6 +405,33 @@ export default function OnboardingWizard(props: {
                     )}
                   </details>
                 )}
+              </label>
+            )}
+            {provider === "trello" && (
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Sua própria API key do Trello (opcional)
+                <input
+                  type="password"
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={trelloApiKey}
+                  onChange={(e) => setTrelloApiKey(e.target.value)}
+                  placeholder={props.trelloApiKeyConfigured ? "Já recebemos uma key — cole outra pra trocar" : "Deixe em branco pra usar a key compartilhada da plataforma"}
+                />
+                <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
+                  <summary className="cursor-pointer font-mono text-[10.5px] tracking-wide text-cyan">
+                    Quando eu preciso disso?
+                  </summary>
+                  <p className="mt-2">
+                    Sem preencher, sua conta usa a key compartilhada da plataforma (é o que o link de
+                    autorização que você recebeu já usa por trás — não precisa fazer nada extra).
+                    Só preencha se você quiser sua própria conta de aplicação no Trello, separada da
+                    plataforma:
+                  </p>
+                  <ol className="mt-2 list-decimal space-y-1 pl-4">
+                    <li>Acessa trello.com/power-ups/admin (ou trello.com/app-key), logado com a conta certa.</li>
+                    <li>Copia a &quot;API Key&quot; que aparece lá (não é o token — isso é outra coisa).</li>
+                  </ol>
+                </details>
               </label>
             )}
 
@@ -605,17 +639,31 @@ export default function OnboardingWizard(props: {
               {wantsTelegram && (
                 <ReceiptRow
                   label="Bot Telegram"
-                  value={props.telegramConnected || telegramToken ? "Token recebido" : "Pendente"}
-                  ok={props.telegramConnected || Boolean(telegramToken)}
+                  value={
+                    telegramWebhookStatus === "registered"
+                      ? "Ativo"
+                      : props.telegramConnected || telegramToken
+                      ? "Token recebido"
+                      : "Pendente"
+                  }
+                  ok={telegramWebhookStatus === "registered" || props.telegramConnected || Boolean(telegramToken)}
                 />
               )}
             </dl>
             <div className="mt-5 flex items-center gap-2 border-t border-dashed border-line-soft pt-4 font-mono text-[11px] tracking-wide text-cyan">
               <span className="h-1.5 w-1.5 rounded-full bg-cyan shadow-[0_0_8px_1px_rgba(94,234,212,0.7)]" />
-              {wantsTelegram && !wantsWhatsapp ? "TELEGRAM PRONTO PRA ATIVAR" : "AGUARDANDO CONEXÃO DE CANAL"}
+              {telegramWebhookStatus === "registered"
+                ? "TELEGRAM ATIVO"
+                : wantsTelegram && !wantsWhatsapp
+                ? "TELEGRAM PRONTO PRA ATIVAR"
+                : "AGUARDANDO CONEXÃO DE CANAL"}
             </div>
             <p className="text-[12.5px] leading-relaxed text-muted">
-              {wantsWhatsapp
+              {telegramWebhookStatus === "registered"
+                ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
+                : telegramWebhookStatus === "failed"
+                ? "Salvamos o token, mas não conseguimos ativar o bot automaticamente agora (confere se colou certo) — quem administra a plataforma consegue finalizar manualmente."
+                : wantsWhatsapp
                 ? "A parte do WhatsApp ainda é configurada manualmente — você vai receber uma mensagem com as instruções."
                 : "Assim que a ativação do Telegram estiver disponível, sua secretária já vai ter o token dela salvo — sem precisar repetir esse passo."}
             </p>
