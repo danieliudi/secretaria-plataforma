@@ -137,16 +137,15 @@ duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
 * Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
   própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
   Google Tasks sempre têm UI guiada com busca automática).
-* **Dependência de deploy**: este repo já lê/grava duas colunas que ainda
-  não existem em produção — `tenants.trello_api_key_secret_id` (API key do
-  Trello por tenant) e `tenants.outlook_refresh_token_secret_id` (login/
-  vinculação com Outlook). Ambas são migrations aditivas (`ADD COLUMN`
-  nullable) pendentes de aplicar no projeto `secretaria-agentic`
-  (`trello_api_key_secret_id` já commitada na branch
-  `claude/trello-api-key-per-tenant`) — sem elas, os passos de
-  persona/tarefas do onboarding quebram pra QUALQUER pessoa (não só quem usa
-  Trello/Outlook), porque o `.select(...)` do `/onboarding` falha se alguma
-  coluna não existir.
+* As colunas `tenants.trello_api_key_secret_id` e
+  `tenants.outlook_refresh_token_secret_id` já foram aplicadas em produção
+  (migration `tenants_add_trello_api_key_and_outlook_refresh_token`) —
+  `/onboarding` já pode gravar/ler as duas. O código do backend
+  (`secretaria-agentic`) que efetivamente *usa* a key própria do Trello
+  (`buildTenantEnv`) está pronto na branch `claude/trello-api-key-per-tenant`
+  mas as edge functions ainda não foram redeployadas com ela — até lá, todo
+  tenant continua usando a `TRELLO_API_KEY` global (zero regressão, só a
+  personalização por tenant que ainda não está ativa).
 * **Fase 2 do Outlook não implementada ainda**: hoje conectar o Outlook só
   guarda o refresh token no Vault — a secretária (backend, `secretaria-agentic`)
   ainda não lê/escreve Calendar/Mail via Microsoft Graph, só Google. Isso é
