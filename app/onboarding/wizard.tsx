@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { OAUTH_PROVIDERS, type OAuthProviderId } from "@/lib/oauth-providers";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
@@ -114,6 +116,11 @@ const CHANNEL_OPTIONS: Array<{
   },
 ];
 
+const LINK_ERROR_MESSAGES: Record<string, string> = {
+  missing_code: "Não recebemos a confirmação — tenta de novo?",
+  auth_failed: "Não conseguimos confirmar essa conexão — tenta de novo?",
+};
+
 const TELEGRAM_BOT_STEPS = [
   "Abre o Telegram e procura por \"@BotFather\" (o bot oficial que cria outros bots).",
   "Manda o comando /newbot e segue as perguntas (nome e um @usuario terminado em \"bot\").",
@@ -131,6 +138,8 @@ export default function OnboardingWizard(props: {
   initialFrentes: string;
   initialProvider: Provider;
   googleConnected: boolean;
+  outlookConnected: boolean;
+  linkError: string | null;
   initialChannelPreference: Channel | null;
   telegramConnected: boolean;
   trelloApiKeyConfigured: boolean;
@@ -153,6 +162,8 @@ export default function OnboardingWizard(props: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
+  const [connectingProvider, setConnectingProvider] = useState<OAuthProviderId | null>(null);
+  const [showAdvancedProviders, setShowAdvancedProviders] = useState(props.initialProvider !== "google_tasks");
 
   const providerInfo = PROVIDER_OPTIONS.find((p) => p.value === provider)!;
   const channelInfo = CHANNEL_OPTIONS.find((c) => c.value === channel) ?? null;
@@ -235,6 +246,25 @@ export default function OnboardingWizard(props: {
     }
   }
 
+  async function handleConnectProvider(provider: OAuthProviderId) {
+    setConnectingProvider(provider);
+    const supabase = createClient();
+    const cfg = OAUTH_PROVIDERS[provider];
+    const { error } = await supabase.auth.linkIdentity({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+        scopes: cfg.scopes,
+        queryParams: cfg.queryParams,
+      },
+    });
+    if (error) {
+      setConnectingProvider(null);
+      setError("Não conseguimos iniciar a conexão — tenta de novo?");
+    }
+    // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
+  }
+
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
     const result = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
@@ -300,47 +330,86 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 1 && (
-          <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="font-display text-xl font-extrabold text-foreground">Quem é você?</h1>
-            <p className="text-[13px] leading-relaxed text-muted">
-              É o que a secretária usa pra falar com você — nome, cargo e as
-              frentes/projetos que ela deve acompanhar.
-            </p>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Nome
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={nome}
-                onChange={(e) => setNome(e.target.value)}
-                placeholder="Como quer ser chamado"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Cargo (opcional)
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={cargo}
-                onChange={(e) => setCargo(e.target.value)}
-                placeholder="Ex: sócio, gerente, freelancer…"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Frentes / projetos (separados por vírgula)
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={frentes}
-                onChange={(e) => setFrentes(e.target.value)}
-                placeholder="Ex: resibag, sanwey, pessoal"
-              />
-            </label>
-            <button
-              onClick={handlePersonaSubmit}
-              disabled={saving || !nome.trim()}
-              className="mt-2 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
-            >
-              {saving ? "Salvando…" : "Continuar"}
-            </button>
-          </section>
+          <>
+            <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
+              <h2 className="font-mono text-[10.5px] uppercase tracking-wide text-muted-2">Contas conectadas</h2>
+              {props.linkError && (
+                <p className="rounded-lg border border-red-900/40 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                  {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}
+                </p>
+              )}
+              <div className="flex flex-col gap-2">
+                {Object.values(OAUTH_PROVIDERS).map((cfg) => {
+                  const connected = cfg.id === "google" ? props.googleConnected : props.outlookConnected;
+                  return (
+                    <div
+                      key={cfg.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-line-soft px-3 py-2 text-[13px]"
+                    >
+                      <span className="text-foreground">{cfg.label}</span>
+                      {connected ? (
+                        <span className="font-mono text-[10.5px] text-cyan">Conectado</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleConnectProvider(cfg.id)}
+                          disabled={connectingProvider !== null}
+                          className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-cyan disabled:opacity-60"
+                        >
+                          {connectingProvider === cfg.id ? "Redirecionando…" : "Conectar"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
+              <h1 className="font-display text-xl font-extrabold text-foreground">Quem é você?</h1>
+              <p className="text-[13px] leading-relaxed text-muted">
+                É o que a secretária usa pra falar com você. Só o nome é
+                obrigatório — o resto dá pra ajustar depois.
+              </p>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Nome
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
+                  placeholder="Como quer ser chamado"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Cargo (opcional)
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={cargo}
+                  onChange={(e) => setCargo(e.target.value)}
+                  placeholder="Ex: sócio, gerente, freelancer…"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Áreas da sua vida (opcional, separadas por vírgula)
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={frentes}
+                  onChange={(e) => setFrentes(e.target.value)}
+                  placeholder="Ex: trabalho, casa"
+                />
+                <span className="text-xs font-normal text-muted-2">
+                  Não sabe o que colocar? Pode deixar em branco e ajustar depois.
+                </span>
+              </label>
+              <button
+                onClick={handlePersonaSubmit}
+                disabled={saving || !nome.trim()}
+                className="mt-2 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
+              >
+                {saving ? "Salvando…" : "Continuar"}
+              </button>
+            </section>
+          </>
         )}
 
         {step === 2 && (
@@ -350,28 +419,30 @@ export default function OnboardingWizard(props: {
               Escolha onde a secretária vai ler e criar tarefas pra você.
             </p>
             <div className="flex flex-col gap-2">
-              {PROVIDER_OPTIONS.map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
-                    provider === opt.value
-                      ? "border-cyan bg-cyan/5"
-                      : "border-line hover:border-line-soft"
-                  }`}
-                >
-                  <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
-                    <input
-                      type="radio"
-                      name="provider"
-                      checked={provider === opt.value}
-                      onChange={() => setProvider(opt.value)}
-                      className="accent-cyan"
+              <ProviderOption
+                opt={PROVIDER_OPTIONS.find((o) => o.value === "google_tasks")!}
+                selected={provider === "google_tasks"}
+                onSelect={() => setProvider("google_tasks")}
+              />
+              <details
+                className="rounded-lg border border-line-soft"
+                open={showAdvancedProviders}
+                onToggle={(e) => setShowAdvancedProviders(e.currentTarget.open)}
+              >
+                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-muted">
+                  Já usa ClickUp, Notion ou Trello? Clique aqui.
+                </summary>
+                <div className="flex flex-col gap-2 border-t border-line-soft p-3">
+                  {PROVIDER_OPTIONS.filter((o) => o.value !== "google_tasks").map((opt) => (
+                    <ProviderOption
+                      key={opt.value}
+                      opt={opt}
+                      selected={provider === opt.value}
+                      onSelect={() => setProvider(opt.value)}
                     />
-                    {opt.label}
-                  </span>
-                  <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
-                </label>
-              ))}
+                  ))}
+                </div>
+              </details>
             </div>
             {provider !== "google_tasks" && (
               <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
@@ -635,6 +706,11 @@ export default function OnboardingWizard(props: {
                 value={props.googleConnected ? "Conectado" : "Não conectado"}
                 ok={props.googleConnected}
               />
+              <ReceiptRow
+                label="Outlook"
+                value={props.outlookConnected ? "Conectado" : "Não conectado"}
+                ok={props.outlookConnected}
+              />
               <ReceiptRow label="Canal" value={channelInfo?.label ?? "—"} />
               {wantsTelegram && (
                 <ReceiptRow
@@ -681,6 +757,30 @@ export default function OnboardingWizard(props: {
         )}
       </div>
     </main>
+  );
+}
+
+function ProviderOption({
+  opt,
+  selected,
+  onSelect,
+}: {
+  opt: (typeof PROVIDER_OPTIONS)[number];
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
+        selected ? "border-cyan bg-cyan/5" : "border-line hover:border-line-soft"
+      }`}
+    >
+      <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
+        <input type="radio" name="provider" checked={selected} onChange={onSelect} className="accent-cyan" />
+        {opt.label}
+      </span>
+      <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
+    </label>
   );
 }
 
