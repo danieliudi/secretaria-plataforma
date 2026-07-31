@@ -19,12 +19,16 @@ Office/e-mail, ou não tem familiaridade com "tokens"/"integrações") — por
 isso o wizard esconde complexidade por padrão e só mostra opções avançadas
 pra quem pede.
 
-1. **`/login`** — dois botões, "Entrar com Google" e "Entrar com Outlook".
-   Cada um pede login **e** os escopos de Calendar/Mail no mesmo
-   consentimento (Google: `access_type=offline` + `prompt=consent`; Outlook:
-   scope `offline_access` + `prompt=consent`), senão o provider não devolve
-   `refresh_token`. A pessoa usa qualquer um dos dois que já tiver no dia a
-   dia — não precisa ter conta Google pra usar a plataforma.
+1. **`/login`** — botão(ões) de entrada, um por provider habilitado em
+   `lib/oauth-providers.ts` (`enabled: true`). Cada um pede login **e** os
+   escopos de Calendar/Mail no mesmo consentimento (Google:
+   `access_type=offline` + `prompt=consent`; Outlook: scope `offline_access`
+   + `prompt=consent`), senão o provider não devolve `refresh_token`. **Hoje
+   só o Google está habilitado** — o suporte a Outlook já está implementado
+   de ponta a ponta (callback, colunas, vinculação), mas fica escondido da UI
+   até o Azure App Registration estar configurado (ver "Setup externo
+   pendente"), pra não mostrar um botão que não funciona. Pra reativar, é só
+   trocar `enabled: false` → `true` no `azure` de `OAUTH_PROVIDERS`.
 2. **`/auth/callback`** — troca o `code` pela sessão, garante a linha em
    `tenants` (`auth_user_id`) e grava o `refresh_token` do provider no Vault
    (`lib/tenant-provisioning.ts`), na coluna certa
@@ -37,10 +41,10 @@ pra quem pede.
    pessoa já está logada).
 3. **`/onboarding`** — wizard de 3 passos:
    * **Passo 1 (persona)** — nome, cargo, áreas da vida (tudo exceto nome é
-     opcional). No topo, um cartão "Contas conectadas" mostra Google/Outlook
-     com um botão "Conectar" pra quem a pessoa ainda não linkou — usa
-     `supabase.auth.linkIdentity()` (mesmo mecanismo do login, mas pra
-     adicionar uma segunda conta a quem já está logado).
+     opcional). No topo, um cartão "Contas conectadas" mostra os provedores
+     habilitados (hoje só Google) com um botão "Conectar" pra quem a pessoa
+     ainda não linkou — usa `supabase.auth.linkIdentity()` (mesmo mecanismo
+     do login, mas pra adicionar uma segunda conta a quem já está logado).
    * **Passo 2 (tarefas)** — Google Tasks fica em destaque (zero fricção,
      reusa o login); ClickUp/Notion/Trello ficam recolhidos atrás de "Já usa
      ClickUp, Notion ou Trello?" pra não confundir quem nunca ouviu falar
@@ -49,12 +53,13 @@ pra quem pede.
      ela escolher pelo nome — Trello usa a API key própria da pessoa se ela
      colar uma, senão a `TRELLO_API_KEY` global (ver "Setup local"); sem
      nenhuma das duas, cai num textarea de fallback pra colar o mapa em JSON.
-   * **Passo 3 (canal)** — WhatsApp/Telegram/ambos. Escolhendo Telegram, o
-     próprio onboarding chama o `setWebhook` da API do Telegram
-     (`app/api/onboarding/channel`) apontando pra
-     `.../functions/v1/telegram/<slug>` — o bot já sai funcionando, sem
-     ninguém configurando isso manualmente. Se falhar (token errado, rede),
-     não trava o onboarding, só avisa na tela de recibo.
+   * **Passo 3 (canal)** — WhatsApp (marcado como recomendado — é o canal
+     mais natural pro público-alvo, mesmo exigindo configuração manual
+     depois), Telegram ou ambos. Escolhendo Telegram, o próprio onboarding
+     chama o `setWebhook` da API do Telegram (`app/api/onboarding/channel`)
+     apontando pra `.../functions/v1/telegram/<slug>` — o bot já sai
+     funcionando, sem ninguém configurando isso manualmente. Se falhar (token
+     errado, rede), não trava o onboarding, só avisa na tela de recibo.
 
    Termina numa tela de recibo com um link "Editar configuração" que volta
    pro passo 1 — como cada passo faz upsert (não só insert), reabrir
@@ -146,11 +151,14 @@ duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
   mas as edge functions ainda não foram redeployadas com ela — até lá, todo
   tenant continua usando a `TRELLO_API_KEY` global (zero regressão, só a
   personalização por tenant que ainda não está ativa).
-* **Fase 2 do Outlook não implementada ainda**: hoje conectar o Outlook só
-  guarda o refresh token no Vault — a secretária (backend, `secretaria-agentic`)
-  ainda não lê/escreve Calendar/Mail via Microsoft Graph, só Google. Isso é
-  trabalho futuro (novo `_shared/microsoft-oauth.ts` + providers de
-  calendário/e-mail que agreguem Google e Outlook ao mesmo tempo).
+* **Outlook desabilitado na UI por enquanto** (`enabled: false` em
+  `lib/oauth-providers.ts`) — o Azure App Registration não foi concluído
+  ainda, e mesmo depois de concluído, a secretária (backend,
+  `secretaria-agentic`) ainda não lê/escreve Calendar/Mail via Microsoft
+  Graph, só Google (Fase 2, trabalho futuro: novo `_shared/microsoft-oauth.ts`
+  + providers de calendário/e-mail que agreguem Google e Outlook ao mesmo
+  tempo). Todo o resto (callback, colunas, vinculação) já está pronto —
+  reativar é só virar o flag quando o Azure estiver configurado.
 
 ## Repositório
 

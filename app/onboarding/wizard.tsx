@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { OAUTH_PROVIDERS, type OAuthProviderId } from "@/lib/oauth-providers";
+import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
@@ -92,6 +92,7 @@ const CHANNEL_OPTIONS: Array<{
   hint: string;
   cost: string | null;
   setup: string;
+  recommended?: boolean;
 }> = [
   {
     value: "whatsapp",
@@ -99,6 +100,7 @@ const CHANNEL_OPTIONS: Array<{
     hint: "Você já usa no dia a dia — ninguém precisa aprender um app novo.",
     cost: "Tem custo mensal por um número dedicado só pra secretária — no caso mais simples (número virtual, como a Salvy), fica em torno de R$ 29,90/mês. Também dá pra usar um chip físico só pra isso; o valor varia.",
     setup: "A configuração é feita manualmente por quem administra a plataforma depois que você concluir esse passo — você recebe uma mensagem com os próximos passos.",
+    recommended: true,
   },
   {
     value: "telegram",
@@ -339,7 +341,7 @@ export default function OnboardingWizard(props: {
                 </p>
               )}
               <div className="flex flex-col gap-2">
-                {Object.values(OAUTH_PROVIDERS).map((cfg) => {
+                {enabledOAuthProviders().map((cfg) => {
                   const connected = cfg.id === "google" ? props.googleConnected : props.outlookConnected;
                   return (
                     <div
@@ -625,6 +627,11 @@ export default function OnboardingWizard(props: {
                       className="accent-cyan"
                     />
                     {opt.label}
+                    {opt.recommended && (
+                      <span className="rounded-full border border-cyan/40 px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-wide text-cyan">
+                        Recomendado
+                      </span>
+                    )}
                   </span>
                   <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
                 </label>
@@ -706,11 +713,13 @@ export default function OnboardingWizard(props: {
                 value={props.googleConnected ? "Conectado" : "Não conectado"}
                 ok={props.googleConnected}
               />
-              <ReceiptRow
-                label="Outlook"
-                value={props.outlookConnected ? "Conectado" : "Não conectado"}
-                ok={props.outlookConnected}
-              />
+              {enabledOAuthProviders().some((p) => p.id === "azure") && (
+                <ReceiptRow
+                  label="Outlook"
+                  value={props.outlookConnected ? "Conectado" : "Não conectado"}
+                  ok={props.outlookConnected}
+                />
+              )}
               <ReceiptRow label="Canal" value={channelInfo?.label ?? "—"} />
               {wantsTelegram && (
                 <ReceiptRow

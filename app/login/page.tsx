@@ -2,7 +2,9 @@
 
 import { use, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { OAUTH_PROVIDERS, type OAuthProviderId } from "@/lib/oauth-providers";
+import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
+
+const providers = enabledOAuthProviders();
 
 const ERROR_MESSAGES: Record<string, string> = {
   missing_code: "Não recebemos a confirmação. Tenta de novo?",
@@ -60,8 +62,8 @@ export default function LoginPage({
           Sua secretária, em minutos
         </h1>
         <p className="max-w-sm text-[15px] leading-relaxed text-muted">
-          Entre com a conta que você já usa no dia a dia — Google ou Outlook —
-          pra conectar agenda, e-mail e tarefas, sem precisar mexer em nada
+          Entre com sua conta {providers.map((p) => p.label).join(" ou ")} pra
+          conectar agenda, e-mail e tarefas, sem precisar mexer em nada
           técnico. Você configura o resto na próxima tela.
         </p>
         {errorParam && (
@@ -70,7 +72,7 @@ export default function LoginPage({
           </p>
         )}
         <div className="mt-2 flex flex-col gap-3">
-          {Object.values(OAUTH_PROVIDERS).map((cfg) => (
+          {providers.map((cfg) => (
             <button
               key={cfg.id}
               onClick={() => handleLogin(cfg.id)}

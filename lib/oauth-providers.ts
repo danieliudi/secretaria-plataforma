@@ -10,6 +10,10 @@ export interface OAuthProviderConfig {
   scopes: string;
   queryParams: Record<string, string>;
   secretColumn: "google_refresh_token_secret_id" | "outlook_refresh_token_secret_id";
+  /** Azure ainda não está configurado no Supabase Auth (App Registration pendente) —
+   * fica fora da UI até isso ser feito, pra não mostrar um botão que não funciona.
+   * O resto do código (callback, colunas, etc.) já suporta os dois; é só um flag de UI. */
+  enabled: boolean;
 }
 
 // access_type=offline + prompt=consent (Google) / offline_access no scope +
@@ -26,6 +30,7 @@ export const OAUTH_PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
     ].join(" "),
     queryParams: { access_type: "offline", prompt: "consent" },
     secretColumn: "google_refresh_token_secret_id",
+    enabled: true,
   },
   azure: {
     id: "azure",
@@ -40,8 +45,14 @@ export const OAUTH_PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
     ].join(" "),
     queryParams: { prompt: "consent" },
     secretColumn: "outlook_refresh_token_secret_id",
+    enabled: false,
   },
 };
+
+/** Provedores pra mostrar na UI (login, "conectar" no onboarding) — filtra os desabilitados. */
+export function enabledOAuthProviders(): OAuthProviderConfig[] {
+  return Object.values(OAUTH_PROVIDERS).filter((cfg) => cfg.enabled);
+}
 
 export function isOAuthProviderId(value: string): value is OAuthProviderId {
   return value === "google" || value === "azure";
