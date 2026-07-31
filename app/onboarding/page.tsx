@@ -6,7 +6,12 @@ import OnboardingWizard from "./wizard";
 // Server Component: carrega o tenant já criado no /auth/callback e entrega
 // pro wizard (Client Component) como estado inicial. Não cria a linha aqui —
 // isso é responsabilidade única do callback (ver lib/tenant-provisioning.ts).
-export default async function OnboardingPage() {
+export default async function OnboardingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ link_error?: string }>;
+}) {
+  const { link_error: linkError } = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
@@ -14,7 +19,7 @@ export default async function OnboardingPage() {
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, google_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
+    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -39,8 +44,11 @@ export default async function OnboardingPage() {
       initialFrentes={(tenant.frentes ?? []).join(", ")}
       initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
+      outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}
+      linkError={linkError ?? null}
       initialChannelPreference={tenant.channel_preference as "whatsapp" | "telegram" | "both" | null}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
+      trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}
     />
   );
 }

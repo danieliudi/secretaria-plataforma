@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
@@ -79,8 +81,8 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
       label: "Guia oficial do Trello (com imagens)",
     },
-    mapHint: "Pra achar o ID de uma lista, chama quem administra a plataforma — não é tão simples de achar sozinho no Trello ainda (esse aqui ainda não tem busca automática).",
-    pickerKind: "manual",
+    mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
+    pickerKind: "nested",
   },
 ];
 
@@ -90,6 +92,7 @@ const CHANNEL_OPTIONS: Array<{
   hint: string;
   cost: string | null;
   setup: string;
+  recommended?: boolean;
 }> = [
   {
     value: "whatsapp",
@@ -97,6 +100,7 @@ const CHANNEL_OPTIONS: Array<{
     hint: "Você já usa no dia a dia — ninguém precisa aprender um app novo.",
     cost: "Tem custo mensal por um número dedicado só pra secretária — no caso mais simples (número virtual, como a Salvy), fica em torno de R$ 29,90/mês. Também dá pra usar um chip físico só pra isso; o valor varia.",
     setup: "A configuração é feita manualmente por quem administra a plataforma depois que você concluir esse passo — você recebe uma mensagem com os próximos passos.",
+    recommended: true,
   },
   {
     value: "telegram",
@@ -113,6 +117,11 @@ const CHANNEL_OPTIONS: Array<{
     setup: "O Telegram você configura agora (token abaixo); o WhatsApp é configurado manualmente depois.",
   },
 ];
+
+const LINK_ERROR_MESSAGES: Record<string, string> = {
+  missing_code: "Não recebemos a confirmação — tenta de novo?",
+  auth_failed: "Não conseguimos confirmar essa conexão — tenta de novo?",
+};
 
 const TELEGRAM_BOT_STEPS = [
   "Abre o Telegram e procura por \"@BotFather\" (o bot oficial que cria outros bots).",
@@ -131,8 +140,11 @@ export default function OnboardingWizard(props: {
   initialFrentes: string;
   initialProvider: Provider;
   googleConnected: boolean;
+  outlookConnected: boolean;
+  linkError: string | null;
   initialChannelPreference: Channel | null;
   telegramConnected: boolean;
+  trelloApiKeyConfigured: boolean;
 }) {
   const [step, setStep] = useState<Step>(1);
   const [nome, setNome] = useState(props.initialNome);
@@ -140,6 +152,7 @@ export default function OnboardingWizard(props: {
   const [frentes, setFrentes] = useState(props.initialFrentes);
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
+  const [trelloApiKey, setTrelloApiKey] = useState("");
   const [listMap, setListMap] = useState("");
   const [remoteLists, setRemoteLists] = useState<RemoteList[] | null>(null);
   const [remoteListsLoading, setRemoteListsLoading] = useState(false);
@@ -147,9 +160,12 @@ export default function OnboardingWizard(props: {
   const [frenteListMap, setFrenteListMap] = useState<Record<string, string>>({});
   const [channel, setChannel] = useState<Channel | null>(props.initialChannelPreference);
   const [telegramToken, setTelegramToken] = useState("");
+  const [telegramWebhookStatus, setTelegramWebhookStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
+  const [connectingProvider, setConnectingProvider] = useState<OAuthProviderId | null>(null);
+  const [showAdvancedProviders, setShowAdvancedProviders] = useState(props.initialProvider !== "google_tasks");
 
   const providerInfo = PROVIDER_OPTIONS.find((p) => p.value === provider)!;
   const channelInfo = CHANNEL_OPTIONS.find((c) => c.value === channel) ?? null;
@@ -158,12 +174,20 @@ export default function OnboardingWizard(props: {
   const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
 
   // Reseta a busca de listas sempre que troca de plataforma — a busca anterior
-  // não vale mais. Pro Google Tasks já busca na hora, porque não depende de
-  // token (reusa o login que já aconteceu).
-  useEffect(() => {
+  // não vale mais. Ajuste de estado durante o render (em vez de useEffect) é o
+  // padrão recomendado pra "resetar estado quando uma prop muda" — evita o
+  // reflow extra de resetar depois do commit.
+  const prevProviderRef = useRef(provider);
+  if (prevProviderRef.current !== provider) {
+    prevProviderRef.current = provider;
     setRemoteLists(null);
     setRemoteListsError(null);
     setFrenteListMap({});
+  }
+
+  // Pro Google Tasks já busca na hora, porque não depende de token (reusa o
+  // login que já aconteceu) — isso é uma chamada de rede, então fica num efeito.
+  useEffect(() => {
     if (provider === "google_tasks") {
       loadRemoteLists();
     }
@@ -174,12 +198,19 @@ export default function OnboardingWizard(props: {
     setRemoteListsLoading(true);
     setRemoteListsError(null);
     try {
+      const endpoints: Record<Exclude<Provider, "google_tasks">, string> = {
+        clickup: "clickup-lists",
+        notion: "notion-databases",
+        trello: "trello-lists",
+      };
       const res = provider === "google_tasks"
         ? await fetch("/api/onboarding/google-tasks-lists")
-        : await fetch(`/api/onboarding/${provider === "clickup" ? "clickup-lists" : "notion-databases"}`, {
+        : await fetch(`/api/onboarding/${endpoints[provider]}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token }),
+            body: JSON.stringify(
+              provider === "trello" ? { token, apiKey: trelloApiKey } : { token },
+            ),
           });
       const data = await res.json();
       if (!res.ok) {
@@ -194,7 +225,7 @@ export default function OnboardingWizard(props: {
     }
   }
 
-  async function submitJson(url: string, body: unknown): Promise<boolean> {
+  async function submitJson(url: string, body: unknown): Promise<Record<string, unknown> | null> {
     setSaving(true);
     setError(null);
     try {
@@ -203,28 +234,50 @@ export default function OnboardingWizard(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         setError(data.error ?? "Algo deu errado — tenta de novo?");
-        return false;
+        return null;
       }
-      return true;
+      return data;
     } catch {
       setError("Falha de conexão — tenta de novo?");
-      return false;
+      return null;
     } finally {
       setSaving(false);
     }
   }
 
+  async function handleConnectProvider(provider: OAuthProviderId) {
+    setConnectingProvider(provider);
+    const supabase = createClient();
+    const cfg = OAUTH_PROVIDERS[provider];
+    const { error } = await supabase.auth.linkIdentity({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+        scopes: cfg.scopes,
+        queryParams: cfg.queryParams,
+      },
+    });
+    if (error) {
+      setConnectingProvider(null);
+      setError("Não conseguimos iniciar a conexão — tenta de novo?");
+    }
+    // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
+  }
+
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
-    const ok = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
-    if (ok) setStep(2);
+    const result = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
+    if (result) setStep(2);
   }
 
   function buildListMapPayload(): string {
     if (providerInfo.pickerKind === "manual") return listMap;
+    // Busca automática falhou (ex: TRELLO_API_KEY não configurada) e a pessoa
+    // preencheu o textarea de fallback — usa isso em vez do picker.
+    if (remoteListsError && listMap.trim()) return listMap;
 
     const chosen = Object.entries(frenteListMap).filter(([, listId]) => listId);
     if (providerInfo.pickerKind === "flat") {
@@ -240,21 +293,23 @@ export default function OnboardingWizard(props: {
   }
 
   async function handleProviderSubmit() {
-    const ok = await submitJson("/api/onboarding/task-provider", {
+    const result = await submitJson("/api/onboarding/task-provider", {
       provider,
       token,
       list_map: buildListMapPayload(),
+      trello_api_key: provider === "trello" ? trelloApiKey : "",
     });
-    if (ok) setStep(3);
+    if (result) setStep(3);
   }
 
   async function handleChannelSubmit() {
     if (!channel) return;
-    const ok = await submitJson("/api/onboarding/channel", {
+    const result = await submitJson("/api/onboarding/channel", {
       channel_preference: channel,
       telegram_bot_token: telegramToken,
     });
-    if (ok) {
+    if (result) {
+      setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
       setStep(4);
       setFinished(true);
     }
@@ -277,47 +332,86 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 1 && (
-          <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="font-display text-xl font-extrabold text-foreground">Quem é você?</h1>
-            <p className="text-[13px] leading-relaxed text-muted">
-              É o que a secretária usa pra falar com você — nome, cargo e as
-              frentes/projetos que ela deve acompanhar.
-            </p>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Nome
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={nome}
-                onChange={(e) => setNome(e.target.value)}
-                placeholder="Como quer ser chamado"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Cargo (opcional)
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={cargo}
-                onChange={(e) => setCargo(e.target.value)}
-                placeholder="Ex: sócio, gerente, freelancer…"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-              Frentes / projetos (separados por vírgula)
-              <input
-                className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                value={frentes}
-                onChange={(e) => setFrentes(e.target.value)}
-                placeholder="Ex: resibag, sanwey, pessoal"
-              />
-            </label>
-            <button
-              onClick={handlePersonaSubmit}
-              disabled={saving || !nome.trim()}
-              className="mt-2 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
-            >
-              {saving ? "Salvando…" : "Continuar"}
-            </button>
-          </section>
+          <>
+            <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
+              <h2 className="font-mono text-[10.5px] uppercase tracking-wide text-muted-2">Contas conectadas</h2>
+              {props.linkError && (
+                <p className="rounded-lg border border-red-900/40 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                  {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}
+                </p>
+              )}
+              <div className="flex flex-col gap-2">
+                {enabledOAuthProviders().map((cfg) => {
+                  const connected = cfg.id === "google" ? props.googleConnected : props.outlookConnected;
+                  return (
+                    <div
+                      key={cfg.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-line-soft px-3 py-2 text-[13px]"
+                    >
+                      <span className="text-foreground">{cfg.label}</span>
+                      {connected ? (
+                        <span className="font-mono text-[10.5px] text-cyan">Conectado</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleConnectProvider(cfg.id)}
+                          disabled={connectingProvider !== null}
+                          className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-cyan disabled:opacity-60"
+                        >
+                          {connectingProvider === cfg.id ? "Redirecionando…" : "Conectar"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
+              <h1 className="font-display text-xl font-extrabold text-foreground">Quem é você?</h1>
+              <p className="text-[13px] leading-relaxed text-muted">
+                É o que a secretária usa pra falar com você. Só o nome é
+                obrigatório — o resto dá pra ajustar depois.
+              </p>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Nome
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={nome}
+                  onChange={(e) => setNome(e.target.value)}
+                  placeholder="Como quer ser chamado"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Cargo (opcional)
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={cargo}
+                  onChange={(e) => setCargo(e.target.value)}
+                  placeholder="Ex: sócio, gerente, freelancer…"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Áreas da sua vida (opcional, separadas por vírgula)
+                <input
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={frentes}
+                  onChange={(e) => setFrentes(e.target.value)}
+                  placeholder="Ex: trabalho, casa"
+                />
+                <span className="text-xs font-normal text-muted-2">
+                  Não sabe o que colocar? Pode deixar em branco e ajustar depois.
+                </span>
+              </label>
+              <button
+                onClick={handlePersonaSubmit}
+                disabled={saving || !nome.trim()}
+                className="mt-2 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
+              >
+                {saving ? "Salvando…" : "Continuar"}
+              </button>
+            </section>
+          </>
         )}
 
         {step === 2 && (
@@ -327,28 +421,30 @@ export default function OnboardingWizard(props: {
               Escolha onde a secretária vai ler e criar tarefas pra você.
             </p>
             <div className="flex flex-col gap-2">
-              {PROVIDER_OPTIONS.map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
-                    provider === opt.value
-                      ? "border-cyan bg-cyan/5"
-                      : "border-line hover:border-line-soft"
-                  }`}
-                >
-                  <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
-                    <input
-                      type="radio"
-                      name="provider"
-                      checked={provider === opt.value}
-                      onChange={() => setProvider(opt.value)}
-                      className="accent-cyan"
+              <ProviderOption
+                opt={PROVIDER_OPTIONS.find((o) => o.value === "google_tasks")!}
+                selected={provider === "google_tasks"}
+                onSelect={() => setProvider("google_tasks")}
+              />
+              <details
+                className="rounded-lg border border-line-soft"
+                open={showAdvancedProviders}
+                onToggle={(e) => setShowAdvancedProviders(e.currentTarget.open)}
+              >
+                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-muted">
+                  Já usa ClickUp, Notion ou Trello? Clique aqui.
+                </summary>
+                <div className="flex flex-col gap-2 border-t border-line-soft p-3">
+                  {PROVIDER_OPTIONS.filter((o) => o.value !== "google_tasks").map((opt) => (
+                    <ProviderOption
+                      key={opt.value}
+                      opt={opt}
+                      selected={provider === opt.value}
+                      onSelect={() => setProvider(opt.value)}
                     />
-                    {opt.label}
-                  </span>
-                  <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
-                </label>
-              ))}
+                  ))}
+                </div>
+              </details>
             </div>
             {provider !== "google_tasks" && (
               <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
@@ -384,6 +480,33 @@ export default function OnboardingWizard(props: {
                 )}
               </label>
             )}
+            {provider === "trello" && (
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                Sua própria API key do Trello (opcional)
+                <input
+                  type="password"
+                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  value={trelloApiKey}
+                  onChange={(e) => setTrelloApiKey(e.target.value)}
+                  placeholder={props.trelloApiKeyConfigured ? "Já recebemos uma key — cole outra pra trocar" : "Deixe em branco pra usar a key compartilhada da plataforma"}
+                />
+                <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
+                  <summary className="cursor-pointer font-mono text-[10.5px] tracking-wide text-cyan">
+                    Quando eu preciso disso?
+                  </summary>
+                  <p className="mt-2">
+                    Sem preencher, sua conta usa a key compartilhada da plataforma (é o que o link de
+                    autorização que você recebeu já usa por trás — não precisa fazer nada extra).
+                    Só preencha se você quiser sua própria conta de aplicação no Trello, separada da
+                    plataforma:
+                  </p>
+                  <ol className="mt-2 list-decimal space-y-1 pl-4">
+                    <li>Acessa trello.com/power-ups/admin (ou trello.com/app-key), logado com a conta certa.</li>
+                    <li>Copia a &quot;API Key&quot; que aparece lá (não é o token — isso é outra coisa).</li>
+                  </ol>
+                </details>
+              </label>
+            )}
 
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-foreground">Mapa de frentes</span>
@@ -398,7 +521,7 @@ export default function OnboardingWizard(props: {
                 />
               ) : (
                 <div className="flex flex-col gap-3">
-                  {(provider === "notion" || provider === "clickup") && (
+                  {(provider === "notion" || provider === "clickup" || provider === "trello") && (
                     <button
                       type="button"
                       onClick={loadRemoteLists}
@@ -414,7 +537,16 @@ export default function OnboardingWizard(props: {
                     <p className="text-xs text-muted">Buscando suas listas…</p>
                   )}
                   {remoteListsError && (
-                    <p className="text-xs text-red-300">{remoteListsError}</p>
+                    <div className="flex flex-col gap-1.5">
+                      <p className="text-xs text-red-300">{remoteListsError}</p>
+                      <span className="text-xs text-muted-2">Enquanto isso, pode colar o mapa manualmente:</span>
+                      <textarea
+                        className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                        value={listMap}
+                        onChange={(e) => setListMap(e.target.value)}
+                        placeholder={providerInfo.placeholder}
+                      />
+                    </div>
                   )}
                   {remoteLists && remoteLists.length === 0 && (
                     <p className="text-xs text-muted-2">
@@ -495,6 +627,11 @@ export default function OnboardingWizard(props: {
                       className="accent-cyan"
                     />
                     {opt.label}
+                    {opt.recommended && (
+                      <span className="rounded-full border border-cyan/40 px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-wide text-cyan">
+                        Recomendado
+                      </span>
+                    )}
                   </span>
                   <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
                 </label>
@@ -576,29 +713,83 @@ export default function OnboardingWizard(props: {
                 value={props.googleConnected ? "Conectado" : "Não conectado"}
                 ok={props.googleConnected}
               />
+              {enabledOAuthProviders().some((p) => p.id === "azure") && (
+                <ReceiptRow
+                  label="Outlook"
+                  value={props.outlookConnected ? "Conectado" : "Não conectado"}
+                  ok={props.outlookConnected}
+                />
+              )}
               <ReceiptRow label="Canal" value={channelInfo?.label ?? "—"} />
               {wantsTelegram && (
                 <ReceiptRow
                   label="Bot Telegram"
-                  value={props.telegramConnected || telegramToken ? "Token recebido" : "Pendente"}
-                  ok={props.telegramConnected || Boolean(telegramToken)}
+                  value={
+                    telegramWebhookStatus === "registered"
+                      ? "Ativo"
+                      : props.telegramConnected || telegramToken
+                      ? "Token recebido"
+                      : "Pendente"
+                  }
+                  ok={telegramWebhookStatus === "registered" || props.telegramConnected || Boolean(telegramToken)}
                 />
               )}
             </dl>
             <div className="mt-5 flex items-center gap-2 border-t border-dashed border-line-soft pt-4 font-mono text-[11px] tracking-wide text-cyan">
               <span className="h-1.5 w-1.5 rounded-full bg-cyan shadow-[0_0_8px_1px_rgba(94,234,212,0.7)]" />
-              {wantsTelegram && !wantsWhatsapp ? "TELEGRAM PRONTO PRA ATIVAR" : "AGUARDANDO CONEXÃO DE CANAL"}
+              {telegramWebhookStatus === "registered"
+                ? "TELEGRAM ATIVO"
+                : wantsTelegram && !wantsWhatsapp
+                ? "TELEGRAM PRONTO PRA ATIVAR"
+                : "AGUARDANDO CONEXÃO DE CANAL"}
             </div>
             <p className="text-[12.5px] leading-relaxed text-muted">
-              {wantsWhatsapp
+              {telegramWebhookStatus === "registered"
+                ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
+                : telegramWebhookStatus === "failed"
+                ? "Salvamos o token, mas não conseguimos ativar o bot automaticamente agora (confere se colou certo) — quem administra a plataforma consegue finalizar manualmente."
+                : wantsWhatsapp
                 ? "A parte do WhatsApp ainda é configurada manualmente — você vai receber uma mensagem com as instruções."
                 : "Assim que a ativação do Telegram estiver disponível, sua secretária já vai ter o token dela salvo — sem precisar repetir esse passo."}
             </p>
             <p className="mt-3 text-xs text-muted-2">Seu identificador: {props.slug}</p>
+            <button
+              onClick={() => {
+                setFinished(false);
+                setStep(1);
+              }}
+              className="mt-4 self-start text-xs text-cyan underline underline-offset-2"
+            >
+              Editar configuração
+            </button>
           </section>
         )}
       </div>
     </main>
+  );
+}
+
+function ProviderOption({
+  opt,
+  selected,
+  onSelect,
+}: {
+  opt: (typeof PROVIDER_OPTIONS)[number];
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
+        selected ? "border-cyan bg-cyan/5" : "border-line hover:border-line-soft"
+      }`}
+    >
+      <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
+        <input type="radio" name="provider" checked={selected} onChange={onSelect} className="accent-cyan" />
+        {opt.label}
+      </span>
+      <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
+    </label>
   );
 }
 
