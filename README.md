@@ -54,12 +54,23 @@ pra quem pede.
      colar uma, senão a `TRELLO_API_KEY` global (ver "Setup local"); sem
      nenhuma das duas, cai num textarea de fallback pra colar o mapa em JSON.
    * **Passo 3 (canal)** — WhatsApp (marcado como recomendado — é o canal
-     mais natural pro público-alvo, mesmo exigindo configuração manual
-     depois), Telegram ou ambos. Escolhendo Telegram, o próprio onboarding
-     chama o `setWebhook` da API do Telegram (`app/api/onboarding/channel`)
-     apontando pra `.../functions/v1/telegram/<slug>` — o bot já sai
-     funcionando, sem ninguém configurando isso manualmente. Se falhar (token
-     errado, rede), não trava o onboarding, só avisa na tela de recibo.
+     mais natural pro público-alvo), Telegram ou ambos. Escolhendo Telegram, o
+     próprio onboarding chama o `setWebhook` da API do Telegram
+     (`app/api/onboarding/channel`) apontando pra
+     `.../functions/v1/telegram/<slug>` — o bot já sai funcionando, sem
+     ninguém configurando isso manualmente. Se falhar (token errado, rede),
+     não trava o onboarding, só avisa na tela de recibo. Escolhendo WhatsApp,
+     o onboarding gera um código de vínculo de uso único
+     (`app/api/onboarding/whatsapp-link`, grava em
+     `tenants.whatsapp_link_code`/`whatsapp_link_code_expires_at`) e mostra um
+     botão de click-to-chat (`wa.me/<PLATFORM_WHATSAPP_NUMBER>?text=<código>`)
+     — a pessoa só aperta enviar, sem digitar nada. O `secretaria-agentic`
+     reconhece esse código na primeira mensagem que chegar no número
+     compartilhado da plataforma e autoriza aquele número pra esse tenant
+     (`tenants.whatsapp_authorized_number`) — depois disso, e só depois disso,
+     a secretária responde esse WhatsApp. Sem `PLATFORM_WHATSAPP_NUMBER`
+     configurado (número da plataforma ainda não provisionado), o botão não
+     aparece e cai no aviso de que a configuração é manual (ver "Pendências").
 
    Termina numa tela de recibo com um link "Editar configuração" que volta
    pro passo 1 — como cada passo faz upsert (não só insert), reabrir
@@ -70,8 +81,10 @@ pra quem pede.
    uma rota server-side que verifica a sessão antes).
 
 Depois disso o tenant já está pronto pro **backend** (edge functions do
-`secretaria-agentic`) usar — só falta o WhatsApp, que ainda é conectado
-manualmente (ver "Pendências" abaixo; Telegram já é automático, ver acima).
+`secretaria-agentic`) usar. Telegram e WhatsApp (via número compartilhado da
+plataforma) já saem funcionando sozinhos pelo próprio onboarding — falta só a
+plataforma ter o número compartilhado de fato provisionado (ver "Pendências"
+abaixo); sem ele, WhatsApp cai pro aviso de configuração manual.
 
 ## Setup local
 
@@ -88,6 +101,10 @@ nunca commitar, nunca usar num Client Component). `TRELLO_API_KEY` é
 opcional — key compartilhada usada como fallback quando a pessoa não cola a
 própria no wizard (developer.trello.com/docs/get-started); sem nenhuma das
 duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
+`PLATFORM_WHATSAPP_NUMBER` também é opcional — o número compartilhado da
+plataforma no formato do `wa.me` (só dígitos com DDI, ex: `5511999999999`);
+sem ele, o passo 3 ainda gera o código de vínculo mas não mostra o botão de
+abrir o WhatsApp (ver "Pendências").
 
 ## Setup externo pendente (obrigatório antes de qualquer login funcionar)
 
@@ -135,10 +152,26 @@ duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
 
 ## Pendências conhecidas (não bloqueiam o piloto, mas documentar)
 
-* **WhatsApp ainda é manual** — o wizard não provisiona a instância Evolution
-  API (precisa de número dedicado por tenant, linkado por QR code). Telegram
-  já não tem esse problema: o onboarding registra o webhook do bot sozinho
-  (ver "Como funciona" acima).
+* **WhatsApp mudou de modelo — de número dedicado por tenant pra número
+  compartilhado da plataforma, autorizado por telefone.** O schema
+  (`tenants.whatsapp_authorized_number`/`whatsapp_link_code`/
+  `whatsapp_link_code_expires_at`), o fluxo de vínculo por click-to-chat
+  aqui no onboarding, e o resolver + gate de autorização no
+  `secretaria-agentic` (`_shared/tenant.ts`, `reflex/index.ts`) já estão
+  prontos. **Falta o lado operacional**, que não é código: (1) comprar/parear
+  um número de WhatsApp da própria plataforma numa instância Evolution
+  dedicada a isso (não a pessoal do Daniel) — ou migrar direto pro WhatsApp
+  Cloud API oficial, mais recomendado pra esse padrão de "1 número, N
+  clientes"; (2) setar `PLATFORM_WHATSAPP_NUMBER` aqui e
+  `PLATFORM_EVOLUTION_INSTANCE`/`PLATFORM_EVOLUTION_API_KEY` nas secrets do
+  `secretaria-agentic`; (3) o workflow do n8n que recebe o webhook bruto da
+  Evolution passar a mandar o campo `instance` pro `reflex` (hoje só manda
+  `{text, from}` — é o único wiring que falta pro branch de número
+  compartilhado, que já existe no código, deixar de ficar inerte). Sem isso,
+  o onboarding gera o código de vínculo mas não mostra o botão de abrir o
+  WhatsApp, e cai no aviso de configuração manual. Telegram não tem nenhum
+  desses problemas: o onboarding registra o webhook do bot sozinho (ver "Como
+  funciona" acima).
 * Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
   própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
   Google Tasks sempre têm UI guiada com busca automática).
