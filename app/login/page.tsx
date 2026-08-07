@@ -11,6 +11,49 @@ const ERROR_MESSAGES: Record<string, string> = {
   auth_failed: "Não conseguimos confirmar seu login. Tenta de novo?",
 };
 
+type ChecklistItem = { title: string; desc: string };
+type ChecklistGroup = { label: string; items: ChecklistItem[] };
+
+// Checklist do que cada caminho do wizard exige — não é uma cópia do wizard,
+// é o que dá pra saber ANTES de logar, pra ninguém começar e travar no meio
+// por falta de um token que precisava ter gerado antes.
+const CHECKLIST: ChecklistGroup[] = [
+  {
+    label: "Gerenciador de tarefas — escolha 1 na próxima tela",
+    items: [
+      {
+        title: "Google Tasks (recomendado pra começar rápido)",
+        desc: "Nada além da conta que você usou pra logar acima — reusa o mesmo login, sem token extra.",
+      },
+      {
+        title: "ClickUp",
+        desc: "Token pessoal (perfil → Settings → Apps → API Token) e as lists já criadas no ClickUp.",
+      },
+      {
+        title: "Notion",
+        desc: "Token de uma integração interna (notion.so/my-integrations) com os databases já compartilhados com ela.",
+      },
+      {
+        title: "Trello",
+        desc: "Token pessoal — peça pra quem te convidou o link de autorização pronto (usa a API key da plataforma).",
+      },
+    ],
+  },
+  {
+    label: "Canal de conversa — escolha 1 ou os dois",
+    items: [
+      {
+        title: "Telegram (recomendado pra testar — grátis e na hora)",
+        desc: "Só precisa ter o Telegram instalado; o bot é criado no próprio wizard, em poucos passos.",
+      },
+      {
+        title: "WhatsApp",
+        desc: "Tem custo mensal de número dedicado; a configuração é feita manualmente depois, por quem administra a plataforma.",
+      },
+    ],
+  },
+];
+
 export default function LoginPage({
   searchParams,
 }: {
@@ -86,6 +129,29 @@ export default function LoginPage({
             </button>
           ))}
         </div>
+        <details className="w-full rounded-lg border border-line bg-surface/60 px-4 py-3 text-muted">
+          <summary className="cursor-pointer font-mono text-[11px] tracking-wide text-cyan">
+            O QUE VOCÊ VAI PRECISAR ANTES DE COMEÇAR
+          </summary>
+          <div className="mt-3 flex flex-col gap-4">
+            {CHECKLIST.map((group) => (
+              <div key={group.label} className="flex flex-col gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-2">
+                  {group.label}
+                </span>
+                <ul className="flex flex-col gap-2">
+                  {group.items.map((item) => (
+                    <li key={item.title} className="text-[13px] leading-relaxed">
+                      <span className="font-medium text-foreground">{item.title}</span>
+                      {" — "}
+                      {item.desc}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </details>
       </div>
     </main>
   );

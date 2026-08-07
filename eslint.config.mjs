@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Deno edge functions — código próprio (Deno.*, imports npm:/https://,
+    // linting/typecheck próprios via `deno lint`/`deno check`), fora do
+    // escopo desta config Next/Node.
+    "supabase/functions/**",
   ]),
 ]);
 

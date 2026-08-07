@@ -161,6 +161,7 @@ export default function OnboardingWizard(props: {
   const [channel, setChannel] = useState<Channel | null>(props.initialChannelPreference);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramWebhookStatus, setTelegramWebhookStatus] = useState<string | null>(null);
+  const [telegramWebhookWarning, setTelegramWebhookWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -318,6 +319,7 @@ export default function OnboardingWizard(props: {
     });
     if (result) {
       setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
+      setTelegramWebhookWarning(typeof result.telegram_webhook_warning === "string" ? result.telegram_webhook_warning : null);
       setStep(4);
       setFinished(true);
     }
@@ -764,7 +766,7 @@ export default function OnboardingWizard(props: {
               {telegramWebhookStatus === "registered"
                 ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
                 : telegramWebhookStatus === "failed"
-                ? "Salvamos o token, mas não conseguimos ativar o bot automaticamente agora (confere se colou certo) — quem administra a plataforma consegue finalizar manualmente."
+                ? `Salvamos o token, mas não conseguimos ativar o bot automaticamente agora${telegramWebhookWarning ? ` (${telegramWebhookWarning})` : " (confere se colou certo)"} — quem administra a plataforma consegue finalizar manualmente.`
                 : wantsWhatsapp
                 ? "A parte do WhatsApp ainda é configurada manualmente — você vai receber uma mensagem com as instruções."
                 : "Assim que a ativação do Telegram estiver disponível, sua secretária já vai ter o token dela salvo — sem precisar repetir esse passo."}
