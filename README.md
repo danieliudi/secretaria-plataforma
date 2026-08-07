@@ -1,16 +1,21 @@
 # secretaria-plataforma
 
-Onboarding self-serve da secretária agêntica: login com Google, wizard de
-configuração (persona + gerenciador de tarefas), grava tudo direto na mesma
-base multi-tenant do projeto **secretaria-agentic** (tabela `tenants` +
-Vault). Depois do wizard, a pessoa some com o próprio bot funcionando — nunca
-vê nem baixa uma linha de código.
+Monorepo da secretária agêntica multi-tenant: front-end de onboarding
+self-serve (login com Google/Outlook, wizard de configuração) **e** backend
+(edge functions Deno em `supabase/functions/`), compartilhando a mesma base
+`tenants` + Vault no Supabase. Depois do wizard, a pessoa some com o próprio
+bot funcionando — nunca vê nem baixa uma linha de código.
 
-Next.js 16 (App Router, Turbopack) + Supabase Auth (`@supabase/ssr`). Atenção:
-essa versão do Next tem convenções diferentes do usual — o antigo
+Front-end: Next.js 16 (App Router, Turbopack) + Supabase Auth (`@supabase/ssr`).
+Atenção: essa versão do Next tem convenções diferentes do usual — o antigo
 `middleware.ts` virou `proxy.ts` (mesma API, `NextRequest`/`NextResponse`, só
 o nome do arquivo e da função exportada mudou; ver comentário no topo do
 arquivo).
+
+Backend: `supabase/functions/{reflex,fast,cron,telegram}` (Deno, deploy via
+GitHub Actions — ver "Deploy do backend" abaixo). Antes vivia num repositório
+separado (`secretaria-agentic`); os dois foram consolidados aqui pra parar de
+divergir código-vivo entre repo e produção (ver seção "Deploy do backend").
 
 ## Como funciona
 
@@ -69,8 +74,8 @@ pra quem pede.
    de `tenants` hoje nega tudo pra `authenticated`; toda escrita passa por
    uma rota server-side que verifica a sessão antes).
 
-Depois disso o tenant já está pronto pro **backend** (edge functions do
-`secretaria-agentic`) usar — só falta o WhatsApp, que ainda é conectado
+Depois disso o tenant já está pronto pro **backend** (`supabase/functions/`,
+neste mesmo repo) usar — só falta o WhatsApp, que ainda é conectado
 manualmente (ver "Pendências" abaixo; Telegram já é automático, ver acima).
 
 ## Setup local
@@ -88,6 +93,27 @@ nunca commitar, nunca usar num Client Component). `TRELLO_API_KEY` é
 opcional — key compartilhada usada como fallback quando a pessoa não cola a
 própria no wizard (developer.trello.com/docs/get-started); sem nenhuma das
 duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
+
+## Deploy do backend (edge functions)
+
+`.github/workflows/deploy-edge-functions.yml` roda `supabase functions
+deploy --project-ref edaogdfeuxrylwqpopqe` a cada push em `main` que toque
+`supabase/functions/**` (também dá pra disparar manualmente via
+"Run workflow"). Isso existe pra fechar o motivo raiz de vários bugs desta
+sessão: com dois repositórios, código deployado em produção divergia
+silenciosamente do que estava no git (deploys manuais por function, sem
+histórico). Com o CI, `supabase/functions/` neste repo passa a ser a fonte
+única de verdade — o que está em produção é sempre o que está em `main`.
+
+**Setup pendente (só quem administra a plataforma pode fazer):**
+1. Gerar um access token em
+   [supabase.com/dashboard/account/tokens](https://supabase.com/dashboard/account/tokens).
+2. Adicionar como secret do repositório: Settings → Secrets and variables →
+   Actions → New repository secret → nome `SUPABASE_ACCESS_TOKEN`.
+
+Sem esse secret, o workflow falha (mas não bloqueia nada além do próprio
+deploy automático — dá pra continuar deployando manualmente com
+`supabase functions deploy` local até configurar).
 
 ## Setup externo pendente (obrigatório antes de qualquer login funcionar)
 
@@ -145,23 +171,22 @@ duas, o wizard continua funcionando, só cai no textarea manual pro Trello.
 * As colunas `tenants.trello_api_key_secret_id` e
   `tenants.outlook_refresh_token_secret_id` já foram aplicadas em produção
   (migration `tenants_add_trello_api_key_and_outlook_refresh_token`) —
-  `/onboarding` já pode gravar/ler as duas. O código do backend
-  (`secretaria-agentic`) que efetivamente *usa* a key própria do Trello
-  (`buildTenantEnv`) está pronto na branch `claude/trello-api-key-per-tenant`
-  mas as edge functions ainda não foram redeployadas com ela — até lá, todo
-  tenant continua usando a `TRELLO_API_KEY` global (zero regressão, só a
-  personalização por tenant que ainda não está ativa).
+  `/onboarding` já pode gravar/ler as duas, e `buildTenantEnv`
+  (`supabase/functions/_shared/tenant.ts`) já usa a key própria do Trello por
+  tenant quando presente, caindo pra `TRELLO_API_KEY` global quando não.
 * **Outlook desabilitado na UI por enquanto** (`enabled: false` em
   `lib/oauth-providers.ts`) — o Azure App Registration não foi concluído
-  ainda, e mesmo depois de concluído, a secretária (backend,
-  `secretaria-agentic`) ainda não lê/escreve Calendar/Mail via Microsoft
-  Graph, só Google (Fase 2, trabalho futuro: novo `_shared/microsoft-oauth.ts`
-  + providers de calendário/e-mail que agreguem Google e Outlook ao mesmo
-  tempo). Todo o resto (callback, colunas, vinculação) já está pronto —
-  reativar é só virar o flag quando o Azure estiver configurado.
+  ainda, e mesmo depois de concluído, a secretária (backend) ainda não
+  lê/escreve Calendar/Mail via Microsoft Graph, só Google (Fase 2, trabalho
+  futuro: novo `_shared/microsoft-oauth.ts` + providers de calendário/e-mail
+  que agreguem Google e Outlook ao mesmo tempo). Todo o resto (callback,
+  colunas, vinculação) já está pronto — reativar é só virar o flag quando o
+  Azure estiver configurado.
 
 ## Repositório
 
-Este projeto é separado do `secretaria-agentic` (que tem as edge functions e
-a migration que criou `tenants`/as RPCs de Vault) de propósito — front-end e
-back-end evoluem e deployam independentes, compartilhando só o Supabase.
+Front-end e backend (edge functions) vivem juntos neste repo desde a
+consolidação com o `secretaria-agentic` — antes eram dois projetos separados
+e o código em produção divergia do que estava versionado em cada um deles
+(deploys manuais, por function, sem CI). `secretaria-agentic` deve ser
+arquivado assim que tudo estiver confirmado funcionando a partir daqui.
