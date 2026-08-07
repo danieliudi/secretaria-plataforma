@@ -248,6 +248,14 @@ export default function OnboardingWizard(props: {
     }
   }
 
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    // Redirect "duro" (não router.push) — precisa recarregar do zero pra
+    // limpar qualquer estado de servidor que dependa da sessão antiga.
+    window.location.href = "/login";
+  }
+
   async function handleConnectProvider(provider: OAuthProviderId) {
     setConnectingProvider(provider);
     const supabase = createClient();
@@ -323,7 +331,16 @@ export default function OnboardingWizard(props: {
         aria-hidden="true"
       />
       <div className="relative z-10 flex w-full max-w-lg flex-col gap-6">
-        <StepIndicator step={step} />
+        <div className="flex items-center justify-between gap-3">
+          <StepIndicator step={step} />
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="shrink-0 font-mono text-[10.5px] uppercase tracking-wide text-muted-2 underline underline-offset-2 hover:text-muted"
+          >
+            Sair
+          </button>
+        </div>
 
         {error && (
           <p className="rounded-lg border border-red-900/40 bg-red-950/40 px-4 py-2 text-sm text-red-300">
