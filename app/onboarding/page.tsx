@@ -19,7 +19,7 @@ export default async function OnboardingPage({
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id")
+    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -35,6 +35,14 @@ export default async function OnboardingPage({
     );
   }
 
+  // Código pendente só é válido se ainda não venceu — mesma regra de
+  // consumeWhatsAppLinkCode no backend (supabase/functions/_shared/tenant.ts).
+  const pendingCodeValid = Boolean(
+    tenant.whatsapp_link_code &&
+    tenant.whatsapp_link_code_expires_at &&
+    new Date(tenant.whatsapp_link_code_expires_at) > new Date(),
+  );
+
   return (
     <OnboardingWizard
       slug={tenant.slug}
@@ -49,6 +57,9 @@ export default async function OnboardingPage({
       initialChannelPreference={tenant.channel_preference as "whatsapp" | "telegram" | "both" | null}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
       trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}
+      whatsappConnected={Boolean(tenant.whatsapp_authorized_number)}
+      initialWhatsappLinkCode={pendingCodeValid ? tenant.whatsapp_link_code : null}
+      initialWhatsappLinkCodeExpiresAt={pendingCodeValid ? tenant.whatsapp_link_code_expires_at : null}
     />
   );
 }

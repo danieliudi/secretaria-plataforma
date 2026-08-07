@@ -90,7 +90,7 @@ const CHANNEL_OPTIONS: Array<{
   value: Channel;
   label: string;
   hint: string;
-  cost: string | null;
+  info: string | null;
   setup: string;
   recommended?: boolean;
 }> = [
@@ -98,23 +98,23 @@ const CHANNEL_OPTIONS: Array<{
     value: "whatsapp",
     label: "WhatsApp",
     hint: "Você já usa no dia a dia — ninguém precisa aprender um app novo.",
-    cost: "Tem custo mensal por um número dedicado só pra secretária — no caso mais simples (número virtual, como a Salvy), fica em torno de R$ 29,90/mês. Também dá pra usar um chip físico só pra isso; o valor varia.",
-    setup: "A configuração é feita manualmente por quem administra a plataforma depois que você concluir esse passo — você recebe uma mensagem com os próximos passos.",
+    info: "Grátis pra você — todo mundo conversa pelo mesmo número da plataforma. Ao concluir esse passo você recebe um código: é só mandar ele numa mensagem pro número oficial pra vincular seu WhatsApp à sua secretária.",
+    setup: "Sem token nem configuração técnica nenhuma — o vínculo é feito só com esse código, direto no seu WhatsApp.",
     recommended: true,
   },
   {
     value: "telegram",
     label: "Telegram",
     hint: "Grátis, e você mesmo consegue criar o bot agora — sem esperar ninguém configurar nada.",
-    cost: null,
+    info: null,
     setup: "Você cria seu próprio bot em poucos passos e cola o token abaixo.",
   },
   {
     value: "both",
     label: "Os dois",
-    hint: "WhatsApp pro dia a dia, Telegram como alternativa gratuita ou pra não misturar com o número pessoal.",
-    cost: "A parte do WhatsApp tem custo mensal por um número dedicado — em torno de R$ 29,90/mês no caso mais simples (número virtual, como a Salvy), podendo variar com um chip físico. O Telegram continua grátis.",
-    setup: "O Telegram você configura agora (token abaixo); o WhatsApp é configurado manualmente depois.",
+    hint: "WhatsApp pro dia a dia, Telegram como alternativa ou pra não misturar com o número pessoal.",
+    info: "Os dois são grátis pra você. O Telegram você configura agora (token abaixo); o WhatsApp você vincula com um código que aparece ao concluir esse passo.",
+    setup: "Telegram: token abaixo. WhatsApp: código de vínculo na tela seguinte.",
   },
 ];
 
@@ -145,6 +145,9 @@ export default function OnboardingWizard(props: {
   initialChannelPreference: Channel | null;
   telegramConnected: boolean;
   trelloApiKeyConfigured: boolean;
+  whatsappConnected: boolean;
+  initialWhatsappLinkCode: string | null;
+  initialWhatsappLinkCodeExpiresAt: string | null;
 }) {
   const [step, setStep] = useState<Step>(1);
   const [nome, setNome] = useState(props.initialNome);
@@ -162,6 +165,9 @@ export default function OnboardingWizard(props: {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramWebhookStatus, setTelegramWebhookStatus] = useState<string | null>(null);
   const [telegramWebhookWarning, setTelegramWebhookWarning] = useState<string | null>(null);
+  const [whatsappLinkCode, setWhatsappLinkCode] = useState<string | null>(props.initialWhatsappLinkCode);
+  const [whatsappLinkCodeExpiresAt, setWhatsappLinkCodeExpiresAt] = useState<string | null>(props.initialWhatsappLinkCodeExpiresAt);
+  const [whatsappConnected, setWhatsappConnected] = useState(props.whatsappConnected);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -172,6 +178,8 @@ export default function OnboardingWizard(props: {
   const channelInfo = CHANNEL_OPTIONS.find((c) => c.value === channel) ?? null;
   const wantsTelegram = channel === "telegram" || channel === "both";
   const wantsWhatsapp = channel === "whatsapp" || channel === "both";
+  const telegramActive = telegramWebhookStatus === "registered";
+  const telegramFailed = telegramWebhookStatus === "failed";
   const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
 
   // Reseta a busca de listas sempre que troca de plataforma — a busca anterior
@@ -320,6 +328,9 @@ export default function OnboardingWizard(props: {
     if (result) {
       setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
       setTelegramWebhookWarning(typeof result.telegram_webhook_warning === "string" ? result.telegram_webhook_warning : null);
+      setWhatsappLinkCode(typeof result.whatsapp_link_code === "string" ? result.whatsapp_link_code : null);
+      setWhatsappLinkCodeExpiresAt(typeof result.whatsapp_link_code_expires_at === "string" ? result.whatsapp_link_code_expires_at : null);
+      if (result.whatsapp_already_linked === true) setWhatsappConnected(true);
       setStep(4);
       setFinished(true);
     }
@@ -656,10 +667,10 @@ export default function OnboardingWizard(props: {
                 </label>
               ))}
             </div>
-            {channelInfo?.cost && (
+            {channelInfo?.info && (
               <div className="rounded-lg border border-violet/40 bg-violet/5 px-3 py-2.5 text-xs leading-relaxed text-muted">
-                <span className="font-mono text-[10.5px] tracking-wide text-violet">CUSTO</span>
-                <p className="mt-1">{channelInfo.cost}</p>
+                <span className="font-mono text-[10.5px] tracking-wide text-violet">COMO FUNCIONA</span>
+                <p className="mt-1">{channelInfo.info}</p>
               </div>
             )}
             {channelInfo && (
@@ -691,10 +702,17 @@ export default function OnboardingWizard(props: {
               </label>
             )}
             {wantsWhatsapp && (
-              <p className="text-xs leading-relaxed text-muted-2">
-                Não precisa preencher nada agora pro WhatsApp — quem administra a plataforma
-                entra em contato pra combinar o número e finalizar essa parte.
-              </p>
+              whatsappConnected ? (
+                <p className="text-xs leading-relaxed text-muted-2">
+                  Seu WhatsApp já está vinculado — não precisa fazer nada aqui.
+                </p>
+              ) : (
+                <p className="text-xs leading-relaxed text-muted-2">
+                  Não precisa preencher nada agora — ao concluir esse passo você recebe um
+                  código de 6 letras pra colar numa mensagem pro WhatsApp oficial e vincular
+                  o seu número.
+                </p>
+              )
             )}
             <div className="mt-2 flex gap-3">
               <button
@@ -744,33 +762,73 @@ export default function OnboardingWizard(props: {
                 <ReceiptRow
                   label="Bot Telegram"
                   value={
-                    telegramWebhookStatus === "registered"
+                    telegramActive
                       ? "Ativo"
                       : props.telegramConnected || telegramToken
                       ? "Token recebido"
                       : "Pendente"
                   }
-                  ok={telegramWebhookStatus === "registered" || props.telegramConnected || Boolean(telegramToken)}
+                  ok={telegramActive || props.telegramConnected || Boolean(telegramToken)}
+                />
+              )}
+              {wantsWhatsapp && (
+                <ReceiptRow
+                  label="WhatsApp"
+                  value={whatsappConnected ? "Vinculado" : "Aguardando código"}
+                  ok={whatsappConnected}
                 />
               )}
             </dl>
             <div className="mt-5 flex items-center gap-2 border-t border-dashed border-line-soft pt-4 font-mono text-[11px] tracking-wide text-cyan">
               <span className="h-1.5 w-1.5 rounded-full bg-cyan shadow-[0_0_8px_1px_rgba(94,234,212,0.7)]" />
-              {telegramWebhookStatus === "registered"
+              {telegramActive && (!wantsWhatsapp || whatsappConnected)
+                ? "TUDO ATIVO"
+                : telegramActive
                 ? "TELEGRAM ATIVO"
                 : wantsTelegram && !wantsWhatsapp
                 ? "TELEGRAM PRONTO PRA ATIVAR"
                 : "AGUARDANDO CONEXÃO DE CANAL"}
             </div>
-            <p className="text-[12.5px] leading-relaxed text-muted">
-              {telegramWebhookStatus === "registered"
-                ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
-                : telegramWebhookStatus === "failed"
-                ? `Salvamos o token, mas não conseguimos ativar o bot automaticamente agora${telegramWebhookWarning ? ` (${telegramWebhookWarning})` : " (confere se colou certo)"} — quem administra a plataforma consegue finalizar manualmente.`
-                : wantsWhatsapp
-                ? "A parte do WhatsApp ainda é configurada manualmente — você vai receber uma mensagem com as instruções."
-                : "Assim que a ativação do Telegram estiver disponível, sua secretária já vai ter o token dela salvo — sem precisar repetir esse passo."}
-            </p>
+            {wantsTelegram && (
+              <p className="text-[12.5px] leading-relaxed text-muted">
+                {telegramActive
+                  ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
+                  : telegramFailed
+                  ? `Salvamos o token, mas não conseguimos ativar o bot automaticamente agora${telegramWebhookWarning ? ` (${telegramWebhookWarning})` : " (confere se colou certo)"} — quem administra a plataforma consegue finalizar manualmente.`
+                  : "Falta colar o token do bot — volta aqui e conclui esse passo de novo com ele preenchido pra ativar."}
+              </p>
+            )}
+            {wantsWhatsapp && (
+              whatsappConnected ? (
+                <p className="text-[12.5px] leading-relaxed text-muted">
+                  Seu WhatsApp já está vinculado — pode mandar uma mensagem pra sua secretária agora.
+                </p>
+              ) : whatsappLinkCode ? (
+                <div className="rounded-lg border border-cyan/40 bg-cyan/5 px-4 py-3">
+                  <span className="font-mono text-[10.5px] tracking-wide text-cyan">
+                    CÓDIGO DE VÍNCULO DO WHATSAPP
+                  </span>
+                  <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-foreground">
+                    {whatsappLinkCode}
+                  </p>
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+                    Manda esse código numa mensagem pro WhatsApp{" "}
+                    {process.env.NEXT_PUBLIC_WHATSAPP_NUMBER
+                      ? `oficial (${process.env.NEXT_PUBLIC_WHATSAPP_NUMBER})`
+                      : "oficial da plataforma"}{" "}
+                    pra vincular o seu número — vale por 30 minutos
+                    {whatsappLinkCodeExpiresAt && (
+                      <> (até {new Date(whatsappLinkCodeExpiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})</>
+                    )}
+                    . Se vencer, é só voltar aqui e concluir esse passo de novo pra gerar outro.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[12.5px] leading-relaxed text-muted">
+                  Não conseguimos gerar seu código de vínculo agora — volta aqui e conclui esse passo de novo.
+                </p>
+              )
+            )}
             <p className="mt-3 text-xs text-muted-2">Seu identificador: {props.slug}</p>
             <button
               onClick={() => {

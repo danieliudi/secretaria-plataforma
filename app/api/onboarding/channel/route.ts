@@ -6,6 +6,22 @@ import { upsertTenantSecret } from "@/lib/tenant-provisioning";
 const VALID_CHANNELS = new Set(["whatsapp", "telegram", "both"]);
 const TELEGRAM_API = "https://api.telegram.org";
 
+// Mesmo alfabeto/tamanho/TTL de createWhatsAppLinkCode em
+// supabase/functions/_shared/tenant.ts — duplicado aqui porque o wizard
+// (Next.js/Node) não importa código Deno das edge functions diretamente.
+// Sem 0/O/1/I — evita confusão ao ler/digitar o código no WhatsApp.
+const WHATSAPP_LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const WHATSAPP_LINK_CODE_LENGTH = 6;
+const WHATSAPP_LINK_CODE_TTL_MIN = 30;
+
+function generateWhatsAppLinkCode(): string {
+  let code = "";
+  for (let i = 0; i < WHATSAPP_LINK_CODE_LENGTH; i++) {
+    code += WHATSAPP_LINK_CODE_ALPHABET[Math.floor(Math.random() * WHATSAPP_LINK_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
 /** Confirma que o token é válido antes de salvar — evita persistir um token colado errado. */
 async function validateTelegramToken(token: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
@@ -70,7 +86,7 @@ export async function POST(request: Request) {
   const admin = createServiceClient();
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
-    .select("id, slug, telegram_bot_token_secret_id")
+    .select("id, slug, telegram_bot_token_secret_id, whatsapp_authorized_number")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -97,11 +113,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 
+  const wantsWhatsapp = channelPreference === "whatsapp" || channelPreference === "both";
+  const alreadyAuthorized = Boolean(tenant.whatsapp_authorized_number);
+
+  // Gera um código novo (substituindo qualquer pendente) toda vez que o
+  // passo é concluído pedindo WhatsApp e o número ainda não está vinculado —
+  // mesma regra de createWhatsAppLinkCode no backend.
+  let whatsappLinkCode: string | null = null;
+  let whatsappLinkCodeExpiresAt: string | null = null;
+  if (wantsWhatsapp && !alreadyAuthorized) {
+    whatsappLinkCode = generateWhatsAppLinkCode();
+    whatsappLinkCodeExpiresAt = new Date(Date.now() + WHATSAPP_LINK_CODE_TTL_MIN * 60_000).toISOString();
+  }
+
   const { error } = await admin
     .from("tenants")
     .update({
       channel_preference: channelPreference,
       telegram_bot_token_secret_id: telegramSecretId,
+      ...(wantsWhatsapp && !alreadyAuthorized
+        ? { whatsapp_link_code: whatsappLinkCode, whatsapp_link_code_expires_at: whatsappLinkCodeExpiresAt }
+        : {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", tenant.id);
@@ -125,5 +157,12 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, telegram_webhook: telegramWebhook, telegram_webhook_warning: telegramWebhookWarning });
+  return NextResponse.json({
+    ok: true,
+    telegram_webhook: telegramWebhook,
+    telegram_webhook_warning: telegramWebhookWarning,
+    whatsapp_already_linked: wantsWhatsapp && alreadyAuthorized,
+    whatsapp_link_code: whatsappLinkCode,
+    whatsapp_link_code_expires_at: whatsappLinkCodeExpiresAt,
+  });
 }

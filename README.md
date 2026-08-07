@@ -59,12 +59,19 @@ pra quem pede.
      colar uma, senão a `TRELLO_API_KEY` global (ver "Setup local"); sem
      nenhuma das duas, cai num textarea de fallback pra colar o mapa em JSON.
    * **Passo 3 (canal)** — WhatsApp (marcado como recomendado — é o canal
-     mais natural pro público-alvo, mesmo exigindo configuração manual
-     depois), Telegram ou ambos. Escolhendo Telegram, o próprio onboarding
-     chama o `setWebhook` da API do Telegram (`app/api/onboarding/channel`)
-     apontando pra `.../functions/v1/telegram/<slug>` — o bot já sai
-     funcionando, sem ninguém configurando isso manualmente. Se falhar (token
-     errado, rede), não trava o onboarding, só avisa na tela de recibo.
+     mais natural pro público-alvo), Telegram ou ambos. Escolhendo Telegram,
+     o próprio onboarding chama o `setWebhook` da API do Telegram
+     (`app/api/onboarding/channel`) apontando pra
+     `.../functions/v1/telegram/<slug>` — o bot já sai funcionando, sem
+     ninguém configurando isso manualmente. Se falhar (token errado, rede),
+     não trava o onboarding, só avisa na tela de recibo. Escolhendo WhatsApp,
+     a mesma rota gera um código de vínculo de 6 letras (30min de validade,
+     mesmo alfabeto/TTL de `createWhatsAppLinkCode` no backend) e mostra na
+     tela de recibo — a pessoa manda esse código numa mensagem pro número
+     compartilhado da plataforma pra vincular o próprio WhatsApp, sem token
+     nem configuração manual nenhuma. **Importante:** esse fluxo depende do
+     backend estar de fato processando mensagens da instância compartilhada
+     (ver "Pendências" abaixo — hoje ainda não está).
 
    Termina numa tela de recibo com um link "Editar configuração" que volta
    pro passo 1 — como cada passo faz upsert (não só insert), reabrir
@@ -75,8 +82,9 @@ pra quem pede.
    uma rota server-side que verifica a sessão antes).
 
 Depois disso o tenant já está pronto pro **backend** (`supabase/functions/`,
-neste mesmo repo) usar — só falta o WhatsApp, que ainda é conectado
-manualmente (ver "Pendências" abaixo; Telegram já é automático, ver acima).
+neste mesmo repo) usar. Telegram já funciona ponta a ponta; WhatsApp gera o
+código de vínculo mas a ativação de fato ainda depende de dois passos fora
+deste repo — ver "Pendências conhecidas" abaixo.
 
 ## Setup local
 
@@ -161,10 +169,36 @@ deploy automático — dá pra continuar deployando manualmente com
 
 ## Pendências conhecidas (não bloqueiam o piloto, mas documentar)
 
-* **WhatsApp ainda é manual** — o wizard não provisiona a instância Evolution
-  API (precisa de número dedicado por tenant, linkado por QR code). Telegram
-  já não tem esse problema: o onboarding registra o webhook do bot sozinho
-  (ver "Como funciona" acima).
+* **WhatsApp: wizard pronto, backend ainda não processa o número
+  compartilhado** — `/onboarding` já gera o código de vínculo de 6 letras
+  (`app/api/onboarding/channel`) e grava em `whatsapp_link_code`/
+  `whatsapp_link_code_expires_at`; o backend (`supabase/functions/reflex/
+  index.ts`, `handleSharedNumberMessage`) já sabe consumir esse código e
+  autorizar o número que mandou a mensagem. Mas isso só roda de fato quando
+  **dois pré-requisitos, fora deste repo, estiverem prontos**:
+  1. O secret `PLATFORM_EVOLUTION_INSTANCE` (+ opcionalmente
+     `PLATFORM_EVOLUTION_API_KEY`) precisa estar setado nas edge functions —
+     hoje `platformEvolutionInstance()` só lê essa var (sem fallback pro
+     `EVOLUTION_INSTANCE` global) de propósito: é um killswitch temporário
+     (comentário "KILLSWITCH TEMPORÁRIO (05/08)" em `reflex/index.ts`) porque
+     um backfill anterior gravou o número ERRADO em
+     `tenants.whatsapp_authorized_number` do tenant `daniel` (o número que
+     RECEBE mensagens, não o pessoal que ele usa pra mandar) — reativar o
+     fallback sem corrigir isso de novo bloquearia o próprio Daniel do
+     próprio bot. **Esse valor específico já foi corrigido nesta sessão**
+     (`whatsapp_authorized_number` do tenant `daniel` = `+5511947983006`),
+     mas religar o fallback continua sendo uma decisão do Daniel, não algo
+     pra reativar sem ele confirmar.
+  2. O workflow do n8n que recebe as mensagens do WhatsApp precisa passar a
+     mandar `instance` no corpo da chamada pro `reflex` (hoje só manda
+     `{text, from}`) — sem isso, `handleSharedNumberMessage` nunca executa,
+     é código morto esperando essa mudança.
+
+  Até esses dois pontos serem resolvidos, alguém que conclua o passo 3 do
+  wizard escolhendo WhatsApp recebe um código real, mas mandar esse código
+  pro número da plataforma não faz nada ainda (a mensagem cai no fluxo
+  antigo, roteado por instância, não pelo remetente). Telegram não tem esse
+  problema — já funciona ponta a ponta (ver "Como funciona" acima).
 * Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
   própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
   Google Tasks sempre têm UI guiada com busca automática).
