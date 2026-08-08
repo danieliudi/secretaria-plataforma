@@ -324,26 +324,21 @@ export default function OnboardingWizard(props: {
   }
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-6 py-16">
-      <div
-        className="signal-rings"
-        style={{ width: 700, height: 700, right: "-30%", top: "-10%" }}
-        aria-hidden="true"
-      />
-      <div className="relative z-10 flex w-full max-w-lg flex-col gap-6">
+    <main className="flex min-h-screen items-center justify-center px-6 py-16">
+      <div className="flex w-full max-w-lg flex-col gap-6">
         <div className="flex items-center justify-between gap-3">
           <StepIndicator step={step} />
           <button
             type="button"
             onClick={handleSignOut}
-            className="shrink-0 font-mono text-[10.5px] uppercase tracking-wide text-muted-2 underline underline-offset-2 hover:text-muted"
+            className="shrink-0 text-[12.5px] font-medium text-muted-2 underline underline-offset-2 hover:text-muted"
           >
             Sair
           </button>
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-900/40 bg-red-950/40 px-4 py-2 text-sm text-red-300">
+          <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
             {error}
           </p>
         )}
@@ -351,9 +346,9 @@ export default function OnboardingWizard(props: {
         {step === 1 && (
           <>
             <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
-              <h2 className="font-mono text-[10.5px] uppercase tracking-wide text-muted-2">Contas conectadas</h2>
+              <h2 className="text-[11px] font-bold uppercase tracking-wide text-muted-2">Contas conectadas</h2>
               {props.linkError && (
-                <p className="rounded-lg border border-red-900/40 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}
                 </p>
               )}
@@ -367,13 +362,15 @@ export default function OnboardingWizard(props: {
                     >
                       <span className="text-foreground">{cfg.label}</span>
                       {connected ? (
-                        <span className="font-mono text-[10.5px] text-cyan">Conectado</span>
+                        <span className="inline-flex items-center gap-1 rounded-md bg-cyan/10 px-2 py-0.5 text-[11.5px] font-bold text-cyan">
+                          <CheckIcon /> Conectado
+                        </span>
                       ) : (
                         <button
                           type="button"
                           onClick={() => handleConnectProvider(cfg.id)}
                           disabled={connectingProvider !== null}
-                          className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-cyan disabled:opacity-60"
+                          className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-surface-2 disabled:opacity-60"
                         >
                           {connectingProvider === cfg.id ? "Redirecionando…" : "Conectar"}
                         </button>
@@ -385,7 +382,7 @@ export default function OnboardingWizard(props: {
             </section>
 
             <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-              <h1 className="font-display text-xl font-extrabold text-foreground">Quem é você?</h1>
+              <h1 className="text-xl font-semibold text-foreground">Quem é você?</h1>
               <p className="text-[13px] leading-relaxed text-muted">
                 É o que a secretária usa pra falar com você. Só o nome é
                 obrigatório — o resto dá pra ajustar depois.
@@ -423,7 +420,7 @@ export default function OnboardingWizard(props: {
               <button
                 onClick={handlePersonaSubmit}
                 disabled={saving || !nome.trim()}
-                className="mt-2 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
+                className="mt-2 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Continuar"}
               </button>
@@ -433,7 +430,7 @@ export default function OnboardingWizard(props: {
 
         {step === 2 && (
           <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="font-display text-xl font-extrabold text-foreground">Onde ficam suas tarefas?</h1>
+            <h1 className="text-xl font-semibold text-foreground">Onde ficam suas tarefas?</h1>
             <p className="text-[13px] leading-relaxed text-muted">
               Escolha onde a secretária vai ler e criar tarefas pra você.
             </p>
@@ -475,7 +472,7 @@ export default function OnboardingWizard(props: {
                 />
                 {providerInfo.tokenSteps && (
                   <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                    <summary className="cursor-pointer font-mono text-[10.5px] tracking-wide text-cyan">
+                    <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
                       Como conseguir esse token?
                     </summary>
                     <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -508,7 +505,7 @@ export default function OnboardingWizard(props: {
                   placeholder={props.trelloApiKeyConfigured ? "Já recebemos uma key — cole outra pra trocar" : "Deixe em branco pra usar a key compartilhada da plataforma"}
                 />
                 <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                  <summary className="cursor-pointer font-mono text-[10.5px] tracking-wide text-cyan">
+                  <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
                     Quando eu preciso disso?
                   </summary>
                   <p className="mt-2">
@@ -543,7 +540,7 @@ export default function OnboardingWizard(props: {
                       type="button"
                       onClick={loadRemoteLists}
                       disabled={remoteListsLoading || !token.trim()}
-                      className="self-start rounded-lg border border-line px-4 py-2 text-xs font-medium text-foreground transition hover:border-cyan disabled:opacity-60"
+                      className="self-start rounded-lg border border-line px-4 py-2 text-xs font-medium text-foreground transition hover:bg-surface-2 disabled:opacity-60"
                     >
                       {remoteListsLoading
                         ? "Buscando…"
@@ -555,7 +552,7 @@ export default function OnboardingWizard(props: {
                   )}
                   {remoteListsError && (
                     <div className="flex flex-col gap-1.5">
-                      <p className="text-xs text-red-300">{remoteListsError}</p>
+                      <p className="text-xs text-red-600">{remoteListsError}</p>
                       <span className="text-xs text-muted-2">Enquanto isso, pode colar o mapa manualmente:</span>
                       <textarea
                         className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
@@ -604,14 +601,14 @@ export default function OnboardingWizard(props: {
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(1)}
-                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:border-line-soft"
+                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:bg-surface-2"
               >
                 Voltar
               </button>
               <button
                 onClick={handleProviderSubmit}
                 disabled={saving || (provider !== "google_tasks" && !token.trim())}
-                className="flex-1 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
+                className="flex-1 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Continuar"}
               </button>
@@ -621,7 +618,7 @@ export default function OnboardingWizard(props: {
 
         {step === 3 && (
           <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="font-display text-xl font-extrabold text-foreground">Como você quer conversar com ela?</h1>
+            <h1 className="text-xl font-semibold text-foreground">Como você quer conversar com ela?</h1>
             <p className="text-[13px] leading-relaxed text-muted">
               Escolha onde a secretária vai te mandar mensagens e receber as suas.
             </p>
@@ -645,7 +642,7 @@ export default function OnboardingWizard(props: {
                     />
                     {opt.label}
                     {opt.recommended && (
-                      <span className="rounded-full border border-cyan/40 px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-wide text-cyan">
+                      <span className="rounded-md bg-cyan/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan">
                         Recomendado
                       </span>
                     )}
@@ -655,8 +652,8 @@ export default function OnboardingWizard(props: {
               ))}
             </div>
             {channelInfo?.cost && (
-              <div className="rounded-lg border border-violet/40 bg-violet/5 px-3 py-2.5 text-xs leading-relaxed text-muted">
-                <span className="font-mono text-[10.5px] tracking-wide text-violet">CUSTO</span>
+              <div className="rounded-lg border border-violet/30 bg-violet/5 px-3 py-2.5 text-xs leading-relaxed text-muted">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-violet">Custo</span>
                 <p className="mt-1">{channelInfo.cost}</p>
               </div>
             )}
@@ -674,7 +671,7 @@ export default function OnboardingWizard(props: {
                   placeholder={props.telegramConnected ? "Já recebemos um token — cole outro pra trocar" : "Cole o token do @BotFather aqui"}
                 />
                 <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                  <summary className="cursor-pointer font-mono text-[10.5px] tracking-wide text-cyan">
+                  <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
                     Como criar esse bot?
                   </summary>
                   <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -697,14 +694,14 @@ export default function OnboardingWizard(props: {
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(2)}
-                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:border-line-soft"
+                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:bg-surface-2"
               >
                 Voltar
               </button>
               <button
                 onClick={handleChannelSubmit}
                 disabled={saving || !channel}
-                className="flex-1 rounded-lg border border-line bg-surface-2 px-6 py-3 font-medium text-foreground transition hover:border-cyan active:scale-[0.98] disabled:opacity-60"
+                className="flex-1 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Concluir"}
               </button>
@@ -714,7 +711,7 @@ export default function OnboardingWizard(props: {
 
         {step === 4 && finished && (
           <section className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-7">
-            <h1 className="font-display text-xl font-extrabold text-foreground">
+            <h1 className="text-xl font-semibold text-foreground">
               Tudo pronto, {nome.split(" ")[0] || ""}
             </h1>
             <p className="mb-2 text-[13px] leading-relaxed text-muted">
@@ -752,13 +749,31 @@ export default function OnboardingWizard(props: {
                 />
               )}
             </dl>
-            <div className="mt-5 flex items-center gap-2 border-t border-dashed border-line-soft pt-4 font-mono text-[11px] tracking-wide text-cyan">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan shadow-[0_0_8px_1px_rgba(94,234,212,0.7)]" />
+            <div
+              className={`mt-5 flex items-center gap-2 rounded-lg px-3 py-2.5 text-[11.5px] font-bold tracking-wide ${
+                telegramWebhookStatus === "registered"
+                  ? "bg-cyan/10 text-cyan"
+                  : telegramWebhookStatus === "failed"
+                  ? "bg-amber-50 text-amber-800"
+                  : "bg-surface-2 text-muted"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  telegramWebhookStatus === "registered"
+                    ? "bg-cyan"
+                    : telegramWebhookStatus === "failed"
+                    ? "bg-amber-600"
+                    : "bg-muted-2"
+                }`}
+              />
               {telegramWebhookStatus === "registered"
-                ? "TELEGRAM ATIVO"
+                ? "Telegram ativo"
+                : telegramWebhookStatus === "failed"
+                ? "Telegram não ativou automaticamente"
                 : wantsTelegram && !wantsWhatsapp
-                ? "TELEGRAM PRONTO PRA ATIVAR"
-                : "AGUARDANDO CONEXÃO DE CANAL"}
+                ? "Telegram pronto pra ativar"
+                : "Aguardando conexão de canal"}
             </div>
             <p className="text-[12.5px] leading-relaxed text-muted">
               {telegramWebhookStatus === "registered"
@@ -810,10 +825,18 @@ function ProviderOption({
   );
 }
 
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3">
+      <path d="M4 10.5l4 4 8-9" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function ReceiptRow({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
   return (
     <div className="flex items-baseline justify-between border-b border-line-soft py-2.5 text-[12.5px] last:border-none">
-      <dt className="font-mono text-[10.5px] uppercase tracking-wide text-muted-2">{label}</dt>
+      <dt className="text-[11px] font-bold uppercase tracking-wide text-muted-2">{label}</dt>
       <dd className={`font-medium ${ok ? "text-cyan" : "text-foreground"}`}>{value}</dd>
     </div>
   );
@@ -822,13 +845,13 @@ function ReceiptRow({ label, value, ok }: { label: string; value: string; ok?: b
 function StepIndicator({ step }: { step: Step }) {
   const labels = ["Você", "Tarefas", "Canal", "Pronto"];
   return (
-    <div className="flex flex-wrap items-center gap-2 font-mono text-[10.5px] tracking-wide text-muted-2">
+    <div className="flex flex-wrap items-center gap-1.5 text-[12px] font-semibold text-muted-2">
       {labels.map((label, i) => {
         const n = (i + 1) as Step;
         return (
-          <span key={label} className={`flex items-center gap-2 ${n === step ? "text-cyan" : ""}`}>
-            {i > 0 && <span>—</span>}
-            {n}. {label.toUpperCase()}
+          <span key={label} className={`flex items-center gap-1.5 ${n === step ? "text-cyan" : ""}`}>
+            {i > 0 && <span className="text-muted-2">·</span>}
+            {n} {label}
           </span>
         );
       })}
