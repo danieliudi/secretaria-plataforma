@@ -34,16 +34,24 @@ export interface QuickCaptureDeps {
   now: () => Date;
 }
 
-export function defaultQuickCaptureDeps(): QuickCaptureDeps {
+/**
+ * `tenantId` é OBRIGATÓRIO. Sem ele esta tabela era uma pilha única: o
+ * arquivamento marcava as notas pendentes de TODOS os usuários como resolvidas
+ * — e devolvia o texto delas na resposta, que o modelo repassava a quem pediu.
+ * Bastava dizer "arquiva todas as notas", que é o uso descrito na própria tool.
+ */
+export function defaultQuickCaptureDeps(tenantId: string): QuickCaptureDeps {
+  if (!tenantId) throw new Error("quick_capture: tenantId obrigatório");
   return {
     insert: (data) =>
       getSupabaseClient()
         .from("quick_capture")
-        .insert(data) as unknown as ReturnType<InsertFn>,
+        .insert({ ...data, tenant_id: tenantId }) as unknown as ReturnType<InsertFn>,
     archive: (query) => {
       let q = getSupabaseClient()
         .from("quick_capture")
         .update({ processado: true })
+        .eq("tenant_id", tenantId)
         .eq("processado", false);
       if (query) q = q.ilike("texto", `%${query}%`);
       return q.select("texto") as unknown as ReturnType<ArchiveFn>;
@@ -54,7 +62,7 @@ export function defaultQuickCaptureDeps(): QuickCaptureDeps {
 
 export async function saveQuickCapture(
   input: QuickCaptureInput,
-  deps: QuickCaptureDeps = defaultQuickCaptureDeps(),
+  deps: QuickCaptureDeps,
 ): Promise<QuickCaptureResult> {
   const text = input.text.trim();
   if (!text) throw new Error("quick_capture: text is empty");
@@ -81,7 +89,7 @@ export interface ArchiveQuickCapturesResult {
 
 export async function archiveQuickCaptures(
   input: ArchiveQuickCapturesInput,
-  deps: QuickCaptureDeps = defaultQuickCaptureDeps(),
+  deps: QuickCaptureDeps,
 ): Promise<ArchiveQuickCapturesResult> {
   if (!input.all && !input.query) {
     throw new Error(

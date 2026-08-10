@@ -33,27 +33,33 @@ function todayStart(): string {
   return d.toISOString();
 }
 
-function buildDeps(): OrchestratorDeps {
+// TODA query aqui é escopada por `tenantId`. Antes destas tabelas ganharem
+// dono, o tier reflex era global: `one thing?` devolvia a prioridade de
+// qualquer usuário, `tomei remédio` lia a medicação de todos e registrava a
+// tomada no cadastro alheio, `água 500` somava o dia de todo mundo junto. Os
+// gatilhos são expressões de uma palavra — acontecia sem intenção nenhuma.
+function buildDeps(tenantId: string): OrchestratorDeps {
   const sb = getSupabaseClient();
   getAnthropicClient(); // valida ANTHROPIC_API_KEY no boot
 
   return {
     water: {
-      insert: (data) => sb.from("health_log").insert(data),
+      insert: (data) => sb.from("health_log").insert({ ...data, tenant_id: tenantId }),
       sumToday: async () => {
         const { data } = await sb
           .from("health_log")
           .select("valor")
+          .eq("tenant_id", tenantId)
           .eq("tipo", "agua")
           .gte("ts", todayStart());
         return (data ?? []).reduce((s: number, r: { valor: number }) => s + (r.valor ?? 0), 0);
       },
     },
     sleep: {
-      insert: (data) => sb.from("habit_log").insert(data),
+      insert: (data) => sb.from("habit_log").insert({ ...data, tenant_id: tenantId }),
     },
     treino: {
-      insert: (data) => sb.from("treino_log").insert(data),
+      insert: (data) => sb.from("treino_log").insert({ ...data, tenant_id: tenantId }),
     },
     medication: {
       now: () => new Date().toTimeString().slice(0, 5),
@@ -61,14 +67,15 @@ function buildDeps(): OrchestratorDeps {
         const { data } = await sb
           .from("medication_schedule")
           .select("*")
+          .eq("tenant_id", tenantId)
           .eq("ativo", true);
         return data ?? [];
       },
       logIntake: (scheduleId, remedio, dose) =>
-        sb.from("medication_log").insert({ schedule_id: scheduleId, remedio, dose }),
+        sb.from("medication_log").insert({ schedule_id: scheduleId, remedio, dose, tenant_id: tenantId }),
     },
     oneThingWrite: {
-      insert: (data) => sb.from("one_thing").insert(data),
+      insert: (data) => sb.from("one_thing").insert({ ...data, tenant_id: tenantId }),
       today: () => new Date().toISOString().slice(0, 10),
     },
     oneThingRead: {
@@ -76,6 +83,7 @@ function buildDeps(): OrchestratorDeps {
         const { data } = await sb
           .from("one_thing")
           .select("texto")
+          .eq("tenant_id", tenantId)
           .eq("escopo", escopo)
           .eq("status", "aberto")
           .order("created_at", { ascending: false })
@@ -84,7 +92,7 @@ function buildDeps(): OrchestratorDeps {
       },
     },
     quickCapture: {
-      insert: (data) => sb.from("quick_capture").insert(data),
+      insert: (data) => sb.from("quick_capture").insert({ ...data, tenant_id: tenantId }),
     },
     // Calendar (2B.7) e ClickUp (2D) viraram tools no /fast — não mais aqui.
   };
@@ -260,7 +268,8 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
   }
 
   if (decision.tier === "reflex") {
-    const result = await orchestrateReflex(text, decision, buildDeps());
+    // `tenant` aqui é quem o número autorizado identificou — nunca um default.
+    const result = await orchestrateReflex(text, decision, buildDeps(tenant.id));
     return resp(result, 200);
   }
 
@@ -344,7 +353,16 @@ Deno.serve(async (req: Request) => {
     }
 
     if (decision.tier === "reflex") {
-      const result = await orchestrateReflex(text, decision, buildDeps());
+      // O tier reflex grava e lê dados pessoais (saúde, medicação, treino,
+      // prioridade do dia). Sem saber DE QUEM é a mensagem não há resposta
+      // segura possível: responder assumindo um tenant padrão foi exatamente o
+      // que fazia um usuário receber a prioridade de outro. Recusa é o certo.
+      const tenantReflex = await resolveTenant(instance);
+      if (!tenantReflex) {
+        console.error("[reflex] tier reflex sem tenant resolvido — recusando em vez de assumir um padrão");
+        return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
+      }
+      const result = await orchestrateReflex(text, decision, buildDeps(tenantReflex.id));
       return resp(result, 200);
     }
 
@@ -400,8 +418,12 @@ Deno.serve(async (req: Request) => {
         return resp({ ok: true, message: FAST_ACK }, 200);
       }
 
-      // Sem 'from' ou Evolution não configurada: comportamento síncrono (atual).
-      const result = await callFastEndpoint({ text, decision, from });
+      // Sem 'from' ou Evolution não configurada: comportamento síncrono.
+      // Passa o tenant também aqui — sem ele, o /fast montava o prompt com a
+      // persona default e as tools caíam no ambiente global. Era um caminho de
+      // PRODUÇÃO, não só de teste.
+      const tenantSync = await resolveTenant(instance);
+      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenantSync?.slug });
       return resp(result, 200);
     }
 

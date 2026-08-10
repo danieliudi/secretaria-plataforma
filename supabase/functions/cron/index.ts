@@ -274,13 +274,18 @@ async function deliverTo(userId: string, text: string, env: EnvFn): Promise<void
 // Recorrentes (recurrence != null): depois de entregar, insere uma NOVA linha
 // pendente com o próximo fire_at — a linha original fica marcada sent_at,
 // preservando histórico de disparos.
-async function runScheduled(env: EnvFn): Promise<{ sent: number; scanned: number }> {
+async function runScheduled(env: EnvFn, tenantId: string): Promise<{ sent: number; scanned: number }> {
   const sb = getSupabaseClient();
   const nowISO = new Date().toISOString();
 
+  // Só os lembretes DESTE tenant: sem o filtro, os lembretes que outros
+  // usuários criaram eram entregues com as credenciais do dono da plataforma —
+  // nunca chegavam ao destinatário certo, nunca eram marcados como enviados, e
+  // reentravam no loop para sempre.
   const { data, error } = await sb
     .from("scheduled_reminders")
     .select("id, user_id, text, fire_at, recurrence")
+    .eq("tenant_id", tenantId)
     .lte("fire_at", nowISO)
     .is("sent_at", null)
     .order("fire_at", { ascending: true })
@@ -388,7 +393,7 @@ async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number
 // Relatório semanal: panorama da Beehave (via /fast) + triagem de capturas
 // rápidas paradas há mais de 7 dias (mesmo gatilho semanal, mensagem à parte
 // — são assuntos diferentes: cliente da agência vs. inbox pessoal).
-async function runWeekly(env: EnvFn): Promise<{ len: number }> {
+async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }> {
   const text = await askFast(
     "Monte um panorama da semana da Agência Beehave, em tópicos por cliente " +
       "(Resibag, Sanwey). Pra cada um liste as tarefas/entregas em aberto " +
@@ -400,7 +405,7 @@ async function runWeekly(env: EnvFn): Promise<{ len: number }> {
   await sendWhatsAppText(ownerJid(env), panorama, { fetch, env });
   await appendAssistantMessage(ownerJid(env), panorama);
 
-  const stale = await getStaleCaptures();
+  const stale = await getStaleCaptures(tenantId);
   if (stale.length > 0) {
     const lines = stale.map((c) => `• ${c.texto}`).join("\n");
     const staleMsg =
@@ -414,12 +419,16 @@ async function runWeekly(env: EnvFn): Promise<{ len: number }> {
 
 // Capturas rápidas (save_quick_capture) sem triagem há mais de `days` dias —
 // pra não deixar o inbox virar cemitério de notas esquecidas.
-async function getStaleCaptures(days = 7): Promise<Array<{ texto: string; ts: string }>> {
+// Escopado pelo tenant dono da execução: sem o filtro, a triagem semanal
+// levava as anotações de TODOS os usuários para o WhatsApp do dono da
+// plataforma.
+async function getStaleCaptures(tenantId: string, days = 7): Promise<Array<{ texto: string; ts: string }>> {
   const sb = getSupabaseClient();
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60_000).toISOString();
   const { data, error } = await sb
     .from("quick_capture")
     .select("texto, ts")
+    .eq("tenant_id", tenantId)
     .eq("processado", false)
     .lt("ts", cutoff)
     .order("ts", { ascending: true })
@@ -469,8 +478,8 @@ Deno.serve(async (req: Request) => {
     if (task === "reminders") return json({ ok: true, ...(await runReminders(env)) });
     if (task === "alerts") return json({ ok: true, ...(await runAlerts(env)) });
     if (task === "brief") return json({ ok: true, ...(await runBrief(env)) });
-    if (task === "weekly") return json({ ok: true, ...(await runWeekly(env)) });
-    if (task === "scheduled") return json({ ok: true, ...(await runScheduled(env)) });
+    if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
+    if (task === "scheduled") return json({ ok: true, ...(await runScheduled(env, tenant.id)) });
     if (task === "marketing") return json({ ok: true, ...(await runMarketing(env)) });
     if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env)) });
     return json({

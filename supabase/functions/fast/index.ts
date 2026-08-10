@@ -32,6 +32,7 @@ import {
   type ArchiveQuickCapturesInput,
   type ArchiveQuickCapturesResult,
   archiveQuickCaptures as defaultArchiveQuickCaptures,
+  defaultQuickCaptureDeps,
   type QuickCaptureInput,
   type QuickCaptureResult,
   saveQuickCapture as defaultSaveQuickCapture,
@@ -685,8 +686,20 @@ export interface FastWithToolsDeps {
 export function defaultFastWithToolsDeps(
   env: (key: string) => string | undefined = (k) => Deno.env.get(k),
   persona: TenantPersona = DEFAULT_PERSONA,
+  // Dono dos dados desta chamada. `null` = tenant não resolvido: as tools que
+  // tocam tabela com dono (quick_capture) recusam em vez de cair numa pilha
+  // global compartilhada entre todos os usuários.
+  tenantId: string | null = null,
 ): FastWithToolsDeps {
   const getAccessToken = () => getGoogleAccessToken({ env, fetch });
+  const quickCaptureDeps = () => {
+    if (!tenantId) {
+      throw new Error(
+        "anotações não disponíveis: não foi possível identificar de quem é esta conversa",
+      );
+    }
+    return defaultQuickCaptureDeps(tenantId);
+  };
   return {
     now: () => new Date(),
     buildSystemPrompt: (now) => {
@@ -732,15 +745,21 @@ export function defaultFastWithToolsDeps(
       getNextEvents: (n) => defaultGetNextEvents(n, { getAccessToken, fetch, now: () => new Date() }),
       getEventsByDate: (date) => defaultGetEventsByDate(date, { getAccessToken, fetch, now: () => new Date() }),
       createEvent: (input) => defaultCreateEvent(input, { getAccessToken, fetch }),
-      saveQuickCapture: (input) => defaultSaveQuickCapture(input),
-      archiveQuickCaptures: (input) => defaultArchiveQuickCaptures(input),
+      saveQuickCapture: (input) => defaultSaveQuickCapture(input, quickCaptureDeps()),
+      archiveQuickCaptures: (input) => defaultArchiveQuickCaptures(input, quickCaptureDeps()),
       listRecentEmails: (input) => defaultListRecentEmails(input, { getAccessToken, fetch }),
       listTasks: (input) => getTaskProvider(env).listTasks(input),
       createTask: (input) => getTaskProvider(env).createTask(input),
       saveProfileFact: (userId, category, key, value) =>
         defaultSaveProfileFact(userId, category, key, value),
-      scheduleReminder: (userId, input) =>
-        defaultCreateScheduledReminder(userId, input),
+      scheduleReminder: (userId, input) => {
+        if (!tenantId) {
+          throw new Error(
+            "lembretes não disponíveis: não foi possível identificar de quem é esta conversa",
+          );
+        }
+        return defaultCreateScheduledReminder(userId, input, tenantId);
+      },
       exportSpreadsheet: (input, to) => defaultExportSpreadsheet(input, to, defaultExportSpreadsheetDeps(env)),
       getGa4Metrics: (frente, days) => defaultGetGa4Snapshot(frente, days, { env, fetch, getAccessToken }),
       listCrmLeads: (input) => defaultListCrmLeads(input, { env }),
@@ -1085,7 +1104,7 @@ Deno.serve(async (req: Request) => {
           frentes: tenant.frentes,
           persona: tenant.persona,
         };
-        deps = defaultFastWithToolsDeps(await buildTenantEnv(tenant), persona);
+        deps = defaultFastWithToolsDeps(await buildTenantEnv(tenant), persona, tenant.id);
       }
     } catch (err) {
       console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${String(err)}`);

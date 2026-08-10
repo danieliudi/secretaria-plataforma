@@ -37,6 +37,7 @@ export interface ScheduledReminder {
 
 type InsertRow = {
   user_id: string;
+  tenant_id: string;
   fire_at: string;
   text: string;
   recurrence: RecurrenceType | null;
@@ -138,12 +139,17 @@ export type ScheduleResult =
  * lembrete pendente parecido (±90min) e confirm_duplicate não foi setado,
  * devolve { created: false, conflict } em vez de criar.
  */
+// `tenantId` é obrigatório: o cron entrega os lembretes filtrando por ele.
+// Gravar sem dono faz o lembrete nunca disparar — e some em silêncio, porque
+// ninguém reclama de uma mensagem que não chegou.
 export async function createScheduledReminder(
   userId: string,
   input: CreateReminderInput,
+  tenantId: string,
   deps: ScheduledReminderDeps = defaultScheduledReminderDeps(),
   now: Date = new Date(),
 ): Promise<ScheduleResult> {
+  if (!tenantId) throw new Error("scheduled_reminders: tenantId obrigatório");
   const text = input.text.trim();
   if (!text) throw new Error("text vazio");
 
@@ -169,6 +175,7 @@ export async function createScheduledReminder(
 
   const result = await deps.insert({
     user_id: userId,
+    tenant_id: tenantId,
     fire_at: fireAt.toISOString(),
     text,
     recurrence: input.recurrence ?? null,
