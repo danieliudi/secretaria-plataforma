@@ -1,5 +1,6 @@
 import { getAnthropicClient } from "../_shared/anthropic.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
+import { isInternalCall } from "../_shared/internal-auth.ts";
 import type { Decision } from "../_shared/types.ts";
 import { classifyWithHaiku, checkRegexReflex } from "../_shared/router.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
@@ -298,6 +299,22 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
+
+  // MODO OBSERVAÇÃO (10/08/2026) — passo intermediário antes de exigir chamada
+  // interna aqui como já se exige no /fast.
+  //
+  // O n8n chama este endpoint com a credencial "Supabase service_role", mas não
+  // dá pra ler o valor dela pelo painel nem pela API — e o WhatsApp do dono é
+  // uso diário. Então: por enquanto só REGISTRA se bloquearia, e deixa passar.
+  // Com uma mensagem real, `auth_observe` no async_debug responde se a
+  // credencial bate. Sem linha nova = bate, e aí isto vira bloqueio de fato.
+  if (!isInternalCall(req)) {
+    try {
+      await getSupabaseClient()
+        .from("async_debug")
+        .insert({ step: "auth_observe", detail: "reflex: chamador NAO passaria na trava interna" });
+    } catch { /* observabilidade não pode derrubar o request */ }
+  }
 
   let body: { text?: unknown; decision?: Decision; from?: unknown; instance?: unknown };
   try { body = await req.json(); } catch { return resp({ error: "Invalid JSON" }, 400); }

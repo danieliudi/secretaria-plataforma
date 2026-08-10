@@ -31,6 +31,7 @@ import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared/tenant.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
+import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 
 type EnvFn = (key: string) => string | undefined;
 
@@ -463,6 +464,17 @@ async function runEveningRecap(env: EnvFn): Promise<{ len: number }> {
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json("Method Not Allowed", 405);
+
+  // Sem trava, este endpoint era um botão público: qualquer um disparava
+  // `brief`/`weekly`/`marketing` em loop — custo direto de API da Anthropic e
+  // enxurrada de mensagens no WhatsApp do dono (brief, weekly, marketing e
+  // evening_recap não têm proteção contra repetição).
+  //
+  // Exigir aqui não regride nada: os agendamentos do pg_cron autenticavam com
+  // a chave publicável LEGADA, que foi desativada no projeto — ou seja, já
+  // estavam falhando em silêncio. O SQL que reconfigura os agendamentos com a
+  // chave correta acompanha esta mudança.
+  if (!isInternalCall(req)) return respostaNaoAutorizado();
 
   let body: { task?: unknown } = {};
   try {
