@@ -15,6 +15,7 @@
 // stateless como antes.
 
 import { getAnthropicClient } from "../_shared/anthropic.ts";
+import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { buildFastSystemPrompt, DEFAULT_PERSONA, nowInSaoPaulo, type TenantPersona } from "../_shared/fast.ts";
 import type { Decision, ReflexResult } from "../_shared/types.ts";
 import {
@@ -1033,6 +1034,13 @@ export async function handleFastWithTools(
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
+
+  // /fast só aceita chamada INTERNA. Sem isto, qualquer um na internet mandava
+  // `tenant_slug` de outra pessoa e recebia a agenda, o Gmail, as tarefas e o
+  // CRM dela em texto claro na resposta — e, com o prompt certo, escrevia na
+  // agenda. Quem legitimamente chama aqui (reflex, telegram, cron) já manda a
+  // service role key; ver _shared/internal-auth.ts.
+  if (!isInternalCall(req)) return respostaNaoAutorizado();
 
   let body: { text?: unknown; decision?: Decision; from?: unknown; tenant_slug?: unknown };
   try {
