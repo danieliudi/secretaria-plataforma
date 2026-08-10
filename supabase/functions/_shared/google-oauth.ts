@@ -55,7 +55,11 @@ export async function getGoogleAccessToken(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Google token refresh failed: ${res.status} ${body}`);
+    // DEBUG TEMPORÁRIO (remover depois de confirmar a chave certa) — só os
+    // últimos 4 caracteres de cada valor, igual ao que o próprio Google
+    // Cloud Console mostra na lista de secrets (****Zojv, ****q18_...).
+    const fp = `client_id_fim=${clientId.slice(-6)} client_secret_fim=${clientSecret.slice(-4)} client_secret_len=${clientSecret.length}`;
+    throw new Error(`Google token refresh failed: ${res.status} ${body} [${fp}]`);
   }
 
   const data = (await res.json()) as TokenResponse;
