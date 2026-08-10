@@ -1,0 +1,31 @@
+project_id = "edaogdfeuxrylwqpopqe"
+
+# `verify_jwt` versionado aqui em vez de só no dashboard: um redeploy sem
+# este arquivo não reseta o valor por acidente, e fica documentado o porquê
+# de cada função.
+#
+# false = a função faz sua PRÓPRIA autenticação (ver
+# supabase/functions/_shared/internal-auth.ts, checagem de
+# Authorization: Bearer <service_role>). verify_jwt=true NÃO é um limite
+# real pra endpoint interno: a chave publicável (pública, embutida no
+# bundle do site) também é um JWT válido do projeto e passaria.
+#
+# /cron: chamado só pelo pg_cron (via Vault + pg_net) — precisa aceitar a
+# service_role key nova (formato sb_secret_..., que não é JWT e por isso
+# NUNCA passaria verify_jwt=true).
+[functions.cron]
+verify_jwt = false
+
+# /fast: chamado só internamente (reflex, cron) com a service_role key.
+[functions.fast]
+verify_jwt = false
+
+# /telegram: webhook público do Telegram — não manda JWT nenhum.
+[functions.telegram]
+verify_jwt = false
+
+# /reflex: em MODO OBSERVAÇÃO (ver comentário no index.ts) — ainda não
+# convertido pra bloqueio de verdade, então mantém o verify_jwt do projeto
+# como camada extra por enquanto.
+[functions.reflex]
+verify_jwt = true
