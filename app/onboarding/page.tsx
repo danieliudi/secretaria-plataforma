@@ -26,7 +26,7 @@ export default async function OnboardingPage({
   if (error || !tenant) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
-        <h1 className="font-display text-xl font-extrabold text-foreground">Não encontramos sua configuração ainda</h1>
+        <h1 className="text-xl font-semibold text-foreground">Não encontramos sua configuração ainda</h1>
         <p className="max-w-md text-muted">
           Isso pode acontecer se o login foi interrompido no meio. Tenta entrar de novo?
         </p>
