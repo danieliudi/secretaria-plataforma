@@ -474,7 +474,18 @@ Deno.serve(async (req: Request) => {
   // a chave publicável LEGADA, que foi desativada no projeto — ou seja, já
   // estavam falhando em silêncio. O SQL que reconfigura os agendamentos com a
   // chave correta acompanha esta mudança.
-  if (!isInternalCall(req)) return respostaNaoAutorizado();
+  if (!isInternalCall(req)) {
+    // DEBUG TEMPORÁRIO (remover depois de confirmar a chave no Vault) —
+    // só o comprimento e as pontas do valor ESPERADO, nunca o valor inteiro.
+    try {
+      const esperado = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      await getSupabaseClient().from("async_debug").insert({
+        step: "auth_debug_temp",
+        detail: `esperado_len=${esperado.length} esperado_inicio=${esperado.slice(0, 14)} esperado_fim=${esperado.slice(-6)}`,
+      });
+    } catch { /* observabilidade não pode derrubar o request */ }
+    return respostaNaoAutorizado();
+  }
 
   let body: { task?: unknown } = {};
   try {
