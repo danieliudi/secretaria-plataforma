@@ -15,21 +15,22 @@ export interface TenantPersona {
   persona?: Record<string, unknown>;
 }
 
+/**
+ * Persona de último recurso — usada só quando não há tenant resolvido.
+ *
+ * NÃO coloque dados reais de ninguém aqui. Até 10/08/2026 esta constante trazia
+ * o nome completo, o cargo, as frentes de negócio e a lista de familiares
+ * (incluindo um filho por nascer) do dono da plataforma — e ela entra no system
+ * prompt em QUALQUER chamada sem tenant identificado, inclusive num caminho de
+ * produção (reflex/index.ts, entrega síncrona). Dados de pessoa real vivem na
+ * tabela `tenants` (colunas nome/cargo/frentes + `persona` jsonb), que é por
+ * tenant e fica no banco, não no código.
+ */
 export const DEFAULT_PERSONA: TenantPersona = {
-  nome: "Daniel Iudi Yano",
-  cargo: "Desenvolvimento de Novos Negócios e Marketing (informalmente Head de Estratégia e Marketing B2B)",
-  frentes: ["Resibag", "Sanwey", "Athleisure", "Bootcamp", "Pessoal", "Side AI"],
-  persona: {
-    familia: [
-      "Pai: Seizo Yano",
-      "Mãe: Carolina Yuka Nakaie Yano",
-      "Tio: Noritaka Yano",
-      "Primo: Takahiro Yano",
-      "Esposa: Erika Miwa Tagashira Yano",
-      "Cachorro: Mochi Tagashira Yano",
-      "Filho (nasce em julho/2026): Thomas Ryuta Tagashira Yano",
-    ],
-  },
+  nome: "",
+  cargo: null,
+  frentes: [],
+  persona: {},
 };
 
 export function firstName(nomeCompleto: string): string {
@@ -109,8 +110,11 @@ export function nowInSaoPaulo(date: Date = new Date()): string {
 }
 
 export function buildFastSystemPrompt(datetime: string, persona: TenantPersona = DEFAULT_PERSONA): string {
-  const nome = persona.nome?.trim() || DEFAULT_PERSONA.nome;
-  const primeiro = firstName(nome);
+  // Sem tenant resolvido não existe nome real pra usar — e inventar um default
+  // com dados de pessoa real foi exatamente o problema corrigido em 10/08/2026.
+  const temNome = Boolean(persona.nome?.trim());
+  const nome = temNome ? persona.nome!.trim() : "a pessoa que você atende";
+  const primeiro = temNome ? firstName(nome) : "CHEFE";
   const cargoLine = persona.cargo ? `- Cargo: ${persona.cargo}\n` : "";
   const frentes = persona.frentes && persona.frentes.length > 0 ? persona.frentes : undefined;
   const frentesLine = frentes

@@ -24,6 +24,13 @@ export default async function OnboardingPage({
     .maybeSingle();
 
   if (error || !tenant) {
+    // Registra o motivo REAL. Sem isto, uma chave de service role inválida, uma
+    // coluna faltando e um tenant inexistente produzem a mesma tela genérica —
+    // foi o que fez o diagnóstico de 10/08/2026 demorar horas.
+    console.error(
+      `[onboarding] tenant não carregado (auth_user_id=${user.id}):`,
+      error ? `${error.code ?? "sem código"} — ${error.message}` : "nenhuma linha encontrada",
+    );
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
         <h1 className="text-xl font-semibold text-foreground">Não encontramos sua configuração ainda</h1>

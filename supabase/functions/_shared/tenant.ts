@@ -7,6 +7,7 @@ export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks";
 export interface Tenant {
   id: string;
   slug: string;
+  is_platform_owner: boolean;
   nome: string;
   cargo: string | null;
   frentes: string[];
@@ -30,7 +31,7 @@ export interface Tenant {
 }
 
 const TENANT_COLUMNS = `
-  id, slug, nome, cargo, frentes, persona,
+  id, slug, is_platform_owner, nome, cargo, frentes, persona,
   task_provider, task_provider_list_map, task_provider_token_secret_id,
   trello_api_key_secret_id,
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
@@ -40,11 +41,16 @@ const TENANT_COLUMNS = `
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at
 `;
 
+// ATENÇÃO: comparação EXATA (`eq`), nunca `ilike`. Com `ilike`, o `%` do
+// chamador vira curinga e casa com o PRIMEIRO tenant ativo da tabela — dava pra
+// assumir a identidade de outro usuário sem nem saber o slug dele, e enumerar a
+// base inteira caractere a caractere. Slugs são gerados em minúsculas
+// (lib/tenant-provisioning.ts), então normalizar a entrada basta.
 export async function getTenantBySlug(slug: string): Promise<Tenant | null> {
   const { data, error } = await getSupabaseClient()
     .from("tenants")
     .select(TENANT_COLUMNS)
-    .ilike("slug", slug)
+    .eq("slug", slug.trim().toLowerCase())
     .eq("active", true)
     .limit(1)
     .maybeSingle();
@@ -56,7 +62,7 @@ export async function getTenantByWhatsAppInstance(instance: string): Promise<Ten
   const { data, error } = await getSupabaseClient()
     .from("tenants")
     .select(TENANT_COLUMNS)
-    .ilike("whatsapp_evolution_instance", instance)
+    .eq("whatsapp_evolution_instance", instance.trim())
     .eq("active", true)
     .limit(1)
     .maybeSingle();
@@ -106,10 +112,21 @@ const LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const LINK_CODE_LENGTH = 6;
 const LINK_CODE_TTL_MIN = 30;
 
+// Gerador CRIPTOGRÁFICO (não Math.random): este código é o ÚNICO fator que
+// autoriza um telefone a assumir uma conta. Com Math.random o estado do PRNG é
+// reconstruível a partir de poucas saídas — bastava gerar vários códigos
+// próprios pra prever os dos outros. O módulo evita o viés de `% length`
+// descartando os valores da cauda incompleta do byte.
 function generateWhatsAppLinkCode(): string {
+  const limite = 256 - (256 % LINK_CODE_ALPHABET.length);
   let code = "";
-  for (let i = 0; i < LINK_CODE_LENGTH; i++) {
-    code += LINK_CODE_ALPHABET[Math.floor(Math.random() * LINK_CODE_ALPHABET.length)];
+  while (code.length < LINK_CODE_LENGTH) {
+    const bytes = crypto.getRandomValues(new Uint8Array(LINK_CODE_LENGTH));
+    for (const b of bytes) {
+      if (b >= limite) continue;
+      code += LINK_CODE_ALPHABET[b % LINK_CODE_ALPHABET.length];
+      if (code.length === LINK_CODE_LENGTH) break;
+    }
   }
   return code;
 }
@@ -197,11 +214,45 @@ const PROVIDER_TOKEN_ENV_KEY: Record<TaskProviderKind, string> = {
 };
 
 /**
+ * Chaves que TODO tenant pode herdar do ambiente global, porque não são de
+ * ninguém — são infraestrutura da plataforma (contas de API pagas pela
+ * plataforma, endereços de serviço, o app OAuth compartilhado).
+ *
+ * Tudo que NÃO está aqui é credencial ou dado PESSOAL de alguém. Para essas,
+ * ausência tem que ser erro, nunca herança: o `?? Deno.env.get(key)` que
+ * existia antes fazia um usuário novo sem Google conectado operar na agenda e
+ * no Gmail do dono da plataforma, e dava a todo mundo acesso de leitura ao CRM
+ * da empresa. Só o tenant marcado `is_platform_owner` continua herdando —
+ * afinal os secrets globais são literalmente as contas dele.
+ */
+const SHARED_INFRA_KEYS = new Set([
+  // Contas de API da plataforma
+  "ANTHROPIC_API_KEY",
+  "GROQ_API_KEY",
+  // Infra do próprio Supabase
+  "SUPABASE_URL",
+  "SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  // Endereço do servidor Evolution (a credencial e a instância NÃO entram aqui)
+  "EVOLUTION_API_URL",
+  // Instância compartilhada da plataforma (número único) — ver reflex/index.ts
+  "PLATFORM_EVOLUTION_INSTANCE",
+  "PLATFORM_EVOLUTION_API_KEY",
+  // App OAuth do Google: é o mesmo pra todos por design (ver README) — o que é
+  // pessoal é o refresh token, que continua fora desta lista.
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  // Key de APLICAÇÃO do Trello (o token de acesso é que é pessoal).
+  "TRELLO_API_KEY",
+]);
+
+/**
  * Resolve os segredos do Vault do tenant e devolve um `env` SÍNCRONO,
  * compatível com toda função `deps.env` existente no código — resolve tudo
  * ANTES (não dá pra fazer RPC async dentro de um `(key) => string` síncrono).
- * Chaves não mapeadas pro tenant caem no `Deno.env.get` global (infra
- * compartilhada — Anthropic/Groq/Supabase — ou tenant sem aquele campo setado).
+ *
+ * Precedência: segredo do próprio tenant → (só pra infra compartilhada, ou se
+ * o tenant for o dono da plataforma) ambiente global → undefined.
  */
 export async function buildTenantEnv(
   tenant: Tenant,
@@ -237,5 +288,13 @@ export async function buildTenantEnv(
   if (tenant.owner_whatsapp_jid) overrides.set("OWNER_WHATSAPP", tenant.owner_whatsapp_jid);
   if (telegramBotToken) overrides.set("TELEGRAM_BOT_TOKEN", telegramBotToken);
 
-  return (key: string): string | undefined => overrides.get(key) ?? Deno.env.get(key);
+  return (key: string): string | undefined => {
+    const doTenant = overrides.get(key);
+    if (doTenant !== undefined) return doTenant;
+    if (SHARED_INFRA_KEYS.has(key) || tenant.is_platform_owner) return Deno.env.get(key);
+    // Credencial pessoal que este tenant não configurou: devolve undefined pra
+    // quem chama falhar de forma visível, em vez de silenciosamente usar a do
+    // dono da plataforma.
+    return undefined;
+  };
 }

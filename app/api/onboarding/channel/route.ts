@@ -14,10 +14,21 @@ const WHATSAPP_LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const WHATSAPP_LINK_CODE_LENGTH = 6;
 const WHATSAPP_LINK_CODE_TTL_MIN = 30;
 
+// Gerador CRIPTOGRÁFICO (não Math.random): este código é o ÚNICO fator que
+// autoriza um telefone a assumir uma conta, e não há limite de tentativas.
+// Mesma implementação de generateWhatsAppLinkCode em
+// supabase/functions/_shared/tenant.ts — o módulo descarta a cauda incompleta
+// do byte pra não enviesar as primeiras letras do alfabeto.
 function generateWhatsAppLinkCode(): string {
+  const limite = 256 - (256 % WHATSAPP_LINK_CODE_ALPHABET.length);
   let code = "";
-  for (let i = 0; i < WHATSAPP_LINK_CODE_LENGTH; i++) {
-    code += WHATSAPP_LINK_CODE_ALPHABET[Math.floor(Math.random() * WHATSAPP_LINK_CODE_ALPHABET.length)];
+  while (code.length < WHATSAPP_LINK_CODE_LENGTH) {
+    const bytes = crypto.getRandomValues(new Uint8Array(WHATSAPP_LINK_CODE_LENGTH));
+    for (const b of bytes) {
+      if (b >= limite) continue;
+      code += WHATSAPP_LINK_CODE_ALPHABET[b % WHATSAPP_LINK_CODE_ALPHABET.length];
+      if (code.length === WHATSAPP_LINK_CODE_LENGTH) break;
+    }
   }
   return code;
 }

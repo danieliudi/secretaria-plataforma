@@ -188,8 +188,13 @@ function platformSendEnv(tenantEnv: (key: string) => string | undefined): (key: 
   const platformInstance = platformEvolutionInstance();
   const platformApiKey = Deno.env.get("PLATFORM_EVOLUTION_API_KEY");
   return (key: string): string | undefined => {
-    if (key === "EVOLUTION_INSTANCE") return platformInstance ?? tenantEnv(key);
-    if (key === "EVOLUTION_API_KEY") return platformApiKey ?? tenantEnv(key);
+    // A instância compartilhada é da PLATAFORMA, então o fallback aqui é o env
+    // global — não `tenantEnv`. Desde que `buildTenantEnv` parou de deixar
+    // qualquer tenant herdar EVOLUTION_* (credencial pessoal do dono), passar
+    // por tenantEnv devolveria undefined pra todo usuário novo e quebraria o
+    // envio pelo número único.
+    if (key === "EVOLUTION_INSTANCE") return platformInstance ?? Deno.env.get("EVOLUTION_INSTANCE");
+    if (key === "EVOLUTION_API_KEY") return platformApiKey ?? Deno.env.get("EVOLUTION_API_KEY");
     return tenantEnv(key);
   };
 }
@@ -322,7 +327,10 @@ Deno.serve(async (req: Request) => {
 
   try {
     let decision = body.decision ?? await classify(text);
-    console.log("[debug] input:", JSON.stringify(text), "decision:", JSON.stringify(decision));
+    // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
+    // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
+    // A classificação sozinha já basta pra diagnóstico.
+    console.log(`[reflex] classificado tier=${decision.tier} frente=${decision.frente} domain=${decision.domain}`);
 
     if (decision.tier === "deep") {
       // Tier 'deep' ainda não implementado nesta fase. Sem esse fallback, o
@@ -345,28 +353,16 @@ Deno.serve(async (req: Request) => {
       // imediato e processa/entrega a resposta real em background — evita
       // estourar o timeout do webhook em turnos pesados de tool use.
       if (from && hasEvolutionConfig()) {
-        // [debug temporário] observabilidade do background via tabela async_debug.
+        // Observabilidade do background. NÃO grave aqui: impressão digital de
+        // secret (o bloco removido em 10/08/2026 salvava comprimento + 7
+        // primeiros e 3 últimos caracteres do EVOLUTION_API_KEY, o que reduz
+        // muito o espaço de busca da chave) nem telefone do remetente — esta
+        // tabela é retida indefinidamente e não tem dono por linha.
         const dbg = getSupabaseClient();
-        const hasWaitUntil =
-          typeof (globalThis as { EdgeRuntime?: { waitUntil?: unknown } })
-            .EdgeRuntime?.waitUntil === "function";
-        // Impressão digital do secret da Evolution (sem expor a chave inteira)
-        // pra diagnosticar o 401 sem chute.
-        const rawKey = Deno.env.get("EVOLUTION_API_KEY") ?? "";
-        const rawUrl = Deno.env.get("EVOLUTION_API_URL") ?? "";
-        const rawInst = Deno.env.get("EVOLUTION_INSTANCE") ??
-          Deno.env.get("EVOLUTION_INSTANCE_NAME") ?? "";
-        const keyFp =
-          `len=${rawKey.length} pfx=${JSON.stringify(rawKey.slice(0, 7))} tail=${JSON.stringify(rawKey.slice(-3))} b64=${rawKey.startsWith("base64:")}`;
-        await dbg.from("async_debug").insert({
-          step: "ack",
-          detail:
-            `from=${from} hasWaitUntil=${hasWaitUntil} | url=${JSON.stringify(rawUrl)} inst=${JSON.stringify(rawInst)} key[${keyFp}]`,
-        });
 
         const deliver = (async () => {
           try {
-            await dbg.from("async_debug").insert({ step: "bg_start", detail: from });
+            await dbg.from("async_debug").insert({ step: "bg_start", detail: "" });
             // Resolve o tenant UMA vez: /fast usa pras tools (calendar/tarefas/
             // GA4), o envio abaixo usa pra credenciais do WhatsApp — mesma
             // fonte de verdade, sem consultar o DB duas vezes.

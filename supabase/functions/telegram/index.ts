@@ -103,7 +103,9 @@ Deno.serve(async (req: Request) => {
   const tenantSlug = extractTenantSlug(req.url);
   await dbg.from("async_debug").insert({
     step: "tg_ack",
-    detail: `chat=${chatId} kind=${kind} tenant_slug=${tenantSlug ?? "(default)"}`,
+    // Sem `chat_id`: identifica uma pessoa real e esta tabela não tem dono por
+    // linha nem expurgo. O slug já basta pra diagnosticar roteamento.
+    detail: `kind=${kind} tenant_slug=${tenantSlug ?? "(default)"}`,
   });
 
   if (kind === "other") return resp({ ok: true, ignored: "unsupported" }, 200);
