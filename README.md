@@ -68,10 +68,8 @@ pra quem pede.
      a mesma rota gera um código de vínculo de 6 letras (30min de validade,
      mesmo alfabeto/TTL de `createWhatsAppLinkCode` no backend) e mostra na
      tela de recibo — a pessoa manda esse código numa mensagem pro número
-     compartilhado da plataforma pra vincular o próprio WhatsApp, sem token
-     nem configuração manual nenhuma. **Importante:** esse fluxo depende do
-     backend estar de fato processando mensagens da instância compartilhada
-     (ver "Pendências" abaixo — hoje ainda não está).
+     compartilhado da plataforma (instância `secretaria`) pra vincular o
+     próprio WhatsApp, sem token nem configuração manual nenhuma.
 
    Termina numa tela de recibo com um link "Editar configuração" que volta
    pro passo 1 — como cada passo faz upsert (não só insert), reabrir
@@ -82,9 +80,7 @@ pra quem pede.
    uma rota server-side que verifica a sessão antes).
 
 Depois disso o tenant já está pronto pro **backend** (`supabase/functions/`,
-neste mesmo repo) usar. Telegram já funciona ponta a ponta; WhatsApp gera o
-código de vínculo mas a ativação de fato ainda depende de dois passos fora
-deste repo — ver "Pendências conhecidas" abaixo.
+neste mesmo repo) usar — Telegram e WhatsApp funcionam ponta a ponta.
 
 ## Setup local
 
@@ -169,36 +165,25 @@ deploy automático — dá pra continuar deployando manualmente com
 
 ## Pendências conhecidas (não bloqueiam o piloto, mas documentar)
 
-* **WhatsApp: wizard pronto, backend ainda não processa o número
-  compartilhado** — `/onboarding` já gera o código de vínculo de 6 letras
-  (`app/api/onboarding/channel`) e grava em `whatsapp_link_code`/
-  `whatsapp_link_code_expires_at`; o backend (`supabase/functions/reflex/
-  index.ts`, `handleSharedNumberMessage`) já sabe consumir esse código e
-  autorizar o número que mandou a mensagem. Mas isso só roda de fato quando
-  **dois pré-requisitos, fora deste repo, estiverem prontos**:
-  1. O secret `PLATFORM_EVOLUTION_INSTANCE` (+ opcionalmente
-     `PLATFORM_EVOLUTION_API_KEY`) precisa estar setado nas edge functions —
-     hoje `platformEvolutionInstance()` só lê essa var (sem fallback pro
-     `EVOLUTION_INSTANCE` global) de propósito: é um killswitch temporário
-     (comentário "KILLSWITCH TEMPORÁRIO (05/08)" em `reflex/index.ts`) porque
-     um backfill anterior gravou o número ERRADO em
-     `tenants.whatsapp_authorized_number` do tenant `daniel` (o número que
-     RECEBE mensagens, não o pessoal que ele usa pra mandar) — reativar o
-     fallback sem corrigir isso de novo bloquearia o próprio Daniel do
-     próprio bot. **Esse valor específico já foi corrigido nesta sessão**
-     (`whatsapp_authorized_number` do tenant `daniel` = `+5511947983006`),
-     mas religar o fallback continua sendo uma decisão do Daniel, não algo
-     pra reativar sem ele confirmar.
-  2. O workflow do n8n que recebe as mensagens do WhatsApp precisa passar a
-     mandar `instance` no corpo da chamada pro `reflex` (hoje só manda
-     `{text, from}`) — sem isso, `handleSharedNumberMessage` nunca executa,
-     é código morto esperando essa mudança.
+* **WhatsApp por número compartilhado — ativado.** `/onboarding` gera o
+  código de vínculo de 6 letras (`app/api/onboarding/channel`) e o backend
+  (`supabase/functions/reflex/index.ts`, `handleSharedNumberMessage`) consome
+  esse código e autoriza o número que mandou a mensagem. Os dois
+  pré-requisitos que bloqueavam isso já foram resolvidos:
+  1. O workflow do n8n (`Secretaria Agentic — WhatsApp`) já manda `instance`
+     no corpo da chamada pro `reflex`.
+  2. O secret `PLATFORM_EVOLUTION_INSTANCE=secretaria` foi setado nas edge
+     functions (Supabase Dashboard → Edge Functions → Secrets) — mesma
+     instância (`secretaria`) que o n8n já usa pra falar com o Evolution API,
+     desligando o killswitch temporário que existia em `reflex/index.ts`
+     (comentário "KILLSWITCH TEMPORÁRIO (05/08)").
 
-  Até esses dois pontos serem resolvidos, alguém que conclua o passo 3 do
-  wizard escolhendo WhatsApp recebe um código real, mas mandar esse código
-  pro número da plataforma não faz nada ainda (a mensagem cai no fluxo
-  antigo, roteado por instância, não pelo remetente). Telegram não tem esse
-  problema — já funciona ponta a ponta (ver "Como funciona" acima).
+  Como o valor de um secret não é algo que eu (Claude) consigo ler de volta
+  pra confirmar, vale um teste rápido ponta a ponta antes de contar com isso
+  em produção: completar o passo 3 do wizard escolhendo WhatsApp com um
+  número de teste e mandar o código gerado pro número da plataforma — a
+  resposta esperada é a mensagem de sucesso de `LINK_SUCCESS_MESSAGE` em
+  `reflex/index.ts` ("✅ Pronto, esse WhatsApp já está vinculado...").
 * Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
   própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
   Google Tasks sempre têm UI guiada com busca automática).
