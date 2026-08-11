@@ -123,6 +123,17 @@ const LINK_ERROR_MESSAGES: Record<string, string> = {
   auth_failed: "Não conseguimos confirmar essa conexão — tenta de novo?",
 };
 
+// Lido em tempo de BUILD (Next.js substitui a expressão literal no bundle), não
+// em runtime: mudar essa variável no Netlify exige um novo deploy pra aparecer.
+// Por isso a referência precisa ser `process.env.NEXT_PUBLIC_...` escrita por
+// extenso — desestruturar ou indexar dinamicamente quebra a substituição.
+const WHATSAPP_NUMERO = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "";
+
+// wa.me só aceita dígitos. Se a variável não estiver setada, não inventa link.
+const WHATSAPP_LINK = WHATSAPP_NUMERO
+  ? `https://wa.me/${WHATSAPP_NUMERO.replace(/\D/g, "")}`
+  : null;
+
 const TELEGRAM_BOT_STEPS = [
   "Abre o Telegram e procura por \"@BotFather\" (o bot oficial que cria outros bots).",
   "Manda o comando /newbot e segue as perguntas (nome e um @usuario terminado em \"bot\").",
@@ -147,6 +158,8 @@ export default function OnboardingWizard(props: {
   initialNome: string;
   initialCargo: string;
   initialFrentes: string;
+  aprovado: boolean;
+  recusado: boolean;
   initialUsaVocativo: boolean;
   initialTratamento: string;
   initialProvider: Provider;
@@ -391,6 +404,8 @@ export default function OnboardingWizard(props: {
             {error}
           </p>
         )}
+
+        {!props.aprovado && <AvisoAprovacao recusado={props.recusado} />}
 
         {step === 1 && (
           <>
@@ -903,8 +918,23 @@ export default function OnboardingWizard(props: {
             )}
             {wantsWhatsapp && (
               whatsappConnected ? (
+                <div className="flex flex-col gap-1 rounded-lg border border-cyan/30 bg-cyan/5 px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-cyan">
+                    O número dela
+                  </span>
+                  <NumeroDaSecretaria />
+                  <span className="text-[12.5px] leading-relaxed text-muted">
+                    Seu WhatsApp já está vinculado — salva esse contato e manda
+                    uma mensagem pra ela agora.
+                  </span>
+                </div>
+              ) : !props.aprovado ? (
+                // Sem aprovação o código não vincula (consumeWhatsAppLinkCode
+                // recusa), então mostrar o código só faria a pessoa mandar
+                // mensagem e ficar no vácuo.
                 <p className="text-[12.5px] leading-relaxed text-muted">
-                  Seu WhatsApp já está vinculado — pode mandar uma mensagem pra sua secretária agora.
+                  O passo de conectar o WhatsApp abre assim que seu acesso for
+                  liberado — a gente te avisa por e-mail.
                 </p>
               ) : whatsappLinkCode ? (
                 <div className="rounded-lg border border-cyan/30 bg-cyan/5 px-4 py-3">
@@ -914,12 +944,12 @@ export default function OnboardingWizard(props: {
                   <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-foreground">
                     {whatsappLinkCode}
                   </p>
+                  <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-cyan">
+                    Manda pra este número
+                  </p>
+                  <NumeroDaSecretaria />
                   <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-                    Manda esse código numa mensagem pro WhatsApp{" "}
-                    {process.env.NEXT_PUBLIC_WHATSAPP_NUMBER
-                      ? `oficial (${process.env.NEXT_PUBLIC_WHATSAPP_NUMBER})`
-                      : "oficial da plataforma"}{" "}
-                    pra vincular o seu número — vale por 30 minutos
+                    O código vale por 30 minutos
                     {whatsappLinkCodeExpiresAt && (
                       <> (até {new Date(whatsappLinkCodeExpiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})</>
                     )}
@@ -946,6 +976,63 @@ export default function OnboardingWizard(props: {
         )}
       </div>
     </main>
+  );
+}
+
+// O portão de aprovação existe porque, enquanto não há cobrança, qualquer um
+// que descobrisse o link se cadastrava e passava a consumir API paga no número
+// compartilhado. O bloqueio real mora no backend (_shared/tenant.ts e
+// telegram/index.ts) — este aviso só explica pra pessoa o que está havendo, em
+// vez de deixá-la mandando mensagem pra uma secretária que nunca responde.
+// Número compartilhado da plataforma. Se a env var não estiver setada no build,
+// não mostra número nenhum em vez de mostrar um placeholder — texto genérico
+// confunde menos do que um número errado.
+function NumeroDaSecretaria() {
+  if (!WHATSAPP_NUMERO) {
+    return (
+      <span className="text-[12.5px] leading-relaxed text-muted">
+        O número oficial da plataforma foi enviado no seu e-mail de boas-vindas.
+      </span>
+    );
+  }
+  return (
+    <a
+      href={WHATSAPP_LINK ?? "#"}
+      target="_blank"
+      rel="noreferrer"
+      className="font-mono text-[19px] font-bold tracking-tight text-foreground underline decoration-cyan/40 underline-offset-4"
+    >
+      {WHATSAPP_NUMERO}
+    </a>
+  );
+}
+
+function AvisoAprovacao({ recusado }: { recusado: boolean }) {
+  if (recusado) {
+    return (
+      <section className="flex flex-col gap-1.5 rounded-xl border border-line bg-surface-2 px-5 py-4">
+        <span className="text-[13.5px] font-semibold text-foreground">
+          Seu acesso não foi liberado
+        </span>
+        <span className="text-[12.5px] leading-relaxed text-muted">
+          A secretária está em beta fechado e não conseguimos abrir uma vaga pra
+          você agora. Sua configuração fica salva — se abrir espaço, a gente
+          avisa por e-mail.
+        </span>
+      </section>
+    );
+  }
+  return (
+    <section className="flex flex-col gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4">
+      <span className="text-[13.5px] font-semibold text-amber-900">
+        Seu acesso está em análise
+      </span>
+      <span className="text-[12.5px] leading-relaxed text-amber-900/80">
+        A secretária está em beta fechado, com vagas limitadas. Pode configurar
+        tudo por aqui normalmente — assim que liberarmos seu acesso, o passo de
+        conectar o WhatsApp aparece e ela começa a responder.
+      </span>
+    </section>
   );
 }
 

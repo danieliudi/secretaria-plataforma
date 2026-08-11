@@ -29,6 +29,7 @@ export interface Tenant {
   active: boolean;
   usa_vocativo: boolean;
   tratamento: string | null;
+  aprovado_em: string | null;
   whatsapp_authorized_number: string | null;
   whatsapp_link_code: string | null;
   whatsapp_link_code_expires_at: string | null;
@@ -42,7 +43,7 @@ const TENANT_COLUMNS = `
   ga4_property_map,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
-  owner_whatsapp_jid, active, usa_vocativo, tratamento,
+  owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at
 `;
 
@@ -100,12 +101,18 @@ export function normalizeWhatsAppJidToE164(jid: string): string | null {
   return digits ? `+${digits}` : null;
 }
 
+// `aprovado_em` NÃO é filtro cosmético: sem ele, qualquer pessoa que
+// descobrisse a URL do site criava conta, vinculava o número e passava a
+// consumir API paga no número compartilhado da plataforma. Enquanto não há
+// cobrança, esta é a única barreira — por isso ela mora aqui, no resolvedor,
+// e não só na tela do wizard (que qualquer um pode contornar).
 export async function getTenantByAuthorizedPhone(fromE164: string): Promise<Tenant | null> {
   const { data, error } = await getSupabaseClient()
     .from("tenants")
     .select(TENANT_COLUMNS)
     .eq("whatsapp_authorized_number", fromE164)
     .eq("active", true)
+    .not("aprovado_em", "is", null)
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`tenants lookup (whatsapp_authorized_number) falhou: ${error.message}`);
@@ -165,6 +172,8 @@ export async function consumeWhatsAppLinkCode(text: string, fromE164: string): P
     .select(TENANT_COLUMNS)
     .eq("whatsapp_link_code", code)
     .eq("active", true)
+    // Não aprovado não vincula: barra antes de gastar o código.
+    .not("aprovado_em", "is", null)
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`whatsapp_link_code lookup falhou: ${error.message}`);

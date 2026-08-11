@@ -57,7 +57,15 @@ function extractTenantSlug(reqUrl: string): string | null {
 async function resolveTenant(slug: string | null): Promise<Tenant | null> {
   if (!slug) return null;
   try {
-    return await getTenantBySlug(slug);
+    const tenant = await getTenantBySlug(slug);
+    // Mesmo portão do WhatsApp: sem aprovação manual, não atende. O
+    // getTenantBySlug é usado também pelo cron (dono, sempre aprovado), então
+    // o filtro fica aqui, no caminho de usuário, e não dentro do resolvedor.
+    if (tenant && !tenant.aprovado_em) {
+      console.error(`[telegram] tenant '${slug}' ainda não aprovado — recusando`);
+      return null;
+    }
+    return tenant;
   } catch (err) {
     console.error(`[telegram] resolveTenant('${slug}') falhou: ${String(err)}`);
     return null;
