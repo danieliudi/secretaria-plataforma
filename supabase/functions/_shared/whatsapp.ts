@@ -138,6 +138,39 @@ export async function sendWhatsAppDocument(
   }
 }
 
+/**
+ * Envia uma IMAGEM pelo WhatsApp. Mesmo endpoint do documento, mas
+ * `mediatype: "image"` — o WhatsApp renderiza inline em vez de virar anexo
+ * pra baixar, que é o ponto todo do card.
+ *
+ * `caption` é opcional e sai colada na imagem. Use com parcimônia: imagem
+ * NÃO é buscável na conversa, então o essencial deve ir numa bolha de texto
+ * separada (ver sendWhatsAppMessages), não só na legenda.
+ */
+export async function sendWhatsAppImage(
+  to: string,
+  image: { base64: string; fileName?: string; caption?: string },
+  deps: WhatsAppDeps = defaultWhatsAppDeps(),
+): Promise<void> {
+  const { base, instance, apikey } = evolutionConfig(deps.env);
+  const res = await deps.fetch(`${base}/message/sendMedia/${instance}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "apikey": apikey },
+    body: JSON.stringify({
+      number: to,
+      mediatype: "image",
+      mimetype: "image/png",
+      fileName: image.fileName ?? "card.png",
+      media: image.base64,
+      ...(image.caption ? { caption: image.caption } : {}),
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Evolution sendMedia (image) ${res.status}: ${body.slice(0, 200)}`);
+  }
+}
+
 // Separador que o fast injeta entre bolhas. Triplo-traço numa linha sozinha é
 // raro em texto natural BR e markdown horizontal-rule — improvável colidir.
 export const MESSAGE_BREAK = "\n---\n";

@@ -22,7 +22,7 @@
 
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { getGoogleAccessToken } from "../_shared/google-oauth.ts";
-import { sendWhatsAppText } from "../_shared/whatsapp.ts";
+import { sendWhatsAppImage, sendWhatsAppText } from "../_shared/whatsapp.ts";
 import { sendTelegramMessage } from "../_shared/telegram.ts";
 import { channelFromUserId, telegramChatId } from "../_shared/channel.ts";
 import { getGa4Snapshot, tryLoadGa4Map } from "../_shared/ga4.ts";
@@ -32,6 +32,7 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
+import { detectaMaratona, duracaoTexto, type EventoAgenda } from "../_shared/agenda-analise.ts";
 import {
   consolidateUserProfile,
   defaultConsolidationDeps,
@@ -478,6 +479,104 @@ async function runEveningRecap(env: EnvFn): Promise<{ len: number }> {
   return { len: text.length };
 }
 
+// ─── Agenda apertada (proativo por DETECÇÃO, não por horário) ───────────────
+//
+// Diferente de todo o resto deste arquivo: os outros proativos disparam porque
+// deu a hora ("são 9h, manda o brief"). Este só fala quando ENCONTRA algo —
+// uma sequência de reuniões coladas amanhã. Silêncio é o resultado normal.
+
+/** Eventos com hora marcada (ignora dia-inteiro) num intervalo. */
+async function getEventosEntre(deISO: string, ateISO: string, env: EnvFn): Promise<EventoAgenda[]> {
+  const token = await getGoogleAccessToken({ env, fetch });
+  const url = new URL(CALENDAR_BASE);
+  url.searchParams.set("timeMin", deISO);
+  url.searchParams.set("timeMax", ateISO);
+  url.searchParams.set("singleEvents", "true");
+  url.searchParams.set("orderBy", "startTime");
+
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Calendar list ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = (await res.json()) as {
+    items?: Array<{ summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }>;
+  };
+  return (data.items ?? [])
+    .filter((e) => e.start?.dateTime && e.end?.dateTime)
+    .map((e) => ({
+      titulo: e.summary ?? "(sem título)",
+      inicio: new Date(e.start!.dateTime!),
+      fim: new Date(e.end!.dateTime!),
+    }));
+}
+
+async function runAgendaCheck(env: EnvFn): Promise<{ avisou: boolean; motivo?: string }> {
+  // Janela: o dia de AMANHÃ inteiro, em SP. Roda de noite pra dar tempo de
+  // reagir — avisar de manhã que o dia está impossível não ajuda em nada.
+  const agora = new Date();
+  const amanha = new Date(agora.getTime() + 24 * 3600_000);
+  const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric" }).format(amanha));
+  const mo = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, month: "2-digit" }).format(amanha));
+  const d = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, day: "2-digit" }).format(amanha));
+  const inicioDia = new Date(Date.UTC(y, mo - 1, d, 3, 0, 0)); // 00:00 SP = 03:00 UTC
+  const fimDia = new Date(inicioDia.getTime() + 24 * 3600_000);
+
+  const eventos = await getEventosEntre(inicioDia.toISOString(), fimDia.toISOString(), env);
+  const maratona = detectaMaratona(eventos);
+  if (!maratona) return { avisou: false, motivo: "agenda de amanhã sem sequência apertada" };
+
+  const totalMin = (maratona[maratona.length - 1].fim.getTime() - maratona[0].inicio.getTime()) / 60_000;
+  const fimMaratona = maratona[maratona.length - 1].fim;
+  const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+    .format(maratona[0].inicio).replace(".", "");
+
+  // Almoço: a maratona atravessa a faixa 12h–13h30 sem deixar brecha?
+  const horaFimSP = Number(new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, hour: "2-digit", hour12: false }).format(fimMaratona));
+  const comeuAlmoco = horaFimSP < 12;
+
+  // Import preguiçoso: satori/resvg são pesados e só servem aqui. No topo,
+  // uma falha de carregamento delas derrubaria TODAS as tarefas do cron
+  // (brief, lembretes, alertas) — assim o estrago fica contido nesta.
+  const { caixaAcoes, cardShell, el, linhaTimeline, renderCardPngBase64 } = await import(
+    "../_shared/card.ts"
+  );
+
+  const linhas = maratona.map((ev, i) => {
+    const hora = fmtTime(ev.inicio.toISOString());
+    const dur = duracaoTexto((ev.fim.getTime() - ev.inicio.getTime()) / 60_000);
+    const gapAnterior = i === 0
+      ? dur
+      : `${dur} · sem intervalo`;
+    return linhaTimeline(hora, ev.titulo, gapAnterior, i === maratona.length - 1);
+  });
+
+  const acoes = [
+    `${duracaoTexto(totalMin)} sem pausa${comeuAlmoco ? "" : ` e sem almoço até ${fmtTime(fimMaratona.toISOString())}`}.`,
+    `Posso empurrar "${maratona[maratona.length - 1].titulo}" pra depois?`,
+  ];
+
+  const png = await renderCardPngBase64(
+    cardShell(
+      "AMANHÃ",
+      `${maratona.length} compromissos seguidos`,
+      dataCurta,
+      [el("div", { display: "flex", flexDirection: "column" }, ...linhas), caixaAcoes(acoes)],
+      "sinal · detectado na sua agenda",
+    ),
+  );
+
+  const jid = ownerJid(env);
+  await sendWhatsAppImage(jid, { base64: png, fileName: "agenda-amanha.png" }, { fetch, env });
+
+  // A bolha de texto NÃO é decoração: imagem não é buscável no WhatsApp, e é
+  // ela que a pessoa consegue responder citando.
+  const texto = `Amanhã você tem ${maratona.length} compromissos colados, das ` +
+    `${fmtTime(maratona[0].inicio.toISOString())} às ${fmtTime(fimMaratona.toISOString())} — ` +
+    `${duracaoTexto(totalMin)} sem pausa. Quer que eu empurre o último?`;
+  await sendWhatsAppText(jid, texto, { fetch, env });
+  await appendAssistantMessage(jid, texto);
+
+  return { avisou: true };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json("Method Not Allowed", 405);
 
@@ -510,8 +609,9 @@ Deno.serve(async (req: Request) => {
     if (task === "scheduled") return json({ ok: true, ...(await runScheduled(env, tenant.id)) });
     if (task === "marketing") return json({ ok: true, ...(await runMarketing(env)) });
     if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env)) });
+    if (task === "agenda_check") return json({ ok: true, ...(await runAgendaCheck(env)) });
     return json({
-      error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap",
+      error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | agenda_check",
     }, 400);
   } catch (err) {
     console.error(`[cron] task='${task}' erro:`, String(err));
