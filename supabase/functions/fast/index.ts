@@ -743,9 +743,10 @@ export function defaultFastWithToolsDeps(
         messages: params.messages,
         // deno-lint-ignore no-explicit-any
       } as any);
-      // Sem await: medir custo não pode atrasar a resposta de ninguém, e
-      // registraUso já engole os próprios erros.
-      void registraUso(
+      // Aguardado de propósito (ver comentário em _shared/uso.ts): promessa
+      // solta numa edge function morre junto com a resposta, e a última
+      // chamada do turno é justamente a que roda antes de responder.
+      await registraUso(
         params.model,
         origem,
         (response as { usage?: UsageAnthropic }).usage,

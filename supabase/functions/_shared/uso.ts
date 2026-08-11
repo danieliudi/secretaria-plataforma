@@ -32,6 +32,12 @@ export interface UsageAnthropic {
  * Nunca lança: uma falha ao gravar métrica não pode derrubar a resposta que a
  * pessoa está esperando no WhatsApp. Erro vira log e a vida segue — o custo de
  * perder uma linha de medição é infinitamente menor que o de perder a resposta.
+ *
+ * DEVE SER AGUARDADO por quem chama, apesar de parecer trabalho de fundo: numa
+ * edge function, promessa solta é cortada quando a resposta sai, e a última
+ * chamada de modelo do turno é exatamente a que acontece antes de responder —
+ * a medição sumiria em silêncio justo no caso mais comum. São ~15ms contra os
+ * segundos que a chamada de modelo já custou.
  */
 export async function registraUso(
   modelo: string,

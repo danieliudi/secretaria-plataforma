@@ -202,7 +202,7 @@ export function defaultConsolidationDeps(tenantId?: string | null): Consolidatio
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       });
-      void registraUso(CONSOLIDATION_MODEL, "consolidacao", res.usage, tenantId);
+      await registraUso(CONSOLIDATION_MODEL, "consolidacao", res.usage, tenantId);
       const first = res.content[0];
       return first && first.type === "text" ? first.text : "";
     },

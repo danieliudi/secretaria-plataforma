@@ -40,7 +40,7 @@ export async function describeImage(
     ],
   });
 
-  void registraUso(VISION_MODEL, "visao", response.usage, tenantId);
+  await registraUso(VISION_MODEL, "visao", response.usage, tenantId);
 
   const block = response.content.find((c) => c.type === "text") as { type: "text"; text: string } | undefined;
   return (block?.text ?? "").trim();
