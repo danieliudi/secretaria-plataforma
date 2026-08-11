@@ -10,9 +10,27 @@ import {
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
 import type { Decision } from "../_shared/types.ts";
-import { buildTenantEnv, DEFAULT_TENANT_SLUG, getTenantBySlug, type Tenant } from "../_shared/tenant.ts";
+import {
+  authorizeTelegramChatId,
+  buildTenantEnv,
+  getTelegramWebhookSecret,
+  getTenantBySlug,
+  type Tenant,
+} from "../_shared/tenant.ts";
 
 const FAST_BG_TIMEOUT_MS = 90_000;
+
+// Comparação em tempo constante — mesmo padrão de comparaSeguro em
+// _shared/internal-auth.ts, duplicado aqui pra não acoplar os dois módulos
+// por uma função de 8 linhas.
+function compareTimingSafe(a: string, b: string): boolean {
+  const ea = new TextEncoder().encode(a);
+  const eb = new TextEncoder().encode(b);
+  if (ea.length !== eb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ea.length; i++) diff |= ea[i] ^ eb[i];
+  return diff === 0;
+}
 
 const DEFAULT_DECISION: Decision = {
   tier: "fast",
@@ -31,16 +49,17 @@ function extractTenantSlug(reqUrl: string): string | null {
   return last && last !== "telegram" ? last : null;
 }
 
+// SEM fallback pro tenant padrão: um POST sem slug (ou com slug que não bate
+// com tenant nenhum) na URL não pode virar "trata como se fosse o dono da
+// plataforma" — era exatamente esse fallback que deixava qualquer POST pra
+// `/telegram` (sem slug) processar como se fosse mensagem do Daniel, com as
+// credenciais dele. Sem tenant resolvido, a chamada é recusada mais abaixo.
 async function resolveTenant(slug: string | null): Promise<Tenant | null> {
+  if (!slug) return null;
   try {
-    if (slug) {
-      const tenant = await getTenantBySlug(slug);
-      if (tenant) return tenant;
-      console.error(`[telegram] tenant slug '${slug}' nao encontrado/inativo - usando fallback`);
-    }
-    return await getTenantBySlug(DEFAULT_TENANT_SLUG);
+    return await getTenantBySlug(slug);
   } catch (err) {
-    console.error(`[telegram] resolveTenant falhou, seguindo com env global: ${String(err)}`);
+    console.error(`[telegram] resolveTenant('${slug}') falhou: ${String(err)}`);
     return null;
   }
 }
@@ -101,21 +120,45 @@ Deno.serve(async (req: Request) => {
 
   const dbg = getSupabaseClient();
   const tenantSlug = extractTenantSlug(req.url);
+
+  const tenant = await resolveTenant(tenantSlug);
+  if (!tenant) {
+    return resp({ ok: true, ignored: "tenant_nao_resolvido" }, 200);
+  }
+
+  // Confirma que a chamada veio do Telegram de verdade (secret_token
+  // configurado no setWebhook — ver app/api/onboarding/channel/route.ts),
+  // não de qualquer um que tenha descoberto/adivinhado a URL do webhook.
+  const webhookSecret = await getTelegramWebhookSecret(tenant);
+  if (!webhookSecret) {
+    console.error(`[telegram] tenant '${tenant.slug}' sem secret_token configurado — recusando`);
+    return resp({ ok: true, ignored: "sem_secret_token" }, 200);
+  }
+  const headerSecret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
+  if (!compareTimingSafe(headerSecret, webhookSecret)) {
+    return resp({ ok: true, ignored: "secret_token_invalido" }, 200);
+  }
+
+  // Chat autorizado: trust-on-first-use — a primeira mensagem que passar na
+  // checagem acima vincula o chat_id; qualquer outro depois disso é recusado.
+  const chatAutorizado = await authorizeTelegramChatId(tenant, chatId);
+  if (!chatAutorizado) {
+    console.error(`[telegram] tenant '${tenant.slug}': chat_id ${chatId} não autorizado`);
+    return resp({ ok: true, ignored: "chat_nao_autorizado" }, 200);
+  }
+
   await dbg.from("async_debug").insert({
     step: "tg_ack",
     // Sem `chat_id`: identifica uma pessoa real e esta tabela não tem dono por
     // linha nem expurgo. O slug já basta pra diagnosticar roteamento.
-    detail: `kind=${kind} tenant_slug=${tenantSlug ?? "(default)"}`,
+    detail: `kind=${kind} tenant_slug=${tenant.slug}`,
   });
 
   if (kind === "other") return resp({ ok: true, ignored: "unsupported" }, 200);
 
   const deliver = (async () => {
     try {
-      const tenant = await resolveTenant(tenantSlug);
-      const telegramDeps: TelegramDeps | undefined = tenant
-        ? { fetch, env: await buildTenantEnv(tenant) }
-        : undefined;
+      const telegramDeps: TelegramDeps = { fetch, env: await buildTenantEnv(tenant) };
 
       await sendTelegramChatAction(chatId, telegramDeps);
 
@@ -137,7 +180,7 @@ Deno.serve(async (req: Request) => {
         decision: DEFAULT_DECISION,
         from: userId,
         timeoutMs: FAST_BG_TIMEOUT_MS,
-        tenantSlug: tenant?.slug,
+        tenantSlug: tenant.slug,
       });
       const bubbles = splitMessages(result.message);
       await dbg.from("async_debug").insert({

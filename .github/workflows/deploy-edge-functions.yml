@@ -19,6 +19,10 @@ jobs:
           version: latest
 
       - name: Deploy all functions
-        run: supabase functions deploy --project-ref edaogdfeuxrylwqpopqe
+        # --prune: remove no Supabase qualquer função que não exista mais em
+        # supabase/functions/** — sem isso, functions deletadas do repo (ou
+        # deployadas manualmente fora do CI, como o complexity-router órfão)
+        # continuam ativas pra sempre. O repo vira a fonte da verdade.
+        run: supabase functions deploy --project-ref edaogdfeuxrylwqpopqe --prune
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

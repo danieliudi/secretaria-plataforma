@@ -23,6 +23,8 @@ export interface Tenant {
   whatsapp_evolution_instance: string | null;
   whatsapp_evolution_api_key_secret_id: string | null;
   telegram_bot_token_secret_id: string | null;
+  telegram_webhook_secret_id: string | null;
+  telegram_authorized_chat_id: number | null;
   owner_whatsapp_jid: string | null;
   active: boolean;
   whatsapp_authorized_number: string | null;
@@ -37,7 +39,8 @@ const TENANT_COLUMNS = `
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
   ga4_property_map,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
-  telegram_bot_token_secret_id, owner_whatsapp_jid, active,
+  telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
+  owner_whatsapp_jid, active,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at
 `;
 
@@ -193,6 +196,53 @@ async function readSecret(secretId: string | null): Promise<string | undefined> 
   const { data, error } = await getSupabaseClient().rpc("tenant_secret_read", { p_id: secretId });
   if (error) throw new Error(`tenant_secret_read falhou: ${error.message}`);
   return (data as string | null) ?? undefined;
+}
+
+// ─── Telegram: secret_token do webhook + chat autorizado ────────────────────
+//
+// O Telegram manda de volta, em TODA chamada real de webhook, o valor
+// configurado como `secret_token` no setWebhook, no header
+// X-Telegram-Bot-Api-Secret-Token. Sem essa checagem, qualquer um que
+// descubra a URL `/telegram/<slug>` pode forjar um POST direto — o endpoint
+// tem verify_jwt desligado (é um webhook público) e processava a mensagem
+// como se fosse real, com as credenciais daquele tenant.
+
+/** Lê o secret_token do webhook do tenant. undefined = tenant não configurou (Telegram desligado pra ele). */
+export async function getTelegramWebhookSecret(tenant: Tenant): Promise<string | undefined> {
+  return readSecret(tenant.telegram_webhook_secret_id);
+}
+
+/**
+ * Confere (ou vincula, na primeira vez) o chat_id autorizado a falar com o
+ * bot deste tenant — trust-on-first-use, equivalente ao
+ * whatsapp_authorized_number adaptado pro modelo de bot próprio por tenant
+ * do Telegram. A PRIMEIRA mensagem que passar pela validação de
+ * secret_token vira o dono; chat_id diferente depois disso é recusado.
+ * UPDATE condicional (`is(...,null)`) evita corrida entre duas primeiras
+ * mensagens simultâneas roubando o vínculo uma da outra.
+ */
+export async function authorizeTelegramChatId(tenant: Tenant, chatId: number): Promise<boolean> {
+  if (tenant.telegram_authorized_chat_id !== null) {
+    return tenant.telegram_authorized_chat_id === chatId;
+  }
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .update({ telegram_authorized_chat_id: chatId })
+    .eq("id", tenant.id)
+    .is("telegram_authorized_chat_id", null)
+    .select("id")
+    .maybeSingle();
+  if (error) throw new Error(`telegram_authorized_chat_id update falhou: ${error.message}`);
+  if (data) return true;
+
+  // Perdeu a corrida pro vínculo — confere quem ganhou antes de recusar.
+  const { data: row, error: readErr } = await getSupabaseClient()
+    .from("tenants")
+    .select("telegram_authorized_chat_id")
+    .eq("id", tenant.id)
+    .maybeSingle();
+  if (readErr) throw new Error(`telegram_authorized_chat_id leitura falhou: ${readErr.message}`);
+  return (row as { telegram_authorized_chat_id: number | null } | null)?.telegram_authorized_chat_id === chatId;
 }
 
 const PROVIDER_LIST_MAP_ENV_KEY: Record<TaskProviderKind, string> = {
