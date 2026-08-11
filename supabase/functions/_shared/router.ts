@@ -1,4 +1,5 @@
 import { getAnthropicClient } from "./anthropic.ts";
+import { registraUso } from "./uso.ts";
 import type { Decision, Tier } from "./types.ts";
 
 export type RouterResult = { route: "reflex" | "fast" | "deep" | "ask"; decision: Decision; askReason?: "ambiguo" | "low_confidence"; };
@@ -51,6 +52,9 @@ export async function classifyWithHaiku(input: string): Promise<Decision> {
   const client = getAnthropicClient();
   const prompt = CLASSIFIER_PROMPT.replace("{{input}}", input);
   const response = await client.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 256, messages: [{ role: "user", content: prompt }] });
+  // Sem tenant: o classificador roda ANTES de saber de quem é a mensagem.
+  // A linha fica órfã de propósito — o gasto existe e tem que aparecer no total.
+  void registraUso("claude-haiku-4-5-20251001", "classificador", response.usage);
   const raw = (response.content[0] as { type: "text"; text: string }).text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   return JSON.parse(raw) as Decision;
 }

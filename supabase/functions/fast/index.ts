@@ -15,6 +15,7 @@
 // stateless como antes.
 
 import { getAnthropicClient } from "../_shared/anthropic.ts";
+import { origemPorUsuario, registraUso, type OrigemUso, type UsageAnthropic } from "../_shared/uso.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { buildFastSystemPrompt, DEFAULT_PERSONA, nowInSaoPaulo, type TenantPersona } from "../_shared/fast.ts";
 import type { Decision, ReflexResult } from "../_shared/types.ts";
@@ -690,6 +691,9 @@ export function defaultFastWithToolsDeps(
   // tocam tabela com dono (quick_capture) recusam em vez de cair numa pilha
   // global compartilhada entre todos os usuários.
   tenantId: string | null = null,
+  // Só pra medição de custo (uso_modelo) — separa o gasto do WhatsApp do
+  // Telegram e do proativo. Não influencia nada no comportamento.
+  origem: OrigemUso = "whatsapp",
 ): FastWithToolsDeps {
   const getAccessToken = () => getGoogleAccessToken({ env, fetch });
   const quickCaptureDeps = () => {
@@ -739,6 +743,14 @@ export function defaultFastWithToolsDeps(
         messages: params.messages,
         // deno-lint-ignore no-explicit-any
       } as any);
+      // Sem await: medir custo não pode atrasar a resposta de ninguém, e
+      // registraUso já engole os próprios erros.
+      void registraUso(
+        params.model,
+        origem,
+        (response as { usage?: UsageAnthropic }).usage,
+        tenantId,
+      );
       return response as unknown as AnthropicMessage;
     },
     tools: {
@@ -1108,7 +1120,12 @@ Deno.serve(async (req: Request) => {
           usaVocativo: tenant.usa_vocativo,
           tratamento: tenant.tratamento,
         };
-        deps = defaultFastWithToolsDeps(await buildTenantEnv(tenant), persona, tenant.id);
+        deps = defaultFastWithToolsDeps(
+          await buildTenantEnv(tenant),
+          persona,
+          tenant.id,
+          origemPorUsuario(userId),
+        );
       }
     } catch (err) {
       console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${String(err)}`);

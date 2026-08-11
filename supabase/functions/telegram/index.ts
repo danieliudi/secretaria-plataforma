@@ -88,6 +88,7 @@ interface TelegramUpdate {
 async function deriveInput(
   message: NonNullable<TelegramUpdate["message"]>,
   telegramDeps?: TelegramDeps,
+  tenantId?: string | null,
 ): Promise<string | null> {
   if (message.text) return message.text;
 
@@ -100,7 +101,7 @@ async function deriveInput(
   if (message.photo && message.photo.length > 0) {
     const largest = message.photo.reduce((a, b) => (b.file_size ?? b.width * b.height) > (a.file_size ?? a.width * a.height) ? b : a);
     const { bytes, fileName } = await getTelegramFileBytes(largest.file_id, telegramDeps);
-    const description = await describeImage(bytes, imageMediaType(fileName), message.caption);
+    const description = await describeImage(bytes, imageMediaType(fileName), message.caption, tenantId);
     return message.caption
       ? `${message.caption}\n\n(imagem que enviei - ${description})`
       : `(imagem que enviei - ${description})`;
@@ -172,7 +173,7 @@ Deno.serve(async (req: Request) => {
 
       let input: string | null;
       try {
-        input = await deriveInput(message, telegramDeps);
+        input = await deriveInput(message, telegramDeps, tenant.id);
       } catch (err) {
         await dbg.from("async_debug").insert({ step: "tg_media_err", detail: String(err) });
         const msg = String(err).includes("GROQ_API_KEY")

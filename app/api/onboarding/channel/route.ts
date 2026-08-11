@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { upsertTenantSecret } from "@/lib/tenant-provisioning";
+import { dispararTarefaCron } from "@/lib/cron-call";
 
 const VALID_CHANNELS = new Set(["whatsapp", "telegram", "both"]);
 const TELEGRAM_API = "https://api.telegram.org";
@@ -124,7 +125,7 @@ export async function POST(request: Request) {
   const admin = createServiceClient();
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
-    .select("id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number")
+    .select("id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number, aprovado_em, avisado_em")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -209,6 +210,13 @@ export async function POST(request: Request) {
       telegramWebhook = "failed";
       telegramWebhookWarning = webhook.error;
     }
+  }
+
+  // Este é o último passo do wizard — é aqui que "terminou o cadastro"
+  // acontece de verdade, e não no primeiro login (onde só existe o e-mail).
+  // Sem await: o aviso ao dono não pode segurar a tela de quem se cadastrou.
+  if (!tenant.aprovado_em && !tenant.avisado_em) {
+    void dispararTarefaCron("novos_cadastros");
   }
 
   return NextResponse.json({

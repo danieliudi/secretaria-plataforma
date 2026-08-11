@@ -32,7 +32,17 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
-import { detectaMaratona, duracaoTexto, type EventoAgenda } from "../_shared/agenda-analise.ts";
+import {
+  cargaPorDia,
+  detectaConflitos,
+  detectaMaratona,
+  DIA_PESADO_MIN,
+  duracaoTexto,
+  MIN_TAREFAS_ATRASADAS,
+  primeiroBuraco,
+  priorizaAtrasadas,
+  type EventoAgenda,
+} from "../_shared/agenda-analise.ts";
 import {
   consolidateUserProfile,
   defaultConsolidationDeps,
@@ -416,7 +426,7 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
   // Só toca em quem passou do limiar; pra maioria é um SELECT e nada mais.
   try {
     for (const userId of await listUsersParaConsolidar(tenantId)) {
-      const r = await consolidateUserProfile(userId, defaultConsolidationDeps());
+      const r = await consolidateUserProfile(userId, defaultConsolidationDeps(tenantId));
       console.log(`[cron] perfil ${userId}: ${r.status} ${r.antes}→${r.depois}${r.motivo ? ` (${r.motivo})` : ""}`);
     }
   } catch (err) {
@@ -593,6 +603,333 @@ async function runAgendaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boo
   return { avisou: true };
 }
 
+// ─── conflito de agenda ─────────────────────────────────────────────────────
+
+/**
+ * Chave de dedupe do conflito. Derivada dos horários, NÃO dos títulos: se a
+ * pessoa renomear um compromisso, continua sendo o mesmo conflito e não vale
+ * avisar de novo. Título também é dado da agenda dela — fora do banco de
+ * controle, melhor.
+ */
+function chaveConflito(a: EventoAgenda, b: EventoAgenda): string {
+  const [x, y] = [a.inicio.getTime(), b.inicio.getTime()].sort((p, q) => p - q);
+  return `${x}-${y}`;
+}
+
+async function runConflitoCheck(
+  env: EnvFn,
+  tenantId: string,
+  dryRun = false,
+): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+  // Janela: de agora até o fim de amanhã. Conflito de daqui a duas semanas não
+  // é urgente e ainda vai mudar de forma sozinho.
+  const agora = new Date();
+  const fimJanela = new Date(agora.getTime() + 48 * 3600_000);
+
+  const eventos = await getEventosEntre(agora.toISOString(), fimJanela.toISOString(), env);
+  const conflitos = detectaConflitos(eventos);
+  const pior = conflitos[0] ?? (dryRun
+    ? {
+      a: { titulo: "Exemplo A", inicio: new Date(Date.now() + 3600_000), fim: new Date(Date.now() + 7200_000) },
+      b: { titulo: "Exemplo B", inicio: new Date(Date.now() + 3600_000), fim: new Date(Date.now() + 5400_000) },
+      sobreposicaoMin: 30,
+    }
+    : null);
+  if (!pior) return { avisou: false, motivo: "nenhum conflito na agenda" };
+
+  const chave = chaveConflito(pior.a, pior.b);
+  const sb = getSupabaseClient();
+  if (!dryRun) {
+    const { data: jaAvisado } = await sb
+      .from("avisos_enviados")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("tipo", "conflito_agenda")
+      .eq("chave", chave)
+      .limit(1);
+    if (jaAvisado && jaAvisado.length > 0) {
+      return { avisou: false, motivo: "conflito já avisado" };
+    }
+  }
+
+  // Import preguiçoso, mesmo motivo do runAgendaCheck: satori/resvg são
+  // pesadas e uma falha de carregamento delas no topo derrubaria todas as
+  // outras tarefas do cron.
+  const { caixaAcoes, cardShell, el, linhaConflito, renderCardPngBase64 } = await import(
+    "../_shared/card.ts"
+  );
+
+  const inicioColisao = new Date(Math.max(pior.a.inicio.getTime(), pior.b.inicio.getTime()));
+  const fimTardio = new Date(Math.max(pior.a.fim.getTime(), pior.b.fim.getTime()));
+  // Teto pra sugestão de remarcação: 8h depois da colisão. Uma janela livre
+  // às 23h é tecnicamente um buraco na agenda e uma péssima sugestão.
+  const fimDoDia = new Date(inicioColisao.getTime() + 8 * 3600_000);
+  const menor = pior.a.fim.getTime() - pior.a.inicio.getTime()
+      <= pior.b.fim.getTime() - pior.b.inicio.getTime()
+    ? pior.a
+    : pior.b;
+  const duracaoMenorMin = (menor.fim.getTime() - menor.inicio.getTime()) / 60_000;
+  const buraco = primeiroBuraco(eventos, fimTardio, duracaoMenorMin, fimDoDia);
+
+  const diaDaColisao = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" })
+    .format(inicioColisao)
+    .toUpperCase();
+  const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+    .format(inicioColisao).replace(".", "");
+
+  const linhas = [pior.a, pior.b].map((ev) =>
+    linhaConflito(
+      `${fmtTime(ev.inicio.toISOString())}–${fmtTime(ev.fim.toISOString())}`,
+      ev.titulo,
+      duracaoTexto((ev.fim.getTime() - ev.inicio.getTime()) / 60_000),
+    )
+  );
+
+  const acoes = [
+    `${duracaoTexto(pior.sobreposicaoMin)} de sobreposição.`,
+    buraco
+      ? `Empurro "${menor.titulo}" pras ${fmtTime(buraco.toISOString())}?`
+      : `Quer que eu cancele ou remarque "${menor.titulo}"?`,
+  ];
+
+  const png = await renderCardPngBase64(
+    cardShell(
+      `CONFLITO · ${diaDaColisao}`,
+      `Duas coisas às ${fmtTime(inicioColisao.toISOString())}`,
+      dataCurta,
+      [el("div", { display: "flex", flexDirection: "column" }, ...linhas), caixaAcoes(acoes)],
+      "sinal · detectado na sua agenda",
+    ),
+  );
+
+  if (dryRun) {
+    return { avisou: false, motivo: "dry run — card renderizado, nada enviado", card_kb: Math.round(png.length * 0.75 / 1024) };
+  }
+
+  const jid = ownerJid(env);
+  await sendWhatsAppImage(jid, { base64: png, fileName: "conflito-agenda.png" }, { fetch, env });
+  const texto = `Você tem dois compromissos no mesmo horário: "${pior.a.titulo}" e ` +
+    `"${pior.b.titulo}", às ${fmtTime(inicioColisao.toISOString())}. ` +
+    (buraco ? `Posso empurrar o "${menor.titulo}" pras ${fmtTime(buraco.toISOString())}?` : "Quer que eu remarque um dos dois?");
+  await sendWhatsAppText(jid, texto, { fetch, env });
+  await appendAssistantMessage(jid, texto);
+
+  await sb.from("avisos_enviados").insert({ tenant_id: tenantId, tipo: "conflito_agenda", chave });
+  return { avisou: true };
+}
+
+// ─── a semana à frente ──────────────────────────────────────────────────────
+
+const ROTULOS_DIA = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
+
+async function runSemanaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+  // Roda domingo à noite: a janela é a semana que começa amanhã.
+  const agora = new Date();
+  const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric" }).format(agora));
+  const mo = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, month: "2-digit" }).format(agora));
+  const d = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, day: "2-digit" }).format(agora));
+  // 00:00 SP do dia seguinte = 03:00 UTC.
+  const inicio = new Date(Date.UTC(y, mo - 1, d + 1, 3, 0, 0));
+  const fim = new Date(inicio.getTime() + 7 * 24 * 3600_000);
+
+  const eventos = await getEventosEntre(inicio.toISOString(), fim.toISOString(), env);
+  const carga = cargaPorDia(eventos, inicio, 7);
+  const totalCompromissos = carga.reduce((s, c) => s + c.compromissos, 0);
+  if (totalCompromissos === 0 && !dryRun) {
+    return { avisou: false, motivo: "semana sem compromisso — nada a dizer" };
+  }
+
+  const pesados = carga.filter((c) => c.minutosOcupados >= DIA_PESADO_MIN);
+  const maisCheio = [...carga].sort((a, b) => b.minutosOcupados - a.minutosOcupados)[0];
+  const maisVazio = [...carga]
+    .filter((c) => c.diaSemana !== 0 && c.diaSemana !== 6)
+    .sort((a, b) => a.minutosOcupados - b.minutosOcupados)[0];
+
+  const { barrasSemana, caixaAcoes, cardShell, renderCardPngBase64 } = await import(
+    "../_shared/card.ts"
+  );
+
+  const dias = carga.map((c) => ({
+    rotulo: ROTULOS_DIA[c.diaSemana],
+    minutos: c.minutosOcupados,
+    pesado: c.minutosOcupados >= DIA_PESADO_MIN,
+  }));
+
+  const titulo = pesados.length === 0
+    ? "Semana tranquila"
+    : pesados.length === 1
+    ? `${diaPorExtenso(pesados[0].diaSemana)} é o gargalo`
+    : `${pesados.length} dias pesados`;
+
+  const acoes: string[] = [
+    `${duracaoTexto(maisCheio.minutosOcupados)} de compromisso ${diaPorExtenso(maisCheio.diaSemana).toLowerCase()}.`,
+  ];
+  if (maisVazio && maisVazio.minutosOcupados * 2 < maisCheio.minutosOcupados) {
+    acoes.push(`${diaPorExtenso(maisVazio.diaSemana)} está aberta. Movo alguma coisa pra lá?`);
+  }
+
+  const periodo = `${new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit" }).format(inicio)}–` +
+    `${new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" }).format(new Date(fim.getTime() - 1))}`
+      .replace(".", "");
+
+  const png = await renderCardPngBase64(
+    cardShell("SEMANA QUE VEM", titulo, periodo, [barrasSemana(dias), caixaAcoes(acoes)], "sinal · sua semana"),
+  );
+
+  if (dryRun) {
+    return { avisou: false, motivo: "dry run — card renderizado, nada enviado", card_kb: Math.round(png.length * 0.75 / 1024) };
+  }
+
+  const jid = ownerJid(env);
+  await sendWhatsAppImage(jid, { base64: png, fileName: "semana.png" }, { fetch, env });
+  const texto = `Sua semana tem ${totalCompromissos} compromisso${totalCompromissos === 1 ? "" : "s"}. ` +
+    `${diaPorExtenso(maisCheio.diaSemana)} é o dia mais cheio, com ${duracaoTexto(maisCheio.minutosOcupados)}.` +
+    (acoes.length > 1 ? ` ${acoes[1]}` : "");
+  await sendWhatsAppText(jid, texto, { fetch, env });
+  await appendAssistantMessage(jid, texto);
+
+  return { avisou: true };
+}
+
+function diaPorExtenso(diaSemana: number): string {
+  return ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"][diaSemana];
+}
+
+// ─── tarefas atrasadas ──────────────────────────────────────────────────────
+
+async function runAtrasadasCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+  const agora = Date.now();
+  const tarefas = await getTasksWithDue(env);
+  const atrasadas = priorizaAtrasadas(
+    tarefas
+      .filter((t) => t.dueMs < agora)
+      .map((t) => ({ titulo: t.name, diasAtraso: Math.floor((agora - t.dueMs) / 86_400_000) })),
+  ) ?? (dryRun
+    ? [
+      { titulo: "Exemplo A", diasAtraso: 9 },
+      { titulo: "Exemplo B", diasAtraso: 4 },
+      { titulo: "Exemplo C", diasAtraso: 1 },
+    ]
+    : null);
+
+  if (!atrasadas) {
+    return { avisou: false, motivo: `menos de ${MIN_TAREFAS_ATRASADAS} tarefas atrasadas — silêncio` };
+  }
+
+  const { barrasAtraso, caixaAcoes, cardShell, renderCardPngBase64 } = await import(
+    "../_shared/card.ts"
+  );
+
+  const pior = atrasadas[0];
+  const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+    .format(new Date()).replace(".", "");
+
+  const png = await renderCardPngBase64(
+    cardShell(
+      "ATRASADAS",
+      `${atrasadas.length} tarefa${atrasadas.length === 1 ? "" : "s"} venceu${atrasadas.length === 1 ? "" : "ram"}`,
+      dataCurta,
+      [
+        barrasAtraso(atrasadas.map((t) => ({ titulo: t.titulo, dias: t.diasAtraso }))),
+        caixaAcoes([
+          pior.diasAtraso >= 7
+            ? `"${pior.titulo}" já passou de uma semana.`
+            : `A mais antiga está há ${pior.diasAtraso} dia${pior.diasAtraso === 1 ? "" : "s"} parada.`,
+          "Quer remarcar os prazos ou fechar alguma?",
+        ]),
+      ],
+      "sinal · suas tarefas",
+    ),
+  );
+
+  if (dryRun) {
+    return { avisou: false, motivo: "dry run — card renderizado, nada enviado", card_kb: Math.round(png.length * 0.75 / 1024) };
+  }
+
+  const jid = ownerJid(env);
+  await sendWhatsAppImage(jid, { base64: png, fileName: "atrasadas.png" }, { fetch, env });
+  const texto = `Você tem ${atrasadas.length} tarefa${atrasadas.length === 1 ? "" : "s"} atrasada${atrasadas.length === 1 ? "" : "s"}. ` +
+    `A mais antiga é "${pior.titulo}", há ${pior.diasAtraso} dia${pior.diasAtraso === 1 ? "" : "s"}. ` +
+    "Quer remarcar os prazos ou fechar alguma?";
+  await sendWhatsAppText(jid, texto, { fetch, env });
+  await appendAssistantMessage(jid, texto);
+
+  return { avisou: true };
+}
+
+// ─── aviso de cadastro novo (pro dono da plataforma) ────────────────────────
+
+/**
+ * Avisa o dono que alguém terminou o cadastro e está esperando aprovação.
+ *
+ * Só AVISA — aprovar acontece no /admin, atrás do login. Aprovação por
+ * mensagem seria poder de administrador dentro de um canal de conversa: quem
+ * pegasse o WhatsApp desbloqueado do dono liberaria quem quisesse.
+ */
+async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("tenants")
+    .select("id, slug, nome, cargo, frentes, channel_preference, auth_user_id, google_refresh_token_secret_id")
+    .is("aprovado_em", null)
+    .is("recusado_em", null)
+    .is("avisado_em", null)
+    .eq("active", true)
+    .limit(20);
+  if (error) throw new Error(`varredura de cadastros novos falhou: ${error.message}`);
+
+  const pendentes = (data ?? []) as Array<{
+    id: string;
+    slug: string;
+    nome: string | null;
+    cargo: string | null;
+    frentes: string[] | null;
+    channel_preference: string | null;
+    auth_user_id: string;
+    google_refresh_token_secret_id: string | null;
+  }>;
+  if (pendentes.length === 0) return { avisados: 0 };
+
+  const jid = ownerJid(env);
+  let avisados = 0;
+  for (const p of pendentes) {
+    // O e-mail não existe em `tenants` (mora em auth.users) e é o que faz o
+    // dono RECONHECER quem se cadastrou — dois "João Silva" só se distinguem
+    // por ele. Falha aqui não impede o aviso: nome já basta pra saber que tem
+    // alguém esperando.
+    let email = "";
+    try {
+      const { data: u } = await sb.auth.admin.getUserById(p.auth_user_id);
+      email = u?.user?.email ?? "";
+    } catch (err) {
+      console.error(`[cron] e-mail do cadastro ${p.id} não carregou: ${String(err)}`);
+    }
+
+    const linhas = [
+      "🔔 *Cadastro novo esperando aprovação*",
+      "",
+      p.nome?.trim() || "(sem nome)",
+      email,
+      p.cargo?.trim() ? `${p.cargo}${p.frentes?.length ? ` · ${p.frentes.join(", ")}` : ""}` : "",
+      "",
+      `Google ${p.google_refresh_token_secret_id ? "conectado ✅" : "pendente"} · quer ${p.channel_preference ?? "—"}`,
+      "",
+      `Aprova em: ${Deno.env.get("APP_URL") ?? "https://sinal.app"}/admin`,
+    ].filter((l) => l !== "");
+    try {
+      await sendWhatsAppText(jid, linhas.join("\n"), { fetch, env });
+      // Marca DEPOIS do envio: se o envio falhar, a próxima varredura tenta de
+      // novo em vez de perder o aviso em silêncio.
+      await sb.from("tenants").update({ avisado_em: new Date().toISOString() }).eq("id", p.id);
+      avisados++;
+    } catch (err) {
+      // Sem o slug no log: só o id, que não diz nada sobre quem é a pessoa.
+      console.error(`[cron] aviso de cadastro novo falhou (tenant ${p.id}): ${String(err)}`);
+    }
+  }
+  return { avisados };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json("Method Not Allowed", 405);
 
@@ -627,8 +964,16 @@ Deno.serve(async (req: Request) => {
     if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env)) });
     if (task === "agenda_check") return json({ ok: true, ...(await runAgendaCheck(env)) });
     if (task === "agenda_check_dry") return json({ ok: true, ...(await runAgendaCheck(env, true)) });
+    if (task === "conflito_check") return json({ ok: true, ...(await runConflitoCheck(env, tenant.id)) });
+    if (task === "conflito_check_dry") return json({ ok: true, ...(await runConflitoCheck(env, tenant.id, true)) });
+    if (task === "semana_check") return json({ ok: true, ...(await runSemanaCheck(env)) });
+    if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, true)) });
+    if (task === "atrasadas_check") return json({ ok: true, ...(await runAtrasadasCheck(env)) });
+    if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, true)) });
+    if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     return json({
-      error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | agenda_check",
+      error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
+        "agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
     }, 400);
   } catch (err) {
     console.error(`[cron] task='${task}' erro:`, String(err));

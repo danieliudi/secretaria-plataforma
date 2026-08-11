@@ -166,6 +166,119 @@ export function linhaTimeline(hora: string, titulo: string, sub: string, ultima 
   );
 }
 
+/**
+ * Linha de timeline em estado de conflito — fundo e barra na cor crítica.
+ * Separada de `linhaTimeline` porque o que ela comunica é diferente: ali a
+ * cor marca "isto existe", aqui marca "isto colide".
+ */
+export function linhaConflito(hora: string, titulo: string, sub: string): El {
+  return el(
+    "div",
+    {
+      display: "flex",
+      gap: 14,
+      alignItems: "flex-start",
+      padding: "13px 16px",
+      marginBottom: 8,
+      background: "rgba(229,105,92,0.13)",
+      borderLeft: `4px solid ${CARD.crit}`,
+      borderRadius: 6,
+    },
+    el("div", { display: "flex", width: 118, fontSize: 20, color: CARD.mut }, hora),
+    el(
+      "div",
+      { display: "flex", flexDirection: "column", flex: 1 },
+      el("div", { display: "flex", fontSize: 23, fontWeight: 600, color: CARD.fg }, titulo),
+      el("div", { display: "flex", fontSize: 18, color: CARD.mut, marginTop: 2 }, sub),
+    ),
+  );
+}
+
+/**
+ * Barras verticais de carga por dia. É o único formato aqui que só funciona em
+ * imagem: sete números em texto não mostram onde está o aperto, sete barras
+ * mostram antes de a pessoa ler.
+ */
+export function barrasSemana(
+  dias: Array<{ rotulo: string; minutos: number; pesado: boolean }>,
+): El {
+  const alturaMax = 150;
+  const pico = Math.max(60, ...dias.map((d) => d.minutos));
+  // Larguras explícitas em vez de `flex: 1` / `height: "100%"`: o satori
+  // implementa só um subconjunto de flexbox, e porcentagem/flex-grow são
+  // justamente onde ele diverge do navegador. Como o card tem largura fixa,
+  // a conta é trivial: 800 - 68 de padding - 6 gaps de 12 = 660 / 7 colunas.
+  const larguraColuna = Math.floor((LARGURA_CARD - 68 - 6 * 12) / 7);
+  return el(
+    "div",
+    { display: "flex", gap: 12, alignItems: "flex-end", paddingTop: 12 },
+    ...dias.map((d) =>
+      el(
+        "div",
+        { display: "flex", flexDirection: "column", alignItems: "center", width: larguraColuna },
+        el(
+          "div",
+          { display: "flex", fontSize: 17, color: CARD.mut, marginBottom: 6 },
+          d.minutos === 0 ? "—" : duracaoCurta(d.minutos),
+        ),
+        el("div", {
+          display: "flex",
+          width: larguraColuna,
+          // Piso de 4px: um dia vazio precisa aparecer como base da barra, não
+          // sumir — a ausência de compromisso é informação.
+          height: Math.max(4, Math.round((d.minutos / pico) * alturaMax)),
+          background: d.pesado ? CARD.crit : CARD.accent,
+          borderRadius: 4,
+        }),
+        el("div", { display: "flex", fontSize: 17, color: CARD.mut, marginTop: 10, letterSpacing: 1 }, d.rotulo),
+      )
+    ),
+  );
+}
+
+/** "3h20" → "3h" no rótulo da barra; espaço ali é escasso. */
+function duracaoCurta(min: number): string {
+  const h = min / 60;
+  return h >= 1 ? `${Math.round(h)}h` : `${min}min`;
+}
+
+/**
+ * Barras horizontais proporcionais ao atraso. Numa lista de texto "9 dias" e
+ * "1 dia" ocupam a mesma linha e pesam igual; aqui o tamanho é o argumento.
+ */
+export function barrasAtraso(itens: Array<{ titulo: string; dias: number }>): El {
+  const pico = Math.max(1, ...itens.map((i) => i.dias));
+  return el(
+    "div",
+    { display: "flex", flexDirection: "column", gap: 14 },
+    ...itens.map((i) =>
+      el(
+        "div",
+        { display: "flex", alignItems: "center", gap: 16 },
+        // Corte no texto em vez de overflow/ellipsis do CSS: um título longo
+        // empurraria a barra e destruiria a comparação, que é o ponto do card.
+        el(
+          "div",
+          { display: "flex", width: 300, fontSize: 21, color: CARD.fg },
+          i.titulo.length > 30 ? `${i.titulo.slice(0, 29)}…` : i.titulo,
+        ),
+        el("div", {
+          display: "flex",
+          width: Math.max(10, Math.round((i.dias / pico) * 320)),
+          height: 14,
+          background: i.dias >= 7 ? CARD.crit : CARD.warn,
+          borderRadius: 7,
+        }),
+        el(
+          "div",
+          { display: "flex", fontSize: 19, color: CARD.mut },
+          `${i.dias}d`,
+        ),
+      )
+    ),
+  );
+}
+
 /** Caixa de destaque com as propostas da secretária ("→ posso fazer X?"). */
 export function caixaAcoes(linhas: string[]): El {
   return el(

@@ -19,6 +19,7 @@
 
 import { getSupabaseClient } from "./supabase.ts";
 import { getAnthropicClient } from "./anthropic.ts";
+import { registraUso } from "./uso.ts";
 
 export type ProfileCategory =
   | "preferencia"
@@ -177,7 +178,7 @@ export interface ConsolidationDeps extends ProfileDeps {
   askModel: (prompt: string) => Promise<string>;
 }
 
-export function defaultConsolidationDeps(): ConsolidationDeps {
+export function defaultConsolidationDeps(tenantId?: string | null): ConsolidationDeps {
   const base = defaultProfileDeps();
   return {
     ...base,
@@ -201,6 +202,7 @@ export function defaultConsolidationDeps(): ConsolidationDeps {
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       });
+      void registraUso(CONSOLIDATION_MODEL, "consolidacao", res.usage, tenantId);
       const first = res.content[0];
       return first && first.type === "text" ? first.text : "";
     },

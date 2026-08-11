@@ -17,6 +17,7 @@ import {
   consumeWhatsAppLinkCode,
   DEFAULT_TENANT_SLUG,
   getTenantByAuthorizedPhone,
+  numeroAguardandoAprovacao,
   getTenantByWhatsAppInstance,
   getTenantBySlug,
   normalizeWhatsAppJidToE164,
@@ -174,6 +175,9 @@ const LINK_INVALID_MESSAGE =
   "Esse código não é válido ou já venceu. Gera um novo na tela de WhatsApp do cadastro e manda de novo.";
 const LINK_SUCCESS_MESSAGE =
   "✅ Pronto, esse WhatsApp já está vinculado à sua secretária! Pode me chamar quando quiser.";
+// Não promete prazo e não manda refazer nada — a pessoa já fez a parte dela.
+const ACCESS_PENDING_MESSAGE =
+  "Seu acesso à secretária está pausado no momento. Sua configuração está salva — quando for liberado, é só me chamar aqui de novo.";
 
 /**
  * KILLSWITCH TEMPORÁRIO (05/08): voltado a exigir PLATFORM_EVOLUTION_INSTANCE
@@ -237,6 +241,24 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
   }
 
   if (!tenant) {
+    // Antes de tratar como desconhecido: este número pode já estar vinculado a
+    // uma conta que só não foi aprovada ainda. Mandar essa pessoa "se
+    // cadastrar" seria pedir que ela refaça o que já fez.
+    let pausado = false;
+    try {
+      pausado = await numeroAguardandoAprovacao(fromE164);
+    } catch (err) {
+      console.error(`[reflex] numeroAguardandoAprovacao falhou: ${String(err)}`);
+    }
+    if (pausado) {
+      try {
+        await replyOnSharedNumber(fromRaw, ACCESS_PENDING_MESSAGE);
+      } catch (err) {
+        console.error(`[reflex] resposta de acesso pausado falhou: ${String(err)}`);
+      }
+      return resp({ ok: true }, 200);
+    }
+
     let linked: Tenant | null = null;
     try {
       linked = await consumeWhatsAppLinkCode(text, fromE164);

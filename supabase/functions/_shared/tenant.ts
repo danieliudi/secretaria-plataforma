@@ -119,6 +119,31 @@ export async function getTenantByAuthorizedPhone(fromE164: string): Promise<Tena
   return (data as Tenant | null) ?? null;
 }
 
+/**
+ * O número está vinculado a alguém, mas essa conta ainda não foi aprovada
+ * (ou foi recusada)?
+ *
+ * Serve só pra ESCOLHER A RESPOSTA: sem isto, quem tem acesso pausado cai no
+ * mesmo caminho de um número desconhecido e ouve "cadastre-se" — mandando a
+ * pessoa refazer um cadastro que ela já fez, pra sempre. Não afeta autorização
+ * nenhuma: quem chega aqui já foi recusado por getTenantByAuthorizedPhone.
+ */
+export async function numeroAguardandoAprovacao(fromE164: string): Promise<boolean> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select("id")
+    .eq("whatsapp_authorized_number", fromE164)
+    .eq("active", true)
+    .is("aprovado_em", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error(`[tenant] numeroAguardandoAprovacao falhou: ${error.message}`);
+    return false; // na dúvida, cai na mensagem genérica de vínculo
+  }
+  return Boolean(data);
+}
+
 // Sem 0/O/1/I — evita confusão ao ler/digitar o código no WhatsApp.
 const LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const LINK_CODE_LENGTH = 6;
