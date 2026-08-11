@@ -32,6 +32,11 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
+import {
+  consolidateUserProfile,
+  defaultConsolidationDeps,
+  listUsersParaConsolidar,
+} from "../_shared/profile.ts";
 
 type EnvFn = (key: string) => string | undefined;
 
@@ -405,6 +410,17 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
   const panorama = `📊 Panorama da semana — Beehave\n\n${text}`;
   await sendWhatsAppText(ownerJid(env), panorama, { fetch, env });
   await appendAssistantMessage(ownerJid(env), panorama);
+
+  // Manutenção da memória de longo prazo — silenciosa, não vira mensagem.
+  // Só toca em quem passou do limiar; pra maioria é um SELECT e nada mais.
+  try {
+    for (const userId of await listUsersParaConsolidar(tenantId)) {
+      const r = await consolidateUserProfile(userId, defaultConsolidationDeps());
+      console.log(`[cron] perfil ${userId}: ${r.status} ${r.antes}→${r.depois}${r.motivo ? ` (${r.motivo})` : ""}`);
+    }
+  } catch (err) {
+    console.error("[cron] consolidação de perfil falhou:", String(err));
+  }
 
   const stale = await getStaleCaptures(tenantId);
   if (stale.length > 0) {

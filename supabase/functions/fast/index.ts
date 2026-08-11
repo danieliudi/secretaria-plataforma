@@ -115,7 +115,7 @@ const TOOLS = [
   {
     name: "get_next_events",
     description:
-      "Retorna os próximos N eventos da agenda do Daniel, ordenados por hora de início. Use para perguntas sobre próximos eventos SEM data específica (ex: 'qual minha próxima reunião?', 'tenho algo em breve?'). NÃO use se a pergunta menciona uma data ou dia da semana — para isso use get_events_by_date.",
+      "Retorna os próximos N eventos da agenda do chefe, ordenados por hora de início. Use para perguntas sobre próximos eventos SEM data específica (ex: 'qual minha próxima reunião?', 'tenho algo em breve?'). NÃO use se a pergunta menciona uma data ou dia da semana — para isso use get_events_by_date.",
     input_schema: {
       type: "object",
       properties: {
@@ -131,14 +131,14 @@ const TOOLS = [
   {
     name: "get_events_by_date",
     description:
-      "Retorna os eventos de uma data específica na agenda do Daniel, ordenados por hora. Use quando a pergunta menciona um dia concreto (ex: 'o que tenho hoje?', 'agenda de quinta', 'dia 15'). Calcule a data exata em YYYY-MM-DD a partir do contexto (DATA HOJE no system prompt).",
+      "Retorna os eventos de uma data específica na agenda do chefe, ordenados por hora. Use quando a pergunta menciona um dia concreto (ex: 'o que tenho hoje?', 'agenda de quinta', 'dia 15'). Calcule a data exata em YYYY-MM-DD a partir do contexto (DATA HOJE no system prompt).",
     input_schema: {
       type: "object",
       properties: {
         date: {
           type: "string",
           description:
-            "Data em YYYY-MM-DD no timezone do Daniel (America/Sao_Paulo).",
+            "Data em YYYY-MM-DD no timezone do chefe (America/Sao_Paulo).",
         },
       },
       required: ["date"],
@@ -147,7 +147,7 @@ const TOOLS = [
   {
     name: "create_event",
     description:
-      "Cria um evento no Google Calendar do Daniel. Use para qualquer pedido de bloqueio de horário, marcação de reunião, agendamento (ex: 'bloquear deep work de 14 a 16', 'marca reunião com João amanhã às 10', 'agenda hora do almoço'). Calcule start e end como ISO 8601 com offset -03:00 (SP fixo). Use a DATA HOJE do system prompt como base — adicione dias para 'amanhã' (+1), 'semana que vem', dias específicos da semana, etc. Para horários ambíguos ('de tarde'), pergunte ao Daniel antes de criar.",
+      "Cria um evento no Google Calendar do chefe. Use para qualquer pedido de bloqueio de horário, marcação de reunião, agendamento (ex: 'bloquear deep work de 14 a 16', 'marca reunião com João amanhã às 10', 'agenda hora do almoço'). Calcule start e end como ISO 8601 com offset -03:00 (SP fixo). Use a DATA HOJE do system prompt como base — adicione dias para 'amanhã' (+1), 'semana que vem', dias específicos da semana, etc. Para horários ambíguos ('de tarde'), pergunte ao chefe antes de criar.",
     input_schema: {
       type: "object",
       properties: {
@@ -181,14 +181,14 @@ const TOOLS = [
   {
     name: "save_quick_capture",
     description:
-      "Salva uma nota rápida no inbox de captures do Daniel. Use para qualquer pedido de 'anota', 'lembra de', 'guarda essa', 'me lembra que', 'fica devendo' — quando Daniel só quer registrar algo curto pra revisar depois. NÃO use pra coisas que viram evento no Calendar (use create_event) ou que tem hora específica de execução.",
+      "Salva uma nota rápida no inbox de captures do chefe. Use para qualquer pedido de 'anota', 'lembra de', 'guarda essa', 'me lembra que', 'fica devendo' — quando o chefe só quer registrar algo curto pra revisar depois. NÃO use pra coisas que viram evento no Calendar (use create_event) ou que tem hora específica de execução.",
     input_schema: {
       type: "object",
       properties: {
         text: {
           type: "string",
           description:
-            "Texto da nota. Pode ser livre. Sem formatação extra — preserve as palavras do Daniel.",
+            "Texto da nota. Pode ser livre. Sem formatação extra — preserve as palavras do chefe.",
         },
       },
       required: ["text"],
@@ -197,7 +197,7 @@ const TOOLS = [
   {
     name: "archive_quick_captures",
     description:
-      "Marca nota(s) rápida(s) (save_quick_capture) como resolvidas, tirando-as da triagem semanal de 'paradas há mais de 7 dias'. Use quando o Daniel responder ao aviso semanal dizendo 'descarta', 'arquiva', 'joga fora', 'pode limpar' — ou depois de você já ter virado a(s) nota(s) em task (create_task), pra não aparecer de novo na próxima semana. Com all=true, arquiva TODAS as pendentes (ele disse 'todas'/'tudo'). Com query, arquiva só as que contêm esse trecho no texto — use quando ele apontar notas específicas (ex: 'descarta a do Carrefour'). Informe SEMPRE um dos dois.",
+      "Marca nota(s) rápida(s) (save_quick_capture) como resolvidas, tirando-as da triagem semanal de 'paradas há mais de 7 dias'. Use quando o chefe responder ao aviso semanal dizendo 'descarta', 'arquiva', 'joga fora', 'pode limpar' — ou depois de você já ter virado a(s) nota(s) em task (create_task), pra não aparecer de novo na próxima semana. Com all=true, arquiva TODAS as pendentes (ele disse 'todas'/'tudo'). Com query, arquiva só as que contêm esse trecho no texto — use quando ele apontar notas específicas (ex: 'descarta a do Carrefour'). Informe SEMPRE um dos dois.",
     input_schema: {
       type: "object",
       properties: {
@@ -217,7 +217,7 @@ const TOOLS = [
   {
     name: "list_recent_emails",
     description:
-      "Lista emails recentes do Daniel no Gmail. Use para perguntas como 'tem algo urgente no email?', 'me mostra o último email do João', 'tem email novo do cliente X?', 'resume meu inbox'. Retorna [{id, from, subject, snippet, date}] — use o snippet (~150 chars) para sumarizar; NÃO invente conteúdo além do snippet. Use o parâmetro query (Gmail search syntax) pra filtrar: 'is:unread', 'from:nome@dom.com', 'subject:fatura', 'after:2026/06/01'. SEM query, retorna in:inbox recente.",
+      "Lista emails recentes do chefe no Gmail. Use para perguntas como 'tem algo urgente no email?', 'me mostra o último email do João', 'tem email novo do cliente X?', 'resume meu inbox'. Retorna [{id, from, subject, snippet, date}] — use o snippet (~150 chars) para sumarizar; NÃO invente conteúdo além do snippet. Use o parâmetro query (Gmail search syntax) pra filtrar: 'is:unread', 'from:nome@dom.com', 'subject:fatura', 'after:2026/06/01'. SEM query, retorna in:inbox recente.",
     input_schema: {
       type: "object",
       properties: {
@@ -238,7 +238,7 @@ const TOOLS = [
   {
     name: "list_tasks",
     description:
-      "Lista tasks abertas de uma frente do Daniel no gerenciador de tarefas configurado (ClickUp, Notion, Trello ou Google Tasks — ver system prompt). Use para 'tarefas resibag', 'o que tenho aberto na Sanwey', 'tasks da Resibag de site'. Retorna [{id, name, status, due_date, url, list}]. SEM `list`, agrega tasks de todas as sub-listas da frente (quando a plataforma suportar sub-lista). Frentes disponíveis estão listadas no system prompt — NÃO chame se a frente não estiver lá. NÃO use pra agenda nem notas.",
+      "Lista tasks abertas de uma frente do chefe no gerenciador de tarefas configurado (ClickUp, Notion, Trello ou Google Tasks — ver system prompt). Use para 'tarefas resibag', 'o que tenho aberto na Sanwey', 'tasks da Resibag de site'. Retorna [{id, name, status, due_date, url, list}]. SEM `list`, agrega tasks de todas as sub-listas da frente (quando a plataforma suportar sub-lista). Frentes disponíveis estão listadas no system prompt — NÃO chame se a frente não estiver lá. NÃO use pra agenda nem notas.",
     input_schema: {
       type: "object",
       properties: {
@@ -261,7 +261,7 @@ const TOOLS = [
   {
     name: "create_task",
     description:
-      "Cria uma task no gerenciador de tarefas configurado, na frente do Daniel. Use para 'cria task X em Pauta & Reuniões da Resibag', 'adiciona X em Site / Web da Sanwey'. SE a plataforma exigir sub-lista (ver system prompt) e Daniel não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt.",
+      "Cria uma task no gerenciador de tarefas configurado, na frente do chefe. Use para 'cria task X em Pauta & Reuniões da Resibag', 'adiciona X em Site / Web da Sanwey'. SE a plataforma exigir sub-lista (ver system prompt) e o chefe não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt.",
     input_schema: {
       type: "object",
       properties: {
@@ -271,7 +271,7 @@ const TOOLS = [
         },
         list: {
           type: "string",
-          description: "Nome exato da sub-lista dentro da frente. Obrigatório só em algumas plataformas (ver system prompt) — se for o caso e Daniel não disser, PERGUNTE.",
+          description: "Nome exato da sub-lista dentro da frente. Obrigatório só em algumas plataformas (ver system prompt) — se for o caso e o chefe não disser, PERGUNTE.",
         },
         title: {
           type: "string",
@@ -292,7 +292,7 @@ const TOOLS = [
   {
     name: "save_profile_fact",
     description:
-      "Memoriza um fato DURÁVEL sobre o Daniel pra lembrar em TODAS as conversas futuras — preferências (horários de foco, formato de resposta que ele curte, gostos), pessoas recorrentes (sócios, clientes, equipe, com quem ele fala sempre), rotina/hábitos, ou jeito de trabalhar. Use quando ele revelar algo estável sobre ele mesmo que valha lembrar pra sempre (ex: 'prefiro reuniões de manhã', 'o Pedro é meu sócio na Resibag', 'odeio call depois das 18h', 'sempre tomo café antes de decidir coisa importante'). NÃO use pra tarefas (create_task), notas pontuais (save_quick_capture), nem coisas transitórias de um único dia. Se for CORRIGIR/ATUALIZAR um fato que você já sabe, use a MESMA key. Salve em silêncio — não diga 'memorizei' nem anuncie; só incorpore naturalmente nas respostas seguintes.",
+      "Memoriza um fato DURÁVEL sobre o chefe pra lembrar em TODAS as conversas futuras — preferências (horários de foco, formato de resposta que ele curte, gostos), pessoas recorrentes (sócios, clientes, equipe, com quem ele fala sempre), rotina/hábitos, ou jeito de trabalhar. Use quando ele revelar algo estável sobre ele mesmo que valha lembrar pra sempre (ex: 'prefiro reuniões de manhã', 'o Pedro é meu sócio na Resibag', 'odeio call depois das 18h', 'sempre tomo café antes de decidir coisa importante'). NÃO use pra tarefas (create_task), notas pontuais (save_quick_capture), nem coisas transitórias de um único dia. Se for CORRIGIR/ATUALIZAR um fato que você já sabe, use a MESMA key. Salve em silêncio — não diga 'memorizei' nem anuncie; só incorpore naturalmente nas respostas seguintes.",
     input_schema: {
       type: "object",
       properties: {
@@ -319,7 +319,7 @@ const TOOLS = [
   {
     name: "schedule_reminder",
     description:
-      "Agenda um lembrete pra ser enviado pro Daniel no horário FUTURO específico (WhatsApp ou Telegram, conforme o canal de onde ele pediu). Use quando ele pedir 'me lembra X em/às/daqui/amanhã', 'me cutuca pra Y antes de Z', 'me avisa em 1h'. A secretária dispara automaticamente na hora marcada. NÃO use pra criar evento na agenda (use create_event) nem pra nota sem horário (use save_quick_capture); use APENAS quando há um momento específico de disparo. Calcule fire_at em ISO 8601 com offset -03:00 (SP fixo) a partir da DATA HOJE do system prompt. Pra 'amanhã 14h' use '2026-06-11T14:00:00-03:00'. Pra 'daqui a 1 hora' some 1h ao agora. O texto deve ser na primeira pessoa da secretária (ela está te falando) — ex: 'Chefe, lembra de ligar pro João', não 'Lembrete: ligar pro João'. Se o Daniel pedir algo RECORRENTE ('todo mês', 'toda semana', 'todo dia'), use `recurrence`. Se o resultado vier com `conflict: true` (já existe lembrete parecido pendente perto desse horário), NÃO insista sozinho — pergunte ao Daniel se quer criar mesmo assim; só chame de novo com confirm_duplicate=true se ele confirmar.",
+      "Agenda um lembrete pra ser enviado pro chefe no horário FUTURO específico (WhatsApp ou Telegram, conforme o canal de onde ele pediu). Use quando ele pedir 'me lembra X em/às/daqui/amanhã', 'me cutuca pra Y antes de Z', 'me avisa em 1h'. A secretária dispara automaticamente na hora marcada. NÃO use pra criar evento na agenda (use create_event) nem pra nota sem horário (use save_quick_capture); use APENAS quando há um momento específico de disparo. Calcule fire_at em ISO 8601 com offset -03:00 (SP fixo) a partir da DATA HOJE do system prompt. Pra 'amanhã 14h' use '2026-06-11T14:00:00-03:00'. Pra 'daqui a 1 hora' some 1h ao agora. O texto deve ser na primeira pessoa da secretária (ela está te falando) — ex: 'Chefe, lembra de ligar pro João', não 'Lembrete: ligar pro João'. Se o chefe pedir algo RECORRENTE ('todo mês', 'toda semana', 'todo dia'), use `recurrence`. Se o resultado vier com `conflict: true` (já existe lembrete parecido pendente perto desse horário), NÃO insista sozinho — pergunte ao chefe se quer criar mesmo assim; só chame de novo com confirm_duplicate=true se ele confirmar.",
     input_schema: {
       type: "object",
       properties: {
@@ -342,7 +342,7 @@ const TOOLS = [
         confirm_duplicate: {
           type: "boolean",
           description:
-            "(opcional) true pra criar mesmo que já exista um lembrete parecido pendente perto desse horário. Só use depois que o Daniel confirmar explicitamente — nunca chute true de primeira.",
+            "(opcional) true pra criar mesmo que já exista um lembrete parecido pendente perto desse horário. Só use depois que o chefe confirmar explicitamente — nunca chute true de primeira.",
         },
       },
       required: ["fire_at", "text"],
@@ -351,7 +351,7 @@ const TOOLS = [
   {
     name: "export_spreadsheet",
     description:
-      "Gera uma planilha CSV de um dataset do Daniel e envia direto pelo WhatsApp como documento. Use quando ele pedir 'me manda planilha de X', 'exporta as tarefas da Resibag', 'me passa em CSV', 'manda em arquivo pra eu repassar'. O arquivo chega na hora — você NÃO precisa anunciar o conteúdo; apenas confirme o envio com uma bolha curta (ex: 'Mandei a planilha 📎'). Datasets suportados: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date YYYY-MM-DD; opcional end_date pra range inclusive).",
+      "Gera uma planilha CSV de um dataset do chefe e envia direto pelo WhatsApp como documento. Use quando ele pedir 'me manda planilha de X', 'exporta as tarefas da Resibag', 'me passa em CSV', 'manda em arquivo pra eu repassar'. O arquivo chega na hora — você NÃO precisa anunciar o conteúdo; apenas confirme o envio com uma bolha curta (ex: 'Mandei a planilha 📎'). Datasets suportados: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date YYYY-MM-DD; opcional end_date pra range inclusive).",
     input_schema: {
       type: "object",
       properties: {
@@ -482,7 +482,7 @@ const TOOLS = [
   {
     name: "complete_task",
     description:
-      "Marca uma task do gerenciador de tarefas configurado como CONCLUÍDA. Use quando o Daniel disser que JÁ FEZ algo que soa como uma task existente — ex: 'já fiz a apresentação do deck pro Everton', 'terminei o X', 'entreguei Y'. `query` é um trecho do nome da task (não precisa ser exato). Se vier `candidates` (mais de uma task parecida), NÃO marque nenhuma sozinho — liste as opções e pergunte qual. Se vier `matched`, confirme em uma bolha curta (ex: 'Marquei como feito ✅'), sem anunciar burocracia.",
+      "Marca uma task do gerenciador de tarefas configurado como CONCLUÍDA. Use quando o chefe disser que JÁ FEZ algo que soa como uma task existente — ex: 'já fiz a apresentação do deck pro Everton', 'terminei o X', 'entreguei Y'. `query` é um trecho do nome da task (não precisa ser exato). Se vier `candidates` (mais de uma task parecida), NÃO marque nenhuma sozinho — liste as opções e pergunte qual. Se vier `matched`, confirme em uma bolha curta (ex: 'Marquei como feito ✅'), sem anunciar burocracia.",
     input_schema: {
       type: "object",
       properties: {
@@ -492,7 +492,7 @@ const TOOLS = [
         },
         query: {
           type: "string",
-          description: "Trecho do nome da task, do jeito que o Daniel descreveu.",
+          description: "Trecho do nome da task, do jeito que o chefe descreveu.",
         },
         list: {
           type: "string",
@@ -505,7 +505,7 @@ const TOOLS = [
   {
     name: "what_now",
     description:
-      "Escolhe a PRÓXIMA AÇÃO mais urgente entre as tasks com prazo de TODAS as frentes com gerenciador de tarefas configurado. Use quando o Daniel perguntar 'o que eu faço agora?', 'no que eu foco?', 'qual a prioridade?', 'tô perdido, me dá uma tarefa'. Retorna até 3 candidatas ordenadas por prazo (vencidas primeiro, depois mais próximas). Mostre SÓ a primeira na resposta — as outras 2 só se o Daniel pedir 'e depois?' ou 'mais opções'. O objetivo é reduzir decisão, não virar outra lista.",
+      "Escolhe a PRÓXIMA AÇÃO mais urgente entre as tasks com prazo de TODAS as frentes com gerenciador de tarefas configurado. Use quando o chefe perguntar 'o que eu faço agora?', 'no que eu foco?', 'qual a prioridade?', 'tô perdido, me dá uma tarefa'. Retorna até 3 candidatas ordenadas por prazo (vencidas primeiro, depois mais próximas). Mostre SÓ a primeira na resposta — as outras 2 só se o chefe pedir 'e depois?' ou 'mais opções'. O objetivo é reduzir decisão, não virar outra lista.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
 ];
@@ -522,7 +522,7 @@ ACESSO À AGENDA (Google Calendar)
 ACESSO AO EMAIL (Gmail, somente leitura)
 - 1 tool: list_recent_emails(n, query?).
 - Use pra perguntas como "tem algo urgente?", "me mostra o último email do X", "resume meu inbox".
-- Snippet (~150 chars) é o suficiente pra sumarizar. NÃO invente texto além do snippet — se Daniel quiser o conteúdo completo, avise que ainda não tem essa capacidade.
+- Snippet (~150 chars) é o suficiente pra sumarizar. NÃO invente texto além do snippet — se o chefe quiser o conteúdo completo, avise que ainda não tem essa capacidade.
 - Use Gmail search syntax no query: 'is:unread', 'from:joao@x.com', 'subject:fatura', 'after:2026/06/01'.
 
 {{tasks_block}}
@@ -532,26 +532,26 @@ ACESSO AO EMAIL (Gmail, somente leitura)
 {{crm_block}}
 
 LEMBRETES AGENDADOS (proativo no horário marcado)
-- 1 tool: schedule_reminder(fire_at, text, recurrence?, confirm_duplicate?). Use quando Daniel pedir "me lembra X amanhã às 14h", "me cutuca em 1h pra Y", "me avisa antes de Z começar", "todo mês/toda semana/todo dia me lembra de W".
+- 1 tool: schedule_reminder(fire_at, text, recurrence?, confirm_duplicate?). Use quando o chefe pedir "me lembra X amanhã às 14h", "me cutuca em 1h pra Y", "me avisa antes de Z começar", "todo mês/toda semana/todo dia me lembra de W".
 - Distingue dos outros: schedule_reminder = momento específico de DISPARO; create_event = bloqueio na agenda; save_quick_capture = nota sem horário.
 - text deve ser na primeira pessoa SUA (você falando com ele) — ex: "Chefe, hora de ligar pro João 📞", não "Lembrete: ligar pro João".
 - Pedido recorrente ("todo primeiro dia útil do mês", "toda semana", "todo dia") → use 'recurrence'. Sem isso, o lembrete dispara uma vez só.
-- Se vier 'conflict: true' no resultado (já tem lembrete parecido pendente perto desse horário), pare e pergunte ao Daniel se quer criar mesmo assim — não insista sozinho. Só chame de novo com confirm_duplicate=true se ele confirmar.
+- Se vier 'conflict: true' no resultado (já tem lembrete parecido pendente perto desse horário), pare e pergunte ao chefe se quer criar mesmo assim — não insista sozinho. Só chame de novo com confirm_duplicate=true se ele confirmar.
 
 PRÓXIMA AÇÃO (reduzir decisão, não empilhar lista)
-- 1 tool: what_now(). Use quando o Daniel estiver sem foco ou pedir uma única prioridade pra agora.
+- 1 tool: what_now(). Use quando o chefe estiver sem foco ou pedir uma única prioridade pra agora.
 - Mostre só a primeira sugestão devolvida. Só mencione as outras se ele pedir mais opções — o ponto é cortar decisão, não repetir a lista de tasks.
 
 EXPORTAR PLANILHA (CSV via WhatsApp)
-- 1 tool: export_spreadsheet(dataset, ...). Use quando Daniel pedir "me manda planilha de X", "exporta as tasks", "me passa em CSV", "manda em arquivo pra eu repassar".
+- 1 tool: export_spreadsheet(dataset, ...). Use quando o chefe pedir "me manda planilha de X", "exporta as tasks", "me passa em CSV", "manda em arquivo pra eu repassar".
 - Datasets: 'tasks' (precisa frente; list opcional) ou 'calendar_events' (precisa date; opcional end_date pra range).
 - O arquivo é enviado pelo SISTEMA durante a tool — você NÃO precisa anexar nada. Sua resposta de texto deve ser uma confirmação curta: "Mandei a planilha, chefe 📎" (ou similar). Não anuncie o conteúdo do arquivo.
 
 REGISTRO & TRIAGEM (inbox + tarefas)
-- Captura ampla: sempre que o Daniel mencionar algo que soa como tarefa, entrega, compromisso, pendência ou "preciso / tenho que / não posso esquecer" — MESMO sem ele dizer "anota" — é candidato a registro.
-- REGRA DURA: quando foi VOCÊ que detectou (o Daniel só comentou, não pediu pra registrar), NÃO chame nenhuma tool nessa resposta. Responda APENAS com uma pergunta curta confirmando, já sugerindo cliente + list. Ex: "Quer que eu registre? Parece entrega da Sanwey — crio em 'Entregas', prazo sexta?". Só chame create_task (ou save_quick_capture) DEPOIS que ele confirmar numa próxima mensagem.
-- Exceção: se o Daniel pedir explicitamente pra registrar/criar ("cria task X em…", "anota Y", "registra isso") — aí pode agir direto, sem confirmar de novo.
-- Triagem na hora: na confirmação, proponha cliente (Resibag/Sanwey) e list (ver bloco de tarefas acima) com base no contexto — não jogue a decisão toda pro Daniel.
+- Captura ampla: sempre que o chefe mencionar algo que soa como tarefa, entrega, compromisso, pendência ou "preciso / tenho que / não posso esquecer" — MESMO sem ele dizer "anota" — é candidato a registro.
+- REGRA DURA: quando foi VOCÊ que detectou (o chefe só comentou, não pediu pra registrar), NÃO chame nenhuma tool nessa resposta. Responda APENAS com uma pergunta curta confirmando, já sugerindo cliente + list. Ex: "Quer que eu registre? Parece entrega da Sanwey — crio em 'Entregas', prazo sexta?". Só chame create_task (ou save_quick_capture) DEPOIS que ele confirmar numa próxima mensagem.
+- Exceção: se o chefe pedir explicitamente pra registrar/criar ("cria task X em…", "anota Y", "registra isso") — aí pode agir direto, sem confirmar de novo.
+- Triagem na hora: na confirmação, proponha cliente (Resibag/Sanwey) e list (ver bloco de tarefas acima) com base no contexto — não jogue a decisão toda pro chefe.
   - Ele confirma → create_task na frente/list sugerida (com due_date se houver prazo claro).
   - Ele topa registrar mas não sabe onde, ou cliente/list não está claro → save_quick_capture (inbox pra triar depois).
   - Ele diz que não, ou ignora e segue noutro assunto → não registre, deixe pra lá.
@@ -681,7 +681,7 @@ export interface FastWithToolsDeps {
 /**
  * `env` opcional (tenant-scoped, ver _shared/tenant.ts buildTenantEnv). Sem
  * ele, cai no env global (Deno.env.get) — comportamento de sempre pro tenant
- * do Daniel, que ainda não tem nenhum `*_secret_id` preenchido no Vault.
+ * do chefe, que ainda não tem nenhum `*_secret_id` preenchido no Vault.
  */
 export function defaultFastWithToolsDeps(
   env: (key: string) => string | undefined = (k) => Deno.env.get(k),
@@ -750,8 +750,10 @@ export function defaultFastWithToolsDeps(
       listRecentEmails: (input) => defaultListRecentEmails(input, { getAccessToken, fetch }),
       listTasks: (input) => getTaskProvider(env).listTasks(input),
       createTask: (input) => getTaskProvider(env).createTask(input),
+      // tenantId vai junto pra memória nascer com dono: a consolidação
+      // semanal varre por tenant, e fato sem dono nunca seria revisado.
       saveProfileFact: (userId, category, key, value) =>
-        defaultSaveProfileFact(userId, category, key, value),
+        defaultSaveProfileFact(userId, category, key, value, tenantId ?? undefined),
       scheduleReminder: (userId, input) => {
         if (!tenantId) {
           throw new Error(
@@ -874,7 +876,7 @@ async function executeTool(
           conflict: true,
           existing: result.conflict.map((r) => ({ fire_at: r.fire_at, text: r.text })),
           note:
-            "Já existe um lembrete pendente perto desse horário. Pergunte ao Daniel se quer criar mesmo assim (chame de novo com confirm_duplicate=true) ou deixar só o existente.",
+            "Já existe um lembrete pendente perto desse horário. Pergunte ao chefe se quer criar mesmo assim (chame de novo com confirm_duplicate=true) ou deixar só o existente.",
         };
       }
       return { reminder: result.reminder };
