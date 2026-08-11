@@ -508,7 +508,11 @@ async function getEventosEntre(deISO: string, ateISO: string, env: EnvFn): Promi
     }));
 }
 
-async function runAgendaCheck(env: EnvFn): Promise<{ avisou: boolean; motivo?: string }> {
+// `dryRun` renderiza o card e devolve o tamanho SEM enviar nada. Existe pra
+// validar que satori/resvg carregam no runtime — sem isso, a única forma de
+// exercer o caminho de render é esperar uma agenda de verdade ficar apertada,
+// e uma falha de import ficaria escondida por semanas.
+async function runAgendaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
   // Janela: o dia de AMANHÃ inteiro, em SP. Roda de noite pra dar tempo de
   // reagir — avisar de manhã que o dia está impossível não ajuda em nada.
   const agora = new Date();
@@ -520,7 +524,15 @@ async function runAgendaCheck(env: EnvFn): Promise<{ avisou: boolean; motivo?: s
   const fimDia = new Date(inicioDia.getTime() + 24 * 3600_000);
 
   const eventos = await getEventosEntre(inicioDia.toISOString(), fimDia.toISOString(), env);
-  const maratona = detectaMaratona(eventos);
+  const real = detectaMaratona(eventos);
+  // No dry run, sem maratona real, usa um exemplo só pra exercer o render.
+  const maratona = real ?? (dryRun
+    ? [
+      { titulo: "Exemplo A", inicio: new Date(Date.now()), fim: new Date(Date.now() + 3600_000) },
+      { titulo: "Exemplo B", inicio: new Date(Date.now() + 3600_000), fim: new Date(Date.now() + 7200_000) },
+      { titulo: "Exemplo C", inicio: new Date(Date.now() + 7200_000), fim: new Date(Date.now() + 10800_000) },
+    ]
+    : null);
   if (!maratona) return { avisou: false, motivo: "agenda de amanhã sem sequência apertada" };
 
   const totalMin = (maratona[maratona.length - 1].fim.getTime() - maratona[0].inicio.getTime()) / 60_000;
@@ -562,6 +574,10 @@ async function runAgendaCheck(env: EnvFn): Promise<{ avisou: boolean; motivo?: s
       "sinal · detectado na sua agenda",
     ),
   );
+
+  if (dryRun) {
+    return { avisou: false, motivo: "dry run — card renderizado, nada enviado", card_kb: Math.round(png.length * 0.75 / 1024) };
+  }
 
   const jid = ownerJid(env);
   await sendWhatsAppImage(jid, { base64: png, fileName: "agenda-amanha.png" }, { fetch, env });
@@ -610,6 +626,7 @@ Deno.serve(async (req: Request) => {
     if (task === "marketing") return json({ ok: true, ...(await runMarketing(env)) });
     if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env)) });
     if (task === "agenda_check") return json({ ok: true, ...(await runAgendaCheck(env)) });
+    if (task === "agenda_check_dry") return json({ ok: true, ...(await runAgendaCheck(env, true)) });
     return json({
       error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | agenda_check",
     }, 400);
