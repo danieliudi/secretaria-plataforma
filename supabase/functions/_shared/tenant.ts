@@ -27,6 +27,8 @@ export interface Tenant {
   telegram_authorized_chat_id: number | null;
   owner_whatsapp_jid: string | null;
   active: boolean;
+  usa_vocativo: boolean;
+  tratamento: string | null;
   whatsapp_authorized_number: string | null;
   whatsapp_link_code: string | null;
   whatsapp_link_code_expires_at: string | null;
@@ -40,7 +42,7 @@ const TENANT_COLUMNS = `
   ga4_property_map,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
-  owner_whatsapp_jid, active,
+  owner_whatsapp_jid, active, usa_vocativo, tratamento,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at
 `;
 

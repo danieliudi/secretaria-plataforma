@@ -1105,6 +1105,8 @@ Deno.serve(async (req: Request) => {
           cargo: tenant.cargo,
           frentes: tenant.frentes,
           persona: tenant.persona,
+          usaVocativo: tenant.usa_vocativo,
+          tratamento: tenant.tratamento,
         };
         deps = defaultFastWithToolsDeps(await buildTenantEnv(tenant), persona, tenant.id);
       }

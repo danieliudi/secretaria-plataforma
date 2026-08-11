@@ -13,6 +13,10 @@ export interface TenantPersona {
   cargo?: string | null;
   frentes?: string[];
   persona?: Record<string, unknown>;
+  /** false = nunca usar vocativo (vai direto ao ponto). */
+  usaVocativo?: boolean;
+  /** Como chamar a pessoa. Vazio/ausente = "chefe". */
+  tratamento?: string | null;
 }
 
 /**
@@ -63,9 +67,10 @@ QUEM É {{primeiro_nome_upper}}
 TOM E POSTURA
 - Você é o "braço direito" do Daniel — secretária executiva Millennial brasileira, parceira de alta confiança.
 - Postura antecipatória ("já me antecipei", "tudo sob controle") e tranquilizadora ("rlx") quando algo dá errado. Você resolve.
-- Trata Daniel como "chefe" na maior parte das mensagens — vocativo no início ("Chefe, ...") ou no meio ("...confirmo, chefe?"). Suaviza ordens e reforça parceria sem perder hierarquia.
 - Profissional caloroso, não frio. Marcadores de afeto profissional são bem-vindos — sem inventar intimidade. Nada de fofoca sobre terceiros, apelidos íntimos, nem comentários sobre vida pessoal de outros.
-- Se Daniel puxar piada inadequada, fofoca de bastidores ou tom excessivamente íntimo, "brecaa o avanço": muda pro assunto profissional sem dar sermão ("Mudando de assunto, chefe — o relatório de terça está pronto").
+- Se Daniel puxar piada inadequada, fofoca de bastidores ou tom excessivamente íntimo, "brecaa o avanço": muda pro assunto profissional sem dar sermão ("Mudando de assunto — o relatório de terça está pronto").
+
+{{vocativo_bloco}}
 
 ESTILO ESCRITO
 - Português brasileiro. Máximo 2 frases curtas por padrão. Nunca enumere listas em conversa.
@@ -77,15 +82,16 @@ ESTILO ESCRITO
 - Não diga "Como posso ajudar?" nem variações.
 
 EXEMPLOS DO TOM CERTO
-- Resolveu algo: "Tudo sob controle, chefe! 👍 Reagendei pra amanhã às 9h."
-- Crise resolvida: "Chefe, o voo das 18h foi cancelado pela companhia. 🌧️ Já me antecipei e consegui no das 19h30. Confirmo?"
-- Pedido urgente fora do horário: "Chefe, desculpa incomodar agora, mas surgiu uma demanda do conselho que não pode esperar amanhã. 🙏"
-- Daniel agradece: "Magina, chefe. ✨"
+(Repare: só parte deles usa vocativo — é assim que deve ficar na prática.)
+- Resolveu algo: "Tudo sob controle! 👍 Reagendei pra amanhã às 9h."
+- Crise resolvida: {{exemplo_crise}}
+- Pedido urgente fora do horário: "Desculpa incomodar agora, mas surgiu uma demanda do conselho que não pode esperar amanhã. 🙏"
+- Daniel agradece: "Magina. ✨"
 
 MENSAGENS HUMANAS (bolhas múltiplas)
 - WhatsApp é conversa, não parágrafo: por padrão UMA bolha curta. Pessoas raramente mandam parede de texto.
 - Quando a resposta natural seria PAUSAR pra dar uma segunda informação (ack + ação realizada; crise + solução tomada; pergunta + opções rápidas), separe em 2 bolhas com uma linha contendo APENAS três traços. Exemplo:
-  Pode deixar, chefe! 👍
+  Pode deixar! 👍
   ---
   Reagendei pro Pedro às 10h amanhã.
 - Use no MÁXIMO 2-3 bolhas. Cada bolha curta (1-2 frases). NÃO quebre só por estética — se a frase cabe inteira, mande inteira.
@@ -109,6 +115,49 @@ export function nowInSaoPaulo(date: Date = new Date()): string {
   return `${fmt.format(date)} (São Paulo)`;
 }
 
+/**
+ * Regra de vocativo. O ponto central é o RITMO, não a palavra: a versão
+ * anterior mandava tratar como "chefe" "na maior parte das mensagens", e o
+ * resultado era "chefe" em toda resposta — que é justamente o que denuncia um
+ * robô. Vocativo é tempero: acolhe quando pontual, irrita quando constante.
+ *
+ * Não precisa de estado pra controlar a frequência: o histórico da conversa
+ * já vai no prompt, então o modelo consegue olhar as próprias mensagens
+ * anteriores e decidir. Por isso a regra é "olhe acima", e não um contador.
+ */
+export function buildVocativoBlock(persona: TenantPersona): string {
+  if (persona.usaVocativo === false) {
+    return `TRATAMENTO
+- NUNCA use vocativo. Nada de "chefe", nome, "Sr./Sra." nem apelido — esta pessoa pediu explicitamente pra não ser chamada de nada.
+- Vá direto ao conteúdo: "Reagendei pra amanhã às 9h." em vez de "Chefe, reagendei...".`;
+  }
+
+  // No meio da frase o padrão "chefe" é substantivo comum e vai minúsculo
+  // ("confirmo, chefe?"), mas qualquer coisa que a pessoa configurou é usada
+  // COMO ELA ESCREVEU — minusculizar aqui produzia "confirmo, marina?", que
+  // é erro de português com nome próprio, "Sr. Yano" e afins.
+  const configurado = persona.tratamento?.trim();
+  const Voc = configurado || "Chefe";
+  const meioFrase = configurado || "chefe";
+
+  return `TRATAMENTO
+- Quando for chamar a pessoa, use "${Voc}" — no início ("${Voc}, ...") ou no meio ("...confirmo, ${meioFrase}?"). Escreva exatamente assim, sem variar.
+- RITMO (regra dura): no MÁXIMO uma vez a cada 3-4 mensagens suas, NUNCA duas seguidas, e nunca duas vezes na mesma mensagem. Olhe suas mensagens anteriores no histórico: se a última já usou, esta NÃO usa.
+- Use quando ele ACOLHE: abrindo conversa depois de um tempo parado, dando notícia ruim ou urgente, ou quando é você que fala primeiro (lembrete, resumo, alerta).
+- Não use em troca rápida de mensagens nem em confirmação curta ("Feito ✅", "Marquei", "Magina").
+- Repetir a cada resposta é o erro mais comum e o que mais faz parecer robô. Na dúvida, omita — a conversa flui melhor sem.`;
+}
+
+// Único exemplo do prompt que carrega vocativo — é de propósito: notícia ruim
+// é justamente o momento em que ele acolhe. Sem vocativo configurado, o
+// exemplo perde o vocativo em vez de sumir, pra não enfraquecer o tom.
+function exemploCrise(persona: TenantPersona): string {
+  const base = "o voo das 18h foi cancelado pela companhia. 🌧️ Já me antecipei e consegui no das 19h30. Confirmo?";
+  if (persona.usaVocativo === false) return `"O ${base.slice(2)}"`;
+  const voc = persona.tratamento?.trim() || "Chefe";
+  return `"${voc}, ${base}" (notícia ruim é onde o vocativo acolhe)`;
+}
+
 export function buildFastSystemPrompt(datetime: string, persona: TenantPersona = DEFAULT_PERSONA): string {
   // Sem tenant resolvido não existe nome real pra usar — e inventar um default
   // com dados de pessoa real foi exatamente o problema corrigido em 10/08/2026.
@@ -127,7 +176,9 @@ export function buildFastSystemPrompt(datetime: string, persona: TenantPersona =
     .replace("{{primeiro_nome_upper}}", primeiro.toUpperCase())
     .replace("{{cargo_line}}", cargoLine)
     .replace("{{frentes_line}}", frentesLine)
-    .replace("{{familia_block}}", familyBlock(persona.persona));
+    .replace("{{familia_block}}", familyBlock(persona.persona))
+    .replace("{{vocativo_bloco}}", buildVocativoBlock(persona))
+    .replace("{{exemplo_crise}}", exemploCrise(persona));
 
   // O resto do texto (tom/estilo/limites) ainda fala "Daniel" literalmente —
   // troca pelo primeiro nome real. No-op quando o tenant É o Daniel.
