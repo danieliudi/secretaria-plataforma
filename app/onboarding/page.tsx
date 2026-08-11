@@ -19,7 +19,7 @@ export default async function OnboardingPage({
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
+    .select("slug, nome, cargo, frentes, usa_vocativo, tratamento, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -57,6 +57,8 @@ export default async function OnboardingPage({
       initialNome={tenant.nome ?? ""}
       initialCargo={tenant.cargo ?? ""}
       initialFrentes={(tenant.frentes ?? []).join(", ")}
+      initialUsaVocativo={tenant.usa_vocativo ?? true}
+      initialTratamento={tenant.tratamento ?? ""}
       initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}

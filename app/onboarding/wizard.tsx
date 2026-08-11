@@ -132,12 +132,23 @@ const TELEGRAM_BOT_STEPS = [
 
 type Step = 1 | 2 | 3 | 4;
 
+// Como a secretária chama a pessoa. Não tem "Sr./Sra." como preset de
+// propósito: escolher entre os dois exigiria adivinhar o gênero de quem se
+// cadastrou — o campo livre resolve isso sem errar com ninguém.
+type TratamentoOpcao = "chefe" | "nome" | "outro" | "nenhum";
+
+function primeiroNome(nomeCompleto: string): string {
+  return nomeCompleto.trim().split(/\s+/)[0] ?? "";
+}
+
 export default function OnboardingWizard(props: {
   slug: string;
   email: string;
   initialNome: string;
   initialCargo: string;
   initialFrentes: string;
+  initialUsaVocativo: boolean;
+  initialTratamento: string;
   initialProvider: Provider;
   googleConnected: boolean;
   outlookConnected: boolean;
@@ -153,6 +164,18 @@ export default function OnboardingWizard(props: {
   const [nome, setNome] = useState(props.initialNome);
   const [cargo, setCargo] = useState(props.initialCargo);
   const [frentes, setFrentes] = useState(props.initialFrentes);
+  // Deriva a opção a partir do que está salvo: sem vocativo → "nenhum";
+  // tratamento vazio → padrão; igual ao primeiro nome → "nome"; resto → livre.
+  const [tratamentoOpcao, setTratamentoOpcao] = useState<TratamentoOpcao>(() => {
+    if (!props.initialUsaVocativo) return "nenhum";
+    const t = props.initialTratamento.trim();
+    if (!t) return "chefe";
+    if (t.toLowerCase() === primeiroNome(props.initialNome).toLowerCase()) return "nome";
+    return "outro";
+  });
+  const [tratamentoLivre, setTratamentoLivre] = useState(
+    props.initialUsaVocativo ? props.initialTratamento : "",
+  );
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
   const [trelloApiKey, setTrelloApiKey] = useState("");
@@ -286,7 +309,20 @@ export default function OnboardingWizard(props: {
 
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
-    const result = await submitJson("/api/onboarding/persona", { nome, cargo, frentes: frentesArrTrim });
+    // "chefe" é o padrão do backend, então vai como null em vez de literal —
+    // assim mudar o padrão depois não exige migrar quem já se cadastrou.
+    const tratamento = tratamentoOpcao === "nome"
+      ? primeiroNome(nome)
+      : tratamentoOpcao === "outro"
+      ? tratamentoLivre.trim()
+      : null;
+    const result = await submitJson("/api/onboarding/persona", {
+      nome,
+      cargo,
+      frentes: frentesArrTrim,
+      usa_vocativo: tratamentoOpcao !== "nenhum",
+      tratamento: tratamento || null,
+    });
     if (result) setStep(2);
   }
 
@@ -430,6 +466,58 @@ export default function OnboardingWizard(props: {
                   Não sabe o que colocar? Pode deixar em branco e ajustar depois.
                 </span>
               </label>
+
+              <fieldset className="flex flex-col gap-2 border-0 p-0">
+                <legend className="mb-1 text-sm font-medium text-foreground">
+                  Como ela deve te chamar?
+                </legend>
+                <span className="mb-1 text-xs font-normal text-muted-2">
+                  Ela usa com parcimônia — não em toda mensagem.
+                </span>
+                {([
+                  { id: "chefe", label: "Chefe", ex: "“Chefe, sua reunião das 14h…”" },
+                  {
+                    id: "nome",
+                    label: "Meu primeiro nome",
+                    ex: `“${primeiroNome(nome) || "Seu nome"}, sua reunião das 14h…”`,
+                  },
+                  { id: "outro", label: "Do meu jeito", ex: "Sr. Yano, Dra. Marina, Capitã…" },
+                  { id: "nenhum", label: "Não me chame de nada", ex: "“Sua reunião das 14h…”" },
+                ] as const).map((opt) => {
+                  const ativo = tratamentoOpcao === opt.id;
+                  return (
+                    <label
+                      key={opt.id}
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
+                        ativo ? "border-cyan bg-surface-2" : "border-line hover:border-muted-2"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="tratamento"
+                        className="mt-1 accent-cyan"
+                        checked={ativo}
+                        onChange={() => setTratamentoOpcao(opt.id)}
+                      />
+                      <span className="flex flex-col">
+                        <span className="text-[13.5px] font-medium text-foreground">{opt.label}</span>
+                        <span className="text-xs font-normal text-muted">{opt.ex}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+                {tratamentoOpcao === "outro" && (
+                  <input
+                    className="mt-1 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                    value={tratamentoLivre}
+                    onChange={(e) => setTratamentoLivre(e.target.value)}
+                    maxLength={24}
+                    placeholder="Ex: Capitã"
+                    aria-label="Como você quer ser chamado"
+                  />
+                )}
+              </fieldset>
+
               <button
                 onClick={handlePersonaSubmit}
                 disabled={saving || !nome.trim()}

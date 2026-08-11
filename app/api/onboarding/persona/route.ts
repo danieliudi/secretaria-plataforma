@@ -9,7 +9,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "não autenticado" }, { status: 401 });
   }
 
-  let body: { nome?: unknown; cargo?: unknown; frentes?: unknown };
+  let body: {
+    nome?: unknown;
+    cargo?: unknown;
+    frentes?: unknown;
+    usa_vocativo?: unknown;
+    tratamento?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -26,6 +32,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "nome é obrigatório" }, { status: 400 });
   }
 
+  // Vocativo entra no system prompt de toda conversa — limita o tamanho aqui
+  // pra ninguém colar um parágrafo e distorcer o tom da secretária.
+  const usaVocativo = body.usa_vocativo !== false;
+  const tratamento = typeof body.tratamento === "string" ? body.tratamento.trim().slice(0, 24) : "";
+
   const admin = createServiceClient();
   const { error } = await admin
     .from("tenants")
@@ -33,6 +44,8 @@ export async function POST(request: Request) {
       nome,
       cargo: cargo || null,
       frentes,
+      usa_vocativo: usaVocativo,
+      tratamento: usaVocativo ? (tratamento || null) : null,
       updated_at: new Date().toISOString(),
     })
     .eq("auth_user_id", user.id);
