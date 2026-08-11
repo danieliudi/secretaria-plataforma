@@ -9,8 +9,9 @@ const bodyFont = Instrument_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Secretária — configure a sua",
-  description: "Plataforma de onboarding self-serve da secretária agêntica.",
+  title: "sinal — sua secretária no WhatsApp",
+  description:
+    "Uma secretária que cuida da sua agenda, do seu e-mail e das suas tarefas pelo WhatsApp. Você fala como falaria com uma pessoa.",
 };
 
 export default function RootLayout({
