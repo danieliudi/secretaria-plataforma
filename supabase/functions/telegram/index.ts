@@ -9,6 +9,7 @@ import {
 } from "../_shared/telegram.ts";
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
+import { describePdf, PdfLimiteExcedidoError, verificaTamanhoDeclarado } from "../_shared/pdf.ts";
 import type { Decision } from "../_shared/types.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
@@ -43,6 +44,13 @@ const DEFAULT_DECISION: Decision = {
 };
 
 interface TgPhotoSize { file_id: string; width: number; height: number; file_size?: number; }
+interface TgDocument { file_id: string; file_name?: string; mime_type?: string; file_size?: number; }
+
+function isPdfDocument(doc?: TgDocument): boolean {
+  if (!doc) return false;
+  if (doc.mime_type === "application/pdf") return true;
+  return (doc.file_name ?? "").toLowerCase().endsWith(".pdf");
+}
 
 function extractTenantSlug(reqUrl: string): string | null {
   const segments = new URL(reqUrl).pathname.split("/").filter(Boolean);
@@ -83,6 +91,7 @@ interface TelegramUpdate {
     caption?: string;
     voice?: { file_id: string; duration: number; mime_type?: string };
     photo?: TgPhotoSize[];
+    document?: TgDocument;
   };
 }
 
@@ -108,6 +117,17 @@ async function deriveInput(
       : `(imagem que enviei - ${description})`;
   }
 
+  if (message.document && isPdfDocument(message.document)) {
+    // Checa o tamanho que o Telegram já informou antes de baixar — evita
+    // gastar banda com um arquivo que vai ser recusado de qualquer forma.
+    verificaTamanhoDeclarado(message.document.file_size);
+    const { bytes } = await getTelegramFileBytes(message.document.file_id, telegramDeps);
+    const resumo = await describePdf(bytes, message.caption, tenantId);
+    return message.caption
+      ? `${message.caption}\n\n(PDF que enviei - ${resumo})`
+      : `(PDF que enviei - ${resumo})`;
+  }
+
   return null;
 }
 
@@ -126,7 +146,15 @@ Deno.serve(async (req: Request) => {
 
   const chatId = message.chat.id;
   const userId = `tg:${chatId}`;
-  const kind = message.text ? "text" : message.voice ? "voice" : message.photo ? "photo" : "other";
+  const kind = message.text
+    ? "text"
+    : message.voice
+    ? "voice"
+    : message.photo
+    ? "photo"
+    : isPdfDocument(message.document)
+    ? "document"
+    : "other";
 
   const dbg = getSupabaseClient();
   const tenantSlug = extractTenantSlug(req.url);
@@ -179,7 +207,9 @@ Deno.serve(async (req: Request) => {
         input = await deriveInput(message, telegramDeps, tenant.id);
       } catch (err) {
         await dbg.from("async_debug").insert({ step: "tg_media_err", detail: semDadoPessoal(err) });
-        const msg = semDadoPessoal(err).includes("GROQ_API_KEY")
+        const msg = err instanceof PdfLimiteExcedidoError
+          ? err.message
+          : semDadoPessoal(err).includes("GROQ_API_KEY")
           ? "Chefe, ainda nao consigo ouvir audio por aqui - me manda por texto que eu resolvo? 🙏"
           : "Chefe, nao consegui processar esse arquivo. Tenta de novo ou me manda por texto? 😅";
         await sendTelegramMessages(chatId, [msg], telegramDeps);
