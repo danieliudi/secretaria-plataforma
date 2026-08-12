@@ -339,13 +339,19 @@ Deno.serve(async (req: Request) => {
     } catch { /* observabilidade não pode derrubar o request */ }
   }
 
-  let body: { text?: unknown; decision?: Decision; from?: unknown; instance?: unknown };
+  let body: { text?: unknown; from?: unknown; instance?: unknown };
   try { body = await req.json(); } catch { return resp({ error: "Invalid JSON" }, 400); }
 
   if (!body.text || typeof body.text !== "string") {
     return resp({ error: "Missing 'text' field" }, 400);
   }
-  const text = body.text;
+  // Teto de tamanho: sem ele, um payload gigante vira uma chamada de
+  // classificador cara E uma linha enorme persistida pra sempre em
+  // conversation_history. 4000 chars é folgado pra qualquer mensagem humana
+  // de WhatsApp (inclusive uma transcrição de áudio longa) — trunca em vez de
+  // recusar, pra não quebrar o caso raro de mensagem legítima longa demais.
+  const MAX_TEXT_LEN = 4000;
+  const text = body.text.length > MAX_TEXT_LEN ? body.text.slice(0, MAX_TEXT_LEN) : body.text;
 
   // Trim defensivo — n8n já manda limpo, mas whitespace acidental não pode
   // virar um remetente distinto (memória) nem quebrar o número da Evolution.
@@ -375,7 +381,12 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    let decision = body.decision ?? await classify(text);
+    // Sempre classifica no servidor — nunca aceita `decision` do corpo. O
+    // campo existia pra permitir pular a chamada do classificador, mas isso
+    // também deixava QUALQUER chamador escolher o tier (e portanto o
+    // orçamento/tools liberados) da própria mensagem sem passar pelo Haiku.
+    // Nenhum caller legítimo do repositório manda esse campo hoje.
+    let decision = await classify(text);
     // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
     // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
     // A classificação sozinha já basta pra diagnóstico.
