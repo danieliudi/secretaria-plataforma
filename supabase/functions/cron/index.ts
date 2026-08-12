@@ -867,6 +867,20 @@ async function runAtrasadasCheck(env: EnvFn, tenantId: string, dryRun = false): 
  * mensagem seria poder de administrador dentro de um canal de conversa: quem
  * pegasse o WhatsApp desbloqueado do dono liberaria quem quisesse.
  */
+// Neutraliza marcação do WhatsApp (*negrito*, _itálico_, ~riscado~, `código`)
+// e quebra de linha em texto que o PRÓPRIO usuário escolheu no cadastro —
+// nome, cargo, frentes chegam aqui sem aprovação nenhuma ainda, então tratar
+// como conteúdo hostil vale tanto quanto tratar e-mail de terceiro como tal.
+// Sem isso, "nome" vira o lugar onde alguém tenta forjar uma linha de sistema
+// dentro da notificação que o dono lê pra decidir se aprova.
+function linhaSegura(texto: string, max = 80): string {
+  return texto
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[*_~`]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
 async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
   const sb = getSupabaseClient();
   const { data, error } = await sb
@@ -894,6 +908,25 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
   const jid = ownerJid(env);
   let avisados = 0;
   for (const p of pendentes) {
+    // Reivindica a linha ANTES de enviar, com UPDATE condicional — mesmo
+    // padrão de authorizeTelegramChatId em _shared/tenant.ts. O wizard chama
+    // esta task de forma best-effort e pode reenviar em paralelo (retry de
+    // rede, duplo clique); sem essa corrida resolvida no banco, cada chamada
+    // concorrente reenviaria o aviso pra TODOS os pendentes, não só pra quem
+    // acabou de se cadastrar.
+    const { data: reivindicado, error: claimErr } = await sb
+      .from("tenants")
+      .update({ avisado_em: new Date().toISOString() })
+      .eq("id", p.id)
+      .is("avisado_em", null)
+      .select("id")
+      .maybeSingle();
+    if (claimErr) {
+      console.error(`[cron] reivindicar aviso falhou (tenant ${p.id}): ${semDadoPessoal(claimErr.message)}`);
+      continue;
+    }
+    if (!reivindicado) continue; // outra invocação já reivindicou esta linha
+
     // O e-mail não existe em `tenants` (mora em auth.users) e é o que faz o
     // dono RECONHECER quem se cadastrou — dois "João Silva" só se distinguem
     // por ele. Falha aqui não impede o aviso: nome já basta pra saber que tem
@@ -906,12 +939,16 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
       console.error(`[cron] e-mail do cadastro ${p.id} não carregou: ${semDadoPessoal(err)}`);
     }
 
+    const nomeSeguro = p.nome?.trim() ? linhaSegura(p.nome) : "(sem nome)";
+    const cargoSeguro = p.cargo?.trim() ? linhaSegura(p.cargo) : "";
+    const frentesSeguras = (p.frentes ?? []).slice(0, 10).map((f) => linhaSegura(f, 40)).filter(Boolean);
+
     const linhas = [
       "🔔 *Cadastro novo esperando aprovação*",
       "",
-      p.nome?.trim() || "(sem nome)",
+      nomeSeguro,
       email,
-      p.cargo?.trim() ? `${p.cargo}${p.frentes?.length ? ` · ${p.frentes.join(", ")}` : ""}` : "",
+      cargoSeguro ? `${cargoSeguro}${frentesSeguras.length ? ` · ${frentesSeguras.join(", ")}` : ""}` : "",
       "",
       `Google ${p.google_refresh_token_secret_id ? "conectado ✅" : "pendente"} · quer ${p.channel_preference ?? "—"}`,
       "",
@@ -919,12 +956,11 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
     ].filter((l) => l !== "");
     try {
       await sendWhatsAppText(jid, linhas.join("\n"), { fetch, env });
-      // Marca DEPOIS do envio: se o envio falhar, a próxima varredura tenta de
-      // novo em vez de perder o aviso em silêncio.
-      await sb.from("tenants").update({ avisado_em: new Date().toISOString() }).eq("id", p.id);
       avisados++;
     } catch (err) {
-      // Sem o slug no log: só o id, que não diz nada sobre quem é a pessoa.
+      // Envio falhou depois de reivindicado: libera de novo pra próxima
+      // varredura tentar, em vez de perder o aviso em silêncio pra sempre.
+      await sb.from("tenants").update({ avisado_em: null }).eq("id", p.id);
       console.error(`[cron] aviso de cadastro novo falhou (tenant ${p.id}): ${semDadoPessoal(err)}`);
     }
   }

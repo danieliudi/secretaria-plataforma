@@ -214,9 +214,22 @@ export async function POST(request: Request) {
 
   // Este é o último passo do wizard — é aqui que "terminou o cadastro"
   // acontece de verdade, e não no primeiro login (onde só existe o e-mail).
-  // Sem await: o aviso ao dono não pode segurar a tela de quem se cadastrou.
+  //
+  // AGUARDADO de propósito, ao contrário do que o comentário antigo aqui
+  // dizia: numa function serverless, uma promessa solta (`void`) corre risco
+  // real de o container congelar antes do fetch sair, e o aviso simplesmente
+  // não acontece — sem erro, sem log, sem retry. dispararTarefaCron já é
+  // best-effort (nunca lança, tem timeout de 8s) — aguardar só troca "talvez
+  // nunca saia" por "no pior caso, +8s neste POST".
+  //
+  // O guard abaixo (!avisado_em) não evita disparo duplicado por si só — o
+  // corpo real do cadastro pode reenviar este passo em paralelo antes que
+  // avisado_em seja gravado. A trava contra duplicata mora do lado do cron,
+  // que reivindica cada tenant pendente com UPDATE condicional antes de
+  // enviar (ver runNovosCadastros) — chamar a task de mais é seguro, ela só
+  // encontra `avisado_em` já preenchido e não faz nada.
   if (!tenant.aprovado_em && !tenant.avisado_em) {
-    void dispararTarefaCron("novos_cadastros");
+    await dispararTarefaCron("novos_cadastros");
   }
 
   return NextResponse.json({
