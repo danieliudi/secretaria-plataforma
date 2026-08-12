@@ -68,7 +68,8 @@ interface GCalEventResponse {
 // ─── API pública ─────────────────────────────────────────────────────────────
 
 /**
- * Cria um evento no calendar primário do Daniel.
+ * Cria um evento no calendar primário do tenant (token vem de `deps.getAccessToken`,
+ * já resolvido pro tenant certo por quem monta as deps — ver fast/index.ts).
  * Lança Error com status + body em qualquer falha HTTP.
  */
 export async function createEvent(
@@ -110,7 +111,8 @@ export async function createEvent(
 }
 
 /**
- * Remove um evento do calendar primário do Daniel.
+ * Remove um evento do calendar primário do tenant (mesmo token tenant-scoped
+ * de createEvent).
  * 410 (evento já removido antes) é tratado como sucesso — idempotente, pra
  * não travar numa mensagem de erro por algo que já aconteceu.
  */
