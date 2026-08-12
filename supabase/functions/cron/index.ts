@@ -331,6 +331,7 @@ async function runScheduled(env: EnvFn, tenantId: string): Promise<{ sent: numbe
           text: r.text,
           fire_at: next.toISOString(),
           recurrence: r.recurrence,
+          tenant_id: tenantId,
         });
         if (insErr) {
           console.error(`[cron] recorrência '${r.id}' reagendar falhou:`, semDadoPessoal(insErr.message));
