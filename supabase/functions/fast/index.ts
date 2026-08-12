@@ -105,6 +105,8 @@ import {
 import { getGoogleAccessToken } from "../_shared/google-oauth.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
+import { getSupabaseClient } from "../_shared/supabase.ts";
+import { LIMITE_OBSERVACAO_POR_HORA, registraChamadaJanela } from "../_shared/rate-limit.ts";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -1185,10 +1187,12 @@ Deno.serve(async (req: Request) => {
   // global — comportamento de sempre.
   const tenantSlugRaw = typeof body.tenant_slug === "string" ? body.tenant_slug.trim() : "";
   let deps = defaultFastWithToolsDeps();
+  let tenantId: string | undefined;
   if (tenantSlugRaw) {
     try {
       const tenant = await getTenantBySlug(tenantSlugRaw);
       if (tenant) {
+        tenantId = tenant.id;
         const persona: TenantPersona = {
           nome: tenant.nome,
           cargo: tenant.cargo,
@@ -1207,6 +1211,17 @@ Deno.serve(async (req: Request) => {
     } catch (err) {
       console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${semDadoPessoal(err)}`);
     }
+  }
+
+  // MODO OBSERVAÇÃO (ver _shared/rate-limit.ts): só mede e loga quando
+  // passaria do teto — nunca bloqueia a chamada. Sem dado real de uso ainda
+  // pra calibrar um teto de bloqueio de verdade.
+  const chamadasNaJanela = await registraChamadaJanela(tenantId);
+  if (chamadasNaJanela !== null && chamadasNaJanela > LIMITE_OBSERVACAO_POR_HORA) {
+    await getSupabaseClient().from("async_debug").insert({
+      step: "rate_limit_observe",
+      detail: `tenant_slug=${tenantSlugRaw || "?"} chamadas_na_hora=${chamadasNaJanela}`,
+    });
   }
 
   try {
