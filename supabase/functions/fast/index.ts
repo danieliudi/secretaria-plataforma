@@ -787,7 +787,7 @@ export function defaultFastWithToolsDeps(
     },
     loadHistory: (userId) => loadConversationHistory(userId),
     saveTurn: (userId, userText, assistantText) =>
-      appendConversationTurn(userId, userText, assistantText),
+      appendConversationTurn(userId, userText, assistantText, tenantId),
     loadProfile: (userId) => loadUserProfile(userId),
   };
 }

@@ -32,6 +32,10 @@ type InsertRow = {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  // Opcional na leitura (uma chamada sem tenant resolvido não pode falhar),
+  // mas toda chamada que TEM o tenant precisa passá-lo — sem isso a linha cai
+  // fora do ON DELETE CASCADE por tenant e nenhuma exclusão a alcança depois.
+  tenant_id?: string | null;
 };
 
 export interface ConversationDeps {
@@ -84,6 +88,7 @@ export async function appendConversationTurn(
   userId: string,
   userText: string,
   assistantText: string,
+  tenantId?: string | null,
   deps: ConversationDeps = defaultConversationDeps(),
 ): Promise<void> {
   try {
@@ -97,12 +102,14 @@ export async function appendConversationTurn(
         role: "user",
         content: userText,
         created_at: new Date(t).toISOString(),
+        tenant_id: tenantId ?? null,
       },
       {
         user_id: userId,
         role: "assistant",
         content: assistantText,
         created_at: new Date(t + 1).toISOString(),
+        tenant_id: tenantId ?? null,
       },
     ]);
     if (error) throw new Error(error.message);
@@ -122,6 +129,7 @@ export async function appendConversationTurn(
 export async function appendAssistantMessage(
   userId: string,
   text: string,
+  tenantId?: string | null,
   deps: ConversationDeps = defaultConversationDeps(),
 ): Promise<void> {
   try {
@@ -131,6 +139,7 @@ export async function appendAssistantMessage(
         role: "assistant",
         content: text,
         created_at: new Date().toISOString(),
+        tenant_id: tenantId ?? null,
       },
     ]);
     if (error) throw new Error(error.message);

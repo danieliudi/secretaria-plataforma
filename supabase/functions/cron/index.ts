@@ -184,7 +184,7 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
 }
 
 // Lembretes de agenda: evento começando dentro de LEAD_MIN ainda não avisado.
-async function runReminders(env: EnvFn): Promise<{ sent: number; scanned: number }> {
+async function runReminders(env: EnvFn, tenantId: string): Promise<{ sent: number; scanned: number }> {
   const sb = getSupabaseClient();
   const now = Date.now();
   const events = await getUpcoming(SCAN_AHEAD_MIN, env);
@@ -206,7 +206,7 @@ async function runReminders(env: EnvFn): Promise<{ sent: number; scanned: number
     const mins = Math.max(0, Math.round(minsUntil));
     const text = `⏰ Em ~${mins} min: ${ev.title} (${fmtTime(ev.startISO)})${loc}`;
     await sendWhatsAppText(ownerJid(env), text, { fetch, env });
-    await appendAssistantMessage(ownerJid(env), text);
+    await appendAssistantMessage(ownerJid(env), text, tenantId);
     await sb.from("reminders_sent").insert({ event_id: ev.id, event_start: ev.startISO, title: ev.title });
     sent++;
   }
@@ -214,7 +214,7 @@ async function runReminders(env: EnvFn): Promise<{ sent: number; scanned: number
 }
 
 // Alertas de prazo: tasks Beehave vencidas ou vencendo nas próximas 24h.
-async function runAlerts(env: EnvFn): Promise<{ sent: number; scanned: number }> {
+async function runAlerts(env: EnvFn, tenantId: string): Promise<{ sent: number; scanned: number }> {
   const sb = getSupabaseClient();
   const now = Date.now();
   const tasks = await getTasksWithDue(env);
@@ -240,7 +240,7 @@ async function runAlerts(env: EnvFn): Promise<{ sent: number; scanned: number }>
     const label = t.list ? `${t.frente}/${t.list}` : t.frente;
     const text = `${icon} Prazo Beehave — ${label}: "${t.name}" ${quando}`;
     await sendWhatsAppText(ownerJid(env), text, { fetch, env });
-    await appendAssistantMessage(ownerJid(env), text);
+    await appendAssistantMessage(ownerJid(env), text, tenantId);
     await sb.from("clickup_alerts_sent").insert({ task_id: t.id, due_ms: t.dueMs, name: t.name });
     sent++;
   }
@@ -249,7 +249,7 @@ async function runAlerts(env: EnvFn): Promise<{ sent: number; scanned: number }>
 
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
-async function runBrief(env: EnvFn): Promise<{ len: number }> {
+async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> {
   let newsBlock = "";
   try {
     newsBlock = await getSectorNewsBlock(NEWS_FRENTES);
@@ -273,7 +273,7 @@ async function runBrief(env: EnvFn): Promise<{ len: number }> {
 
   const text = await askFast(prompt, env) || "Sem itens pra hoje. Bom dia!";
   await sendWhatsAppText(ownerJid(env), text, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), text);
+  await appendAssistantMessage(ownerJid(env), text, tenantId);
   return { len: text.length };
 }
 
@@ -317,7 +317,7 @@ async function runScheduled(env: EnvFn, tenantId: string): Promise<{ sent: numbe
   for (const r of pending) {
     try {
       await deliverTo(r.user_id, r.text, env);
-      await appendAssistantMessage(r.user_id, r.text);
+      await appendAssistantMessage(r.user_id, r.text, tenantId);
       await sb
         .from("scheduled_reminders")
         .update({ sent_at: new Date().toISOString() })
@@ -347,7 +347,7 @@ async function runScheduled(env: EnvFn, tenantId: string): Promise<{ sent: numbe
 // Review semanal de marketing, por frente com GA4 configurado. Junta métricas
 // do site (GA4) + entregas/prazos das tarefas e pede ao /fast uma análise:
 // digest + otimizações acionáveis + cobrança em rascunho pra agência.
-async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number }> {
+async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: number; frentes: number }> {
   const map = tryLoadGa4Map(env);
   if (!map || Object.keys(map).length === 0) {
     return { sent: 0, frentes: 0 };
@@ -399,7 +399,7 @@ async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number
       const text = await askFast(prompt, env) || "Sem dados suficientes pro review essa semana.";
       const message = `📈 Review semanal — ${frente}\n\n${text}`;
       await sendWhatsAppText(owner, message, { fetch, env });
-      await appendAssistantMessage(owner, message);
+      await appendAssistantMessage(owner, message, tenantId);
       sent++;
     } catch (err) {
       console.error(`[cron] marketing '${frente}' falhou:`, semDadoPessoal(err));
@@ -421,7 +421,7 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
   ) || "Sem itens em aberto na Beehave esta semana.";
   const panorama = `📊 Panorama da semana — Beehave\n\n${text}`;
   await sendWhatsAppText(ownerJid(env), panorama, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), panorama);
+  await appendAssistantMessage(ownerJid(env), panorama, tenantId);
 
   // Manutenção da memória de longo prazo — silenciosa, não vira mensagem.
   // Só toca em quem passou do limiar; pra maioria é um SELECT e nada mais.
@@ -440,7 +440,7 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
     const staleMsg =
       `🗂️ Tem ${stale.length} nota(s) rápida(s) paradas há mais de 7 dias — quer que eu vire task, ou posso arquivar?\n\n${lines}`;
     await sendWhatsAppText(ownerJid(env), staleMsg, { fetch, env });
-    await appendAssistantMessage(ownerJid(env), staleMsg);
+    await appendAssistantMessage(ownerJid(env), staleMsg, tenantId);
   }
 
   return { len: text.length };
@@ -472,7 +472,7 @@ async function getStaleCaptures(tenantId: string, days = 7): Promise<Array<{ tex
 // Recap de fim de dia: só com dados reais (tasks com prazo hoje que continuam
 // abertas) — sem inventar o que foi concluído, isso o gerenciador de tarefas
 // não devolve de forma confiável.
-async function runEveningRecap(env: EnvFn): Promise<{ len: number }> {
+async function runEveningRecap(env: EnvFn, tenantId: string): Promise<{ len: number }> {
   const text = await askFast(
     "Monte meu recap de fim de dia, curto e em tópicos. Baseie-se SÓ nos dados " +
       "que você tem acesso (tarefas, agenda) — NÃO invente o que foi concluído " +
@@ -486,7 +486,7 @@ async function runEveningRecap(env: EnvFn): Promise<{ len: number }> {
   ) || "Sem pendências de hoje em aberto. Bom descanso, chefe.";
   const message = `🌙 Recap do dia\n\n${text}`;
   await sendWhatsAppText(ownerJid(env), message, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), message);
+  await appendAssistantMessage(ownerJid(env), message, tenantId);
   return { len: text.length };
 }
 
@@ -523,7 +523,7 @@ async function getEventosEntre(deISO: string, ateISO: string, env: EnvFn): Promi
 // validar que satori/resvg carregam no runtime — sem isso, a única forma de
 // exercer o caminho de render é esperar uma agenda de verdade ficar apertada,
 // e uma falha de import ficaria escondida por semanas.
-async function runAgendaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+async function runAgendaCheck(env: EnvFn, tenantId: string, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
   // Janela: o dia de AMANHÃ inteiro, em SP. Roda de noite pra dar tempo de
   // reagir — avisar de manhã que o dia está impossível não ajuda em nada.
   const agora = new Date();
@@ -599,7 +599,7 @@ async function runAgendaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boo
     `${fmtTime(maratona[0].inicio.toISOString())} às ${fmtTime(fimMaratona.toISOString())} — ` +
     `${duracaoTexto(totalMin)} sem pausa. Quer que eu empurre o último?`;
   await sendWhatsAppText(jid, texto, { fetch, env });
-  await appendAssistantMessage(jid, texto);
+  await appendAssistantMessage(jid, texto, tenantId);
 
   return { avisou: true };
 }
@@ -713,7 +713,7 @@ async function runConflitoCheck(
     `"${pior.b.titulo}", às ${fmtTime(inicioColisao.toISOString())}. ` +
     (buraco ? `Posso empurrar o "${menor.titulo}" pras ${fmtTime(buraco.toISOString())}?` : "Quer que eu remarque um dos dois?");
   await sendWhatsAppText(jid, texto, { fetch, env });
-  await appendAssistantMessage(jid, texto);
+  await appendAssistantMessage(jid, texto, tenantId);
 
   await sb.from("avisos_enviados").insert({ tenant_id: tenantId, tipo: "conflito_agenda", chave });
   return { avisou: true };
@@ -723,7 +723,7 @@ async function runConflitoCheck(
 
 const ROTULOS_DIA = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 
-async function runSemanaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+async function runSemanaCheck(env: EnvFn, tenantId: string, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
   // Roda domingo à noite: a janela é a semana que começa amanhã.
   const agora = new Date();
   const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric" }).format(agora));
@@ -787,7 +787,7 @@ async function runSemanaCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boo
     `${diaPorExtenso(maisCheio.diaSemana)} é o dia mais cheio, com ${duracaoTexto(maisCheio.minutosOcupados)}.` +
     (acoes.length > 1 ? ` ${acoes[1]}` : "");
   await sendWhatsAppText(jid, texto, { fetch, env });
-  await appendAssistantMessage(jid, texto);
+  await appendAssistantMessage(jid, texto, tenantId);
 
   return { avisou: true };
 }
@@ -798,7 +798,7 @@ function diaPorExtenso(diaSemana: number): string {
 
 // ─── tarefas atrasadas ──────────────────────────────────────────────────────
 
-async function runAtrasadasCheck(env: EnvFn, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
+async function runAtrasadasCheck(env: EnvFn, tenantId: string, dryRun = false): Promise<{ avisou: boolean; motivo?: string; card_kb?: number }> {
   const agora = Date.now();
   const tarefas = await getTasksWithDue(env);
   const atrasadas = priorizaAtrasadas(
@@ -853,7 +853,7 @@ async function runAtrasadasCheck(env: EnvFn, dryRun = false): Promise<{ avisou: 
     `A mais antiga é "${pior.titulo}", há ${pior.diasAtraso} dia${pior.diasAtraso === 1 ? "" : "s"}. ` +
     "Quer remarcar os prazos ou fechar alguma?";
   await sendWhatsAppText(jid, texto, { fetch, env });
-  await appendAssistantMessage(jid, texto);
+  await appendAssistantMessage(jid, texto, tenantId);
 
   return { avisou: true };
 }
@@ -956,21 +956,21 @@ Deno.serve(async (req: Request) => {
     if (!tenant) throw new Error(`tenant '${DEFAULT_TENANT_SLUG}' não encontrado`);
     const env = await buildTenantEnv(tenant);
 
-    if (task === "reminders") return json({ ok: true, ...(await runReminders(env)) });
-    if (task === "alerts") return json({ ok: true, ...(await runAlerts(env)) });
-    if (task === "brief") return json({ ok: true, ...(await runBrief(env)) });
+    if (task === "reminders") return json({ ok: true, ...(await runReminders(env, tenant.id)) });
+    if (task === "alerts") return json({ ok: true, ...(await runAlerts(env, tenant.id)) });
+    if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant.id)) });
     if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
     if (task === "scheduled") return json({ ok: true, ...(await runScheduled(env, tenant.id)) });
-    if (task === "marketing") return json({ ok: true, ...(await runMarketing(env)) });
-    if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env)) });
-    if (task === "agenda_check") return json({ ok: true, ...(await runAgendaCheck(env)) });
-    if (task === "agenda_check_dry") return json({ ok: true, ...(await runAgendaCheck(env, true)) });
+    if (task === "marketing") return json({ ok: true, ...(await runMarketing(env, tenant.id)) });
+    if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env, tenant.id)) });
+    if (task === "agenda_check") return json({ ok: true, ...(await runAgendaCheck(env, tenant.id)) });
+    if (task === "agenda_check_dry") return json({ ok: true, ...(await runAgendaCheck(env, tenant.id, true)) });
     if (task === "conflito_check") return json({ ok: true, ...(await runConflitoCheck(env, tenant.id)) });
     if (task === "conflito_check_dry") return json({ ok: true, ...(await runConflitoCheck(env, tenant.id, true)) });
-    if (task === "semana_check") return json({ ok: true, ...(await runSemanaCheck(env)) });
-    if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, true)) });
-    if (task === "atrasadas_check") return json({ ok: true, ...(await runAtrasadasCheck(env)) });
-    if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, true)) });
+    if (task === "semana_check") return json({ ok: true, ...(await runSemanaCheck(env, tenant.id)) });
+    if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, tenant.id, true)) });
+    if (task === "atrasadas_check") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id)) });
+    if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id, true)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     return json({
       error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
