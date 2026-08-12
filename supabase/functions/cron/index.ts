@@ -247,9 +247,65 @@ async function runAlerts(env: EnvFn, tenantId: string): Promise<{ sent: number; 
   return { sent, scanned: tasks.length };
 }
 
+// Avisa novidade do produto (tabela `atualizacoes`, ver /novidades no site)
+// uma vez só, como bloco separado antes do resumo — não fica repetindo.
+//
+// Primeira vez que calculamos isto pra um tenant (novidade_vista_em NULL):
+// marca como visto até agora SEM anunciar nada. Quem está começando agora
+// não viveu o "antes" das entradas antigas — despejar histórico só confunde.
+async function buildNovidadeBlock(tenantId: string): Promise<string | null> {
+  const sb = getSupabaseClient();
+
+  const { data: tenantRow, error: tErr } = await sb
+    .from("tenants")
+    .select("novidade_vista_em")
+    .eq("id", tenantId)
+    .maybeSingle();
+  if (tErr || !tenantRow) {
+    console.error("[cron] brief: falha ao ler novidade_vista_em:", semDadoPessoal(tErr?.message));
+    return null;
+  }
+
+  const { data: entradas, error: eErr } = await sb
+    .from("atualizacoes")
+    .select("descricao, publicado_em")
+    .order("publicado_em", { ascending: true });
+  if (eErr || !entradas || entradas.length === 0) {
+    if (eErr) console.error("[cron] brief: falha ao ler atualizacoes:", semDadoPessoal(eErr.message));
+    return null;
+  }
+
+  const vistoEm = tenantRow.novidade_vista_em as string | null;
+  const maisRecente = entradas[entradas.length - 1].publicado_em as string;
+
+  if (!vistoEm) {
+    await sb.from("tenants").update({ novidade_vista_em: maisRecente }).eq("id", tenantId);
+    return null;
+  }
+
+  const naoVistas = entradas.filter((e) => (e.publicado_em as string) > vistoEm);
+  if (naoVistas.length === 0) return null;
+
+  await sb.from("tenants").update({ novidade_vista_em: maisRecente }).eq("id", tenantId);
+
+  return naoVistas.length === 1
+    ? `✨ Novidade: ${naoVistas[0].descricao}`
+    : `✨ Novidades:\n${naoVistas.map((e) => `• ${e.descricao}`).join("\n")}`;
+}
+
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
 async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> {
+  try {
+    const novidade = await buildNovidadeBlock(tenantId);
+    if (novidade) {
+      await sendWhatsAppText(ownerJid(env), novidade, { fetch, env });
+      await appendAssistantMessage(ownerJid(env), novidade, tenantId);
+    }
+  } catch (err) {
+    console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
+  }
+
   let newsBlock = "";
   try {
     newsBlock = await getSectorNewsBlock(NEWS_FRENTES);

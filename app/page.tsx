@@ -85,12 +85,20 @@ export default async function Home() {
           <span className="h-2 w-2 rounded-sm bg-cyan" />
           <span className="text-[13.5px] font-bold tracking-tight text-foreground">sinal</span>
         </div>
-        <Link
-          href="/login"
-          className="rounded-lg border border-line px-4 py-2 text-[13.5px] font-semibold text-foreground transition hover:border-muted-2"
-        >
-          Entrar
-        </Link>
+        <div className="flex items-center gap-6">
+          <Link
+            href="/novidades"
+            className="text-[13.5px] font-semibold text-muted transition hover:text-foreground"
+          >
+            Novidades
+          </Link>
+          <Link
+            href="/login"
+            className="rounded-lg border border-line px-4 py-2 text-[13.5px] font-semibold text-foreground transition hover:border-muted-2"
+          >
+            Entrar
+          </Link>
+        </div>
       </header>
 
       {/* ── hero ── */}
