@@ -9,7 +9,7 @@ import {
 } from "../_shared/telegram.ts";
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
-import { describePdf, PdfLimiteExcedidoError, verificaTamanhoDeclarado } from "../_shared/pdf.ts";
+import { describePdf, PdfInvalidoError, PdfLimiteExcedidoError, verificaTamanhoDeclarado } from "../_shared/pdf.ts";
 import type { Decision } from "../_shared/types.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
@@ -207,7 +207,7 @@ Deno.serve(async (req: Request) => {
         input = await deriveInput(message, telegramDeps, tenant.id);
       } catch (err) {
         await dbg.from("async_debug").insert({ step: "tg_media_err", detail: semDadoPessoal(err) });
-        const msg = err instanceof PdfLimiteExcedidoError
+        const msg = err instanceof PdfLimiteExcedidoError || err instanceof PdfInvalidoError
           ? err.message
           : semDadoPessoal(err).includes("GROQ_API_KEY")
           ? "Chefe, ainda nao consigo ouvir audio por aqui - me manda por texto que eu resolvo? 🙏"
