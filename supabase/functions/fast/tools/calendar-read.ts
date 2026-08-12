@@ -11,6 +11,8 @@ const TIMEZONE = "America/Sao_Paulo";
 const SP_OFFSET = "-03:00";
 
 export interface CalendarEvent {
+  /** ID do evento na Calendar API — necessário pra delete_event/update_event. */
+  id: string;
   /** "HH:MM" no fuso de SP. `null` para eventos de dia inteiro. */
   time: string | null;
   title: string;
@@ -40,6 +42,7 @@ interface GCalEventTime {
 }
 
 interface GCalEvent {
+  id: string;
   summary?: string;
   location?: string;
   start: GCalEventTime;
@@ -64,6 +67,7 @@ function formatTimeInSP(isoDateTime: string): string {
 
 function mapEvent(e: GCalEvent): CalendarEvent {
   return {
+    id: e.id,
     time: e.start.dateTime ? formatTimeInSP(e.start.dateTime) : null,
     title: e.summary ?? "(sem título)",
     location: e.location ?? null,

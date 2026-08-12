@@ -28,6 +28,9 @@ import {
   type CreatedEvent,
   type CreateEventInput,
   createEvent as defaultCreateEvent,
+  deleteEvent as defaultDeleteEvent,
+  type UpdateEventInput,
+  updateEvent as defaultUpdateEvent,
 } from "./tools/calendar-write.ts";
 import {
   type ArchiveQuickCapturesInput,
@@ -178,6 +181,56 @@ const TOOLS = [
         },
       },
       required: ["title", "start", "end"],
+    },
+  },
+  {
+    name: "delete_event",
+    description:
+      "Remove um evento do Google Calendar do chefe. Use para 'cancela', 'descarta', 'apaga', 'tira da agenda' — qualquer pedido de remover algo já marcado. Precisa do event_id: se ele não veio de uma chamada recente de get_next_events/get_events_by_date nesta conversa, chame uma dessas primeiro pra descobrir o id certo antes de deletar. NUNCA invente um event_id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        event_id: {
+          type: "string",
+          description: "ID do evento (campo 'id' devolvido por get_next_events/get_events_by_date).",
+        },
+      },
+      required: ["event_id"],
+    },
+  },
+  {
+    name: "update_event",
+    description:
+      "Altera um evento existente no Google Calendar do chefe (horário, título, local ou descrição) sem apagar e recriar. Use para 'remarca', 'muda pra', 'adianta', 'atrasa', 'renomeia esse evento'. Precisa do event_id — mesma regra do delete_event: se não veio de uma chamada recente, busque primeiro. Só inclua os campos que realmente mudam; o resto do evento continua como estava.",
+    input_schema: {
+      type: "object",
+      properties: {
+        event_id: {
+          type: "string",
+          description: "ID do evento (campo 'id' devolvido por get_next_events/get_events_by_date).",
+        },
+        title: {
+          type: "string",
+          description: "(opcional) Novo título.",
+        },
+        start: {
+          type: "string",
+          description: "(opcional) Novo início em ISO 8601 com offset -03:00.",
+        },
+        end: {
+          type: "string",
+          description: "(opcional) Novo fim em ISO 8601 com offset -03:00.",
+        },
+        description: {
+          type: "string",
+          description: "(opcional) Nova descrição/notas.",
+        },
+        location: {
+          type: "string",
+          description: "(opcional) Novo local.",
+        },
+      },
+      required: ["event_id"],
     },
   },
   {
@@ -516,10 +569,13 @@ const TOOLS = [
 
 const TOOLS_INSTRUCTIONS_TEMPLATE = `
 ACESSO À AGENDA (Google Calendar)
-- 3 tools de calendar: get_next_events, get_events_by_date, create_event.
+- 5 tools de calendar: get_next_events, get_events_by_date, create_event, delete_event, update_event.
 - get_next_events(n): próximos eventos sem data específica.
 - get_events_by_date(date): eventos de um dia concreto.
 - create_event(title, start, end, ...): cria um evento. Use offset -03:00 (SP fixo).
+- delete_event(event_id): remove um evento. update_event(event_id, ...): muda horário/título/local sem recriar.
+- delete_event e update_event exigem o event_id de verdade (campo 'id' de get_next_events/get_events_by_date) — se não tiver vindo numa chamada recente desta conversa, busque antes. NUNCA invente um id.
+- Se uma tool falhar ou não existir pro que o chefe pediu, diga isso claramente. NUNCA invente motivo técnico (ex: "problema de autenticação", "sistema fora do ar") pra disfarçar erro ou capacidade que não existe — isso é pior que admitir o limite.
 
 ACESSO AO EMAIL (Gmail, somente leitura)
 - 1 tool: list_recent_emails(n, query?).
@@ -642,6 +698,8 @@ export interface FastWithToolsDeps {
     getNextEvents: (n: number) => Promise<CalendarEvent[]>;
     getEventsByDate: (date: string) => Promise<CalendarEvent[]>;
     createEvent: (input: CreateEventInput) => Promise<CreatedEvent>;
+    deleteEvent: (eventId: string) => Promise<void>;
+    updateEvent: (eventId: string, input: UpdateEventInput) => Promise<CreatedEvent>;
     saveQuickCapture: (input: QuickCaptureInput) => Promise<QuickCaptureResult>;
     archiveQuickCaptures: (input: ArchiveQuickCapturesInput) => Promise<ArchiveQuickCapturesResult>;
     listRecentEmails: (input: ListEmailsInput) => Promise<EmailMessage[]>;
@@ -759,6 +817,8 @@ export function defaultFastWithToolsDeps(
       getNextEvents: (n) => defaultGetNextEvents(n, { getAccessToken, fetch, now: () => new Date() }),
       getEventsByDate: (date) => defaultGetEventsByDate(date, { getAccessToken, fetch, now: () => new Date() }),
       createEvent: (input) => defaultCreateEvent(input, { getAccessToken, fetch }),
+      deleteEvent: (eventId) => defaultDeleteEvent(eventId, { getAccessToken, fetch }),
+      updateEvent: (eventId, input) => defaultUpdateEvent(eventId, input, { getAccessToken, fetch }),
       saveQuickCapture: (input) => defaultSaveQuickCapture(input, quickCaptureDeps()),
       archiveQuickCaptures: (input) => defaultArchiveQuickCaptures(input, quickCaptureDeps()),
       listRecentEmails: (input) => defaultListRecentEmails(input, { getAccessToken, fetch }),
@@ -816,6 +876,20 @@ async function executeTool(
         title: String(input.title),
         start: String(input.start),
         end: String(input.end),
+        description: input.description ? String(input.description) : undefined,
+        location: input.location ? String(input.location) : undefined,
+      });
+      return { event };
+    }
+    if (name === "delete_event") {
+      await deps.tools.deleteEvent(String(input.event_id));
+      return { ok: true };
+    }
+    if (name === "update_event") {
+      const event = await deps.tools.updateEvent(String(input.event_id), {
+        title: input.title ? String(input.title) : undefined,
+        start: input.start ? String(input.start) : undefined,
+        end: input.end ? String(input.end) : undefined,
         description: input.description ? String(input.description) : undefined,
         location: input.location ? String(input.location) : undefined,
       });
