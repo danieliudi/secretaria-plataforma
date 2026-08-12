@@ -8,6 +8,14 @@ import { createClient } from "@/lib/supabase/server";
 
 const BASE = "https://api.trello.com/1";
 
+// Teto de boards processados por chamada. Sem isso, uma conta Trello com
+// muitos boards vira um fan-out sem fim de chamadas sequenciais — e como a
+// key aqui costuma ser a COMPARTILHADA da plataforma (não a do usuário),
+// qualquer conta logada (aprovada ou não) pode consumir o teto de
+// requisições dessa key só colando um token válido.
+const MAX_BOARDS = 20;
+const UPSTREAM_TIMEOUT_MS = 10_000;
+
 interface TrelloList {
   id: string;
   name: string;
@@ -18,7 +26,7 @@ async function trello(path: string, apiKey: string, token: string) {
   const url = new URL(`${BASE}${path}`);
   url.searchParams.set("key", apiKey);
   url.searchParams.set("token", token);
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
   // Trello devolve texto puro (não JSON) em vários erros de auth — ex: "invalid key".
   const raw = await res.text();
   const data = raw ? (() => { try { return JSON.parse(raw); } catch { return raw; } })() : null;
@@ -67,8 +75,11 @@ export async function POST(request: Request) {
       token,
     );
 
+    const todosBoards = boards ?? [];
+    const boardsProcessados = todosBoards.slice(0, MAX_BOARDS);
+
     const lists: TrelloList[] = [];
-    for (const board of boards ?? []) {
+    for (const board of boardsProcessados) {
       const boardLists: Array<{ id: string; name: string }> = await trello(
         `/boards/${board.id}/lists?fields=name&filter=open`,
         apiKey,
@@ -79,7 +90,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ lists });
+    return NextResponse.json({ lists, truncated: todosBoards.length > MAX_BOARDS });
   } catch (err) {
     return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 502 });
   }

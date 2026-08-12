@@ -5,6 +5,13 @@ import { createClient } from "@/lib/supabase/server";
 
 const BASE = "https://api.clickup.com/api/v2";
 
+// Teto de spaces processados (somado entre todos os teams). Sem isso, um
+// workspace grande vira um fan-out sem fim de chamadas encadeadas (team →
+// space → folder/list) — qualquer conta logada (aprovada ou não) pode segurar
+// o servidor nesse loop só colando um token de um workspace grande.
+const MAX_SPACES = 30;
+const UPSTREAM_TIMEOUT_MS = 10_000;
+
 interface ClickUpList {
   id: string;
   name: string;
@@ -12,7 +19,10 @@ interface ClickUpList {
 }
 
 async function clickup(path: string, token: string) {
-  const res = await fetch(`${BASE}${path}`, { headers: { Authorization: token } });
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Authorization: token },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data.err ?? `ClickUp recusou (${res.status}) em ${path}`);
   return data;
@@ -40,10 +50,21 @@ export async function POST(request: Request) {
   try {
     const { teams } = await clickup("/team", token);
     const lists: ClickUpList[] = [];
+    let spacesProcessados = 0;
+    let truncated = false;
 
     for (const team of teams ?? []) {
+      if (spacesProcessados >= MAX_SPACES) {
+        truncated = true;
+        break;
+      }
       const { spaces } = await clickup(`/team/${team.id}/space?archived=false`, token);
       for (const space of spaces ?? []) {
+        if (spacesProcessados >= MAX_SPACES) {
+          truncated = true;
+          break;
+        }
+        spacesProcessados++;
         const [{ folders }, { lists: folderless }] = await Promise.all([
           clickup(`/space/${space.id}/folder?archived=false`, token),
           clickup(`/space/${space.id}/list?archived=false`, token),
@@ -59,7 +80,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ lists });
+    return NextResponse.json({ lists, truncated });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 502 });
   }
