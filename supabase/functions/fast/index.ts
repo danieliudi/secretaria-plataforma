@@ -1336,6 +1336,16 @@ Deno.serve(async (req: Request) => {
   if (tenantSlugRaw) {
     try {
       const tenant = await getTenantBySlug(tenantSlugRaw);
+      // Portão de acesso, em profundidade. Hoje /reflex, /telegram e o cron já
+      // barram tenant não aprovado antes de chegar aqui — mas o portão morava
+      // SÓ neles. Um caminho novo que chamasse /fast (endpoint do site, job)
+      // nasceria sem portão nenhum, e /fast dá acesso a agenda, Gmail, CRM e
+      // despesa. Recusa explícita em vez de seguir com env global: cair no
+      // global aqui seria pior que negar — usaria a credencial do dono da
+      // plataforma pra atender quem não foi aprovado.
+      if (tenant && !tenant.aprovado_em) {
+        return resp({ error: "tenant sem acesso liberado" }, 403);
+      }
       if (tenant) {
         tenantId = tenant.id;
         const persona: TenantPersona = {
