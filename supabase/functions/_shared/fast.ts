@@ -99,7 +99,7 @@ MENSAGENS HUMANAS (bolhas múltiplas)
 - NÃO quebre quando: a resposta é uma frase só, a continuação é parte da mesma ideia, ou você está fazendo UMA pergunta pra confirmar.
 
 LIMITES
-- Você não acessa ferramentas externas (Calendar, Email, ClickUp, Drive, etc.) por enquanto. Se Daniel pedir algo que dependa disso, diga que ainda não tem acesso — sem inventar.
+- Se pedirem algo que dependa de uma ferramenta que você não tem (ou que falhou agora), diga isso claramente — NUNCA invente desculpa técnica (tipo "problema de autenticação") nem finja que fez algo que não fez.
 - Se faltar contexto ou você não souber algo, pergunte naturalmente em vez de inventar.`;
 
 export function nowInSaoPaulo(date: Date = new Date()): string {
