@@ -103,6 +103,18 @@ import {
   listSupplierQuotes as defaultListSupplierQuotes,
 } from "../_shared/sanwey-crm.ts";
 import { getGoogleAccessToken } from "../_shared/google-oauth.ts";
+import {
+  defaultDespesasDeps,
+  type FecharMesInput,
+  type FecharMesResult,
+  fecharMesDespesas as defaultFecharMesDespesas,
+  type ListarDespesasInput,
+  type ListarDespesasResult,
+  listarDespesas as defaultListarDespesas,
+  type RegistrarDespesaInput,
+  type RegistrarDespesaResult,
+  registrarDespesa as defaultRegistrarDespesa,
+} from "./tools/despesas.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
@@ -408,14 +420,18 @@ const TOOLS = [
   {
     name: "export_spreadsheet",
     description:
-      "Gera uma planilha CSV de um dataset do chefe e envia direto pelo WhatsApp como documento. Use quando ele pedir 'me manda planilha de X', 'exporta as tarefas da Resibag', 'me passa em CSV', 'manda em arquivo pra eu repassar'. O arquivo chega na hora — você NÃO precisa anunciar o conteúdo; apenas confirme o envio com uma bolha curta (ex: 'Mandei a planilha 📎'). Datasets suportados: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date YYYY-MM-DD; opcional end_date pra range inclusive).",
+      "Gera uma planilha CSV de um dataset do chefe e envia direto pelo WhatsApp como documento. Use quando ele pedir 'me manda planilha de X', 'exporta as tarefas da Resibag', 'me passa em CSV', 'manda em arquivo pra eu repassar'. O arquivo chega na hora — você NÃO precisa anunciar o conteúdo; apenas confirme o envio com uma bolha curta (ex: 'Mandei a planilha 📎'). Datasets suportados: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date YYYY-MM-DD; opcional end_date pra range inclusive), 'despesas' (precisa mes YYYY-MM — planilha de reembolso do mês, com linha de TOTAL no fim).",
     input_schema: {
       type: "object",
       properties: {
         dataset: {
           type: "string",
-          enum: ["tasks", "calendar_events"],
+          enum: ["tasks", "calendar_events", "despesas"],
           description: "Tipo de dado a exportar.",
+        },
+        mes: {
+          type: "string",
+          description: "(despesas) Mês em YYYY-MM (ex: '2026-06').",
         },
         frente: {
           type: "string",
@@ -439,6 +455,75 @@ const TOOLS = [
         },
       },
       required: ["dataset"],
+    },
+  },
+  {
+    name: "registrar_despesa",
+    description:
+      "Registra uma despesa de reembolso já CONFIRMADA pelo chefe. Use depois que ele confirmar os dados que você leu de um recibo/nota fiscal (ou que ele ditou por texto). NUNCA chame esta tool sem confirmação explícita dele nesta conversa — valor lido de foto erra, e erro silencioso aqui vira relatório de reembolso errado. O fluxo é: você diz o que entendeu (valor, estabelecimento, data), ele confirma ou corrige, e SÓ ENTÃO você registra. Retorna o total acumulado do mês da despesa.",
+    input_schema: {
+      type: "object",
+      properties: {
+        valor: {
+          type: "string",
+          description:
+            "Valor da despesa como aparece no recibo, ex: '400,00' ou 'R$ 1.234,56'. Vírgula é decimal (pt-BR).",
+        },
+        data: {
+          type: "string",
+          description:
+            "Data DO RECIBO em YYYY-MM-DD (não a data de hoje — ele manda nota atrasada com frequência).",
+        },
+        estabelecimento: {
+          type: "string",
+          description: "Nome do estabelecimento/fornecedor, ex: 'Estacionamento FISPAL'.",
+        },
+        categoria: {
+          type: "string",
+          description:
+            "(opcional) Tipo de gasto em texto livre, ex: 'feiras/eventos', 'combustível', 'alimentação'. Sugira pela descrição e confirme com ele.",
+        },
+        frente: {
+          type: "string",
+          description: "(opcional) Frente/cliente a que a despesa pertence, ex: 'resibag'.",
+        },
+        origem_texto: {
+          type: "string",
+          description:
+            "(opcional) A descrição original do recibo, pra auditoria depois. Máx 2000 caracteres.",
+        },
+      },
+      required: ["valor", "data", "estabelecimento"],
+    },
+  },
+  {
+    name: "listar_despesas",
+    description:
+      "Lista as despesas de reembolso de um mês e o total acumulado. Use para 'quanto tá meu reembolso?', 'quais notas eu já mandei esse mês?', 'quanto gastei em junho?'. Sem 'mes', usa o mês corrente. Retorna também quantas estão sem frente definida — se houver, ofereça definir.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mes: {
+          type: "string",
+          description: "(opcional) Mês em YYYY-MM. Ausente = mês corrente.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "fechar_mes_despesas",
+    description:
+      "Fecha o mês de reembolso: marca as despesas pendentes daquele mês como fechadas. Use SÓ quando o chefe pedir explicitamente ('fecha o reembolso de junho', 'pode fechar o mês'). NUNCA feche por conta própria — ele pode ter nota atrasada pra mandar. Depois de fechar, chame export_spreadsheet com dataset='despesas' e o mesmo mes pra mandar a planilha. Se não houver nada pendente, diga isso em vez de fingir que fechou.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mes: {
+          type: "string",
+          description: "Mês a fechar em YYYY-MM (ex: '2026-06').",
+        },
+      },
+      required: ["mes"],
     },
   },
   {
@@ -602,9 +687,19 @@ PRÓXIMA AÇÃO (reduzir decisão, não empilhar lista)
 - 1 tool: what_now(). Use quando o chefe estiver sem foco ou pedir uma única prioridade pra agora.
 - Mostre só a primeira sugestão devolvida. Só mencione as outras se ele pedir mais opções — o ponto é cortar decisão, não repetir a lista de tasks.
 
+REEMBOLSO / DESPESAS (recibo virando relatório)
+- 3 tools: registrar_despesa, listar_despesas, fechar_mes_despesas.
+- Quando o chefe mandar FOTO de nota fiscal/recibo/comprovante, ou ditar um gasto, você recebe a descrição da imagem como texto. Leia dela: valor, data do recibo, estabelecimento.
+- REGRA DURA — confirme ANTES de gravar. Diga o que entendeu em uma bolha curta e espere ele confirmar: "Li: R$ 400,00 — Estacionamento FISPAL, 15/06. 📌 Feiras/eventos, certo?". Só chame registrar_despesa DEPOIS do "isso"/"pode registrar"/correção dele. Valor lido de foto erra, e erro que passa quieto vira reembolso errado — é pior que perguntar.
+- Se ele corrigir ("o valor é 40, não 400"), use o valor corrigido — o que ele diz vence o que você leu.
+- Sugira a categoria pela descrição (feiras/eventos, combustível, alimentação, estacionamento, hospedagem…) — é texto livre, não tem lista fixa. Se a frente não estiver clara, pergunte em vez de chutar.
+- A data é a DO RECIBO, não a de hoje. Ele manda nota atrasada com frequência.
+- "quanto tá meu reembolso?", "quanto gastei em junho?" → listar_despesas. Diga o total e, se houver despesa sem frente, ofereça definir.
+- "fecha o reembolso de junho" → fechar_mes_despesas(mes) e DEPOIS export_spreadsheet(dataset='despesas', mes) pra mandar a planilha. NUNCA feche por conta própria — pode ter nota atrasada pra chegar.
+
 EXPORTAR PLANILHA (CSV via WhatsApp)
 - 1 tool: export_spreadsheet(dataset, ...). Use quando o chefe pedir "me manda planilha de X", "exporta as tasks", "me passa em CSV", "manda em arquivo pra eu repassar".
-- Datasets: 'tasks' (precisa frente; list opcional) ou 'calendar_events' (precisa date; opcional end_date pra range).
+- Datasets: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date; opcional end_date pra range) ou 'despesas' (precisa mes YYYY-MM).
 - O arquivo é enviado pelo SISTEMA durante a tool — você NÃO precisa anexar nada. Sua resposta de texto deve ser uma confirmação curta: "Mandei a planilha, chefe 📎" (ou similar). Não anuncie o conteúdo do arquivo.
 
 REGISTRO & TRIAGEM (inbox + tarefas)
@@ -722,6 +817,12 @@ export interface FastWithToolsDeps {
       input: ExportSpreadsheetInput,
       to: string,
     ) => Promise<ExportSpreadsheetResult>;
+    registrarDespesa: (
+      input: RegistrarDespesaInput,
+      userId?: string,
+    ) => Promise<RegistrarDespesaResult>;
+    listarDespesas: (input: ListarDespesasInput) => Promise<ListarDespesasResult>;
+    fecharMesDespesas: (input: FecharMesInput) => Promise<FecharMesResult>;
     getGa4Metrics: (frente: string, days?: number) => Promise<Ga4Snapshot>;
     listCrmLeads: (input: ListCrmLeadsInput) => Promise<CrmLead[]>;
     listMarketingCampaigns: (input: ListCrmCampaignsInput) => Promise<CrmCampaign[]>;
@@ -765,6 +866,16 @@ export function defaultFastWithToolsDeps(
       );
     }
     return defaultQuickCaptureDeps(tenantId);
+  };
+  // `userId` chega na hora da chamada (igual saveProfileFact) — o dono das
+  // deps é o tenant; o user_id só registra QUEM lançou dentro dele.
+  const despesasDeps = (userId?: string) => {
+    if (!tenantId) {
+      throw new Error(
+        "reembolso não disponível: não foi possível identificar de quem é esta conversa",
+      );
+    }
+    return defaultDespesasDeps(tenantId, userId);
   };
   return {
     now: () => new Date(),
@@ -839,7 +950,18 @@ export function defaultFastWithToolsDeps(
         }
         return defaultCreateScheduledReminder(userId, input, tenantId);
       },
-      exportSpreadsheet: (input, to) => defaultExportSpreadsheet(input, to, defaultExportSpreadsheetDeps(env)),
+      exportSpreadsheet: (input, to) =>
+        defaultExportSpreadsheet(input, to, {
+          ...defaultExportSpreadsheetDeps(env),
+          // Só existe quando há tenant resolvido — sem isso o dataset
+          // 'despesas' recusa em vez de exportar a planilha de outro dono.
+          listarDespesas: tenantId
+            ? (mes) => defaultListarDespesas({ mes }, despesasDeps())
+            : undefined,
+        }),
+      registrarDespesa: (input, userId) => defaultRegistrarDespesa(input, despesasDeps(userId)),
+      listarDespesas: (input) => defaultListarDespesas(input, despesasDeps()),
+      fecharMesDespesas: (input) => defaultFecharMesDespesas(input, despesasDeps()),
       getGa4Metrics: (frente, days) => defaultGetGa4Snapshot(frente, days, { env, fetch, getAccessToken }),
       listCrmLeads: (input) => defaultListCrmLeads(input, { env }),
       listMarketingCampaigns: (input) => defaultListCrmCampaigns(input, { env }),
@@ -976,6 +1098,7 @@ async function executeTool(
       if (!userId) {
         return { error: "Sem user_id no contexto — não dá pra enviar planilha." };
       }
+      // (dataset 'despesas' usa `mes`; os outros usam date/frente)
       const result = await deps.tools.exportSpreadsheet(
         {
           dataset: String(input.dataset) as ExportSpreadsheetInput["dataset"],
@@ -983,6 +1106,7 @@ async function executeTool(
           list: input.list ? String(input.list) : undefined,
           date: input.date ? String(input.date) : undefined,
           end_date: input.end_date ? String(input.end_date) : undefined,
+          mes: input.mes ? String(input.mes) : undefined,
         },
         userId,
       );
@@ -1029,6 +1153,27 @@ async function executeTool(
         query: String(input.query),
         list: input.list ? String(input.list) : undefined,
       });
+      return result;
+    }
+    if (name === "registrar_despesa") {
+      const result = await deps.tools.registrarDespesa({
+        valor: input.valor,
+        data: String(input.data),
+        estabelecimento: String(input.estabelecimento),
+        categoria: input.categoria ? String(input.categoria) : undefined,
+        frente: input.frente ? String(input.frente) : undefined,
+        origem_texto: input.origem_texto ? String(input.origem_texto) : undefined,
+      }, userId);
+      return result;
+    }
+    if (name === "listar_despesas") {
+      const result = await deps.tools.listarDespesas({
+        mes: input.mes ? String(input.mes) : undefined,
+      });
+      return result;
+    }
+    if (name === "fechar_mes_despesas") {
+      const result = await deps.tools.fecharMesDespesas({ mes: String(input.mes) });
       return result;
     }
     if (name === "what_now") {
