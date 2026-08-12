@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "./supabase.ts";
+import { semDadoPessoal } from "./log-seguro.ts";
 
 export const DEFAULT_TENANT_SLUG = "daniel";
 
@@ -138,7 +139,7 @@ export async function numeroAguardandoAprovacao(fromE164: string): Promise<boole
     .limit(1)
     .maybeSingle();
   if (error) {
-    console.error(`[tenant] numeroAguardandoAprovacao falhou: ${error.message}`);
+    console.error(`[tenant] numeroAguardandoAprovacao falhou: ${semDadoPessoal(error.message)}`);
     return false; // na dúvida, cai na mensagem genérica de vínculo
   }
   return Boolean(data);

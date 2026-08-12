@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/service";
 import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
 import AdminLista, { type CadastroAdmin } from "./lista";
+import { semDadoPessoal } from "@/lib/log-seguro";
 
 // Server Component: carrega tudo com a service role DEPOIS de confirmar que
 // quem pediu é o dono da plataforma. O e-mail vem de auth.users (não existe em
@@ -21,7 +22,7 @@ export default async function AdminPage() {
     .order("created_at", { ascending: false });
 
   if (error) {
-    console.error(`[admin] listagem falhou: ${error.message}`);
+    console.error(`[admin] listagem falhou: ${semDadoPessoal(error.message)}`);
     return (
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-16">
         <h1 className="text-xl font-semibold text-foreground">Não conseguimos carregar a lista</h1>
@@ -41,7 +42,7 @@ export default async function AdminPage() {
       if (u.email) emails.set(u.id, u.email);
     }
   } catch (err) {
-    console.error(`[admin] listUsers falhou, seguindo sem e-mail: ${String(err)}`);
+    console.error(`[admin] listUsers falhou, seguindo sem e-mail: ${semDadoPessoal(err)}`);
   }
 
   const cadastros: CadastroAdmin[] = linhas.map((t) => ({

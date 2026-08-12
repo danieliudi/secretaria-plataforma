@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
+import { semDadoPessoal } from "@/lib/log-seguro";
 
 const ACOES = new Set(["aprovar", "recusar", "reverter"]);
 
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (error) {
-    console.error(`[admin] ${acao} falhou: ${error.message}`);
+    console.error(`[admin] ${acao} falhou: ${semDadoPessoal(error.message)}`);
     return NextResponse.json({ error: "não foi possível salvar" }, { status: 500 });
   }
   if (!data) {

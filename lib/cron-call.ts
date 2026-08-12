@@ -6,6 +6,8 @@
 // existe no servidor (nunca em NEXT_PUBLIC_*), então isto só pode ser chamado
 // de Route Handler ou Server Component — nunca do browser.
 
+import { semDadoPessoal } from "@/lib/log-seguro";
+
 const TIMEOUT_MS = 8_000;
 
 /**
@@ -42,6 +44,6 @@ export async function dispararTarefaCron(task: string): Promise<void> {
       console.error(`[cron-call] task='${task}' respondeu ${res.status}`);
     }
   } catch (err) {
-    console.error(`[cron-call] task='${task}' falhou: ${String(err)}`);
+    console.error(`[cron-call] task='${task}' falhou: ${semDadoPessoal(err)}`);
   }
 }

@@ -8,6 +8,8 @@
 //                       (aceita também EVOLUTION_INSTANCE_NAME — mesmo valor)
 //   EVOLUTION_API_KEY   apikey da Evolution
 
+import { semDadoPessoal } from "./log-seguro.ts";
+
 export interface WhatsAppDeps {
   fetch: typeof fetch;
   env: (k: string) => string | undefined;
@@ -97,7 +99,7 @@ export async function sendTypingPresence(
       }),
     });
   } catch (err) {
-    console.error(`[whatsapp] sendPresence falhou: ${String(err)}`);
+    console.error(`[whatsapp] sendPresence falhou: ${semDadoPessoal(err)}`);
   }
 }
 

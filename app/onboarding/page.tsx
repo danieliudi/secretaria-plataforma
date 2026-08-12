@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import OnboardingWizard from "./wizard";
+import { semDadoPessoal } from "@/lib/log-seguro";
 
 // Server Component: carrega o tenant já criado no /auth/callback e entrega
 // pro wizard (Client Component) como estado inicial. Não cria a linha aqui —
@@ -29,7 +30,7 @@ export default async function OnboardingPage({
     // foi o que fez o diagnóstico de 10/08/2026 demorar horas.
     console.error(
       `[onboarding] tenant não carregado (auth_user_id=${user.id}):`,
-      error ? `${error.code ?? "sem código"} — ${error.message}` : "nenhuma linha encontrada",
+      error ? `${error.code ?? "sem código"} — ${semDadoPessoal(error.message)}` : "nenhuma linha encontrada",
     );
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">

@@ -1,4 +1,5 @@
 import type { Decision, ReflexResult } from "./types.ts";
+import { semDadoPessoal } from "./log-seguro.ts";
 
 const FAST_TIMEOUT_MS = 25_000;
 const FALLBACK_MESSAGE =
@@ -65,7 +66,7 @@ export async function callFastEndpoint(
     if (!res.ok) {
       const body = await res.text();
       console.error(
-        `[fast-proxy] /fast retornou ${res.status}: ${body.slice(0, 200)}`,
+        `[fast-proxy] /fast retornou ${res.status}: ${semDadoPessoal(body)}`,
       );
       return { ok: false, message: FALLBACK_MESSAGE };
     }
@@ -77,7 +78,7 @@ export async function callFastEndpoint(
     if (isAbort) {
       console.error(`[fast-proxy] /fast timeout`);
     } else {
-      console.error(`[fast-proxy] /fast erro: ${err}`);
+      console.error(`[fast-proxy] /fast erro: ${semDadoPessoal(err)}`);
     }
     return { ok: false, message: FALLBACK_MESSAGE };
   }

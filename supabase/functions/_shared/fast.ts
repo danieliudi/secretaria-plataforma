@@ -1,5 +1,6 @@
 import { getAnthropicClient } from "./anthropic.ts";
 import type { Decision, ReflexResult } from "./types.ts";
+import { semDadoPessoal } from "./log-seguro.ts";
 
 const FAST_MODEL = "claude-sonnet-4-5-20250929";
 const FAST_MAX_TOKENS = 350;
@@ -224,6 +225,6 @@ export async function handleFast(
     const text = await deps.complete(system, input);
     return { ok: true, message: text.trim() };
   } catch (err) {
-    return { ok: false, message: `Erro ao consultar Fast: ${String(err)}` };
+    return { ok: false, message: `Erro ao consultar Fast: ${semDadoPessoal(err)}` };
   }
 }

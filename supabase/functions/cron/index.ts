@@ -32,6 +32,7 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
+import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
   cargaPorDia,
   detectaConflitos,
@@ -253,7 +254,7 @@ async function runBrief(env: EnvFn): Promise<{ len: number }> {
   try {
     newsBlock = await getSectorNewsBlock(NEWS_FRENTES);
   } catch (err) {
-    console.error("[cron] brief: notícias falharam:", String(err));
+    console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
   }
 
   const prompt =
@@ -332,12 +333,12 @@ async function runScheduled(env: EnvFn, tenantId: string): Promise<{ sent: numbe
           recurrence: r.recurrence,
         });
         if (insErr) {
-          console.error(`[cron] recorrência '${r.id}' reagendar falhou:`, insErr.message);
+          console.error(`[cron] recorrência '${r.id}' reagendar falhou:`, semDadoPessoal(insErr.message));
         }
       }
     } catch (err) {
       // Falha de envio: NÃO marca sent_at — próxima execução tenta de novo.
-      console.error(`[cron] scheduled '${r.id}' send falhou:`, String(err));
+      console.error(`[cron] scheduled '${r.id}' send falhou:`, semDadoPessoal(err));
     }
   }
   return { sent, scanned: pending.length };
@@ -357,7 +358,7 @@ async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number
   try {
     allTasks = await getTasksWithDue(env);
   } catch (err) {
-    console.error("[cron] marketing: tarefas falharam:", String(err));
+    console.error("[cron] marketing: tarefas falharam:", semDadoPessoal(err));
   }
 
   const owner = ownerJid(env);
@@ -374,7 +375,7 @@ async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number
       });
       ga4Data = JSON.stringify(snap);
     } catch (err) {
-      ga4Data = `(GA4 indisponível: ${String(err).slice(0, 120)})`;
+      ga4Data = `(GA4 indisponível: ${semDadoPessoal(err).slice(0, 120)})`;
     }
 
     const tasks = allTasks
@@ -401,7 +402,7 @@ async function runMarketing(env: EnvFn): Promise<{ sent: number; frentes: number
       await appendAssistantMessage(owner, message);
       sent++;
     } catch (err) {
-      console.error(`[cron] marketing '${frente}' falhou:`, String(err));
+      console.error(`[cron] marketing '${frente}' falhou:`, semDadoPessoal(err));
     }
   }
   return { sent, frentes: frentes.length };
@@ -427,10 +428,10 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
   try {
     for (const userId of await listUsersParaConsolidar(tenantId)) {
       const r = await consolidateUserProfile(userId, defaultConsolidationDeps(tenantId));
-      console.log(`[cron] perfil ${userId}: ${r.status} ${r.antes}→${r.depois}${r.motivo ? ` (${r.motivo})` : ""}`);
+      console.log(`[cron] perfil ${apelidoDeUsuario(userId)}: ${r.status} ${r.antes}→${r.depois}${r.motivo ? ` (${semDadoPessoal(r.motivo)})` : ""}`);
     }
   } catch (err) {
-    console.error("[cron] consolidação de perfil falhou:", String(err));
+    console.error("[cron] consolidação de perfil falhou:", semDadoPessoal(err));
   }
 
   const stale = await getStaleCaptures(tenantId);
@@ -462,7 +463,7 @@ async function getStaleCaptures(tenantId: string, days = 7): Promise<Array<{ tex
     .order("ts", { ascending: true })
     .limit(20);
   if (error) {
-    console.error("[cron] stale captures load falhou:", error.message);
+    console.error("[cron] stale captures load falhou:", semDadoPessoal(error.message));
     return [];
   }
   return (data ?? []) as Array<{ texto: string; ts: string }>;
@@ -902,7 +903,7 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
       const { data: u } = await sb.auth.admin.getUserById(p.auth_user_id);
       email = u?.user?.email ?? "";
     } catch (err) {
-      console.error(`[cron] e-mail do cadastro ${p.id} não carregou: ${String(err)}`);
+      console.error(`[cron] e-mail do cadastro ${p.id} não carregou: ${semDadoPessoal(err)}`);
     }
 
     const linhas = [
@@ -924,7 +925,7 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
       avisados++;
     } catch (err) {
       // Sem o slug no log: só o id, que não diz nada sobre quem é a pessoa.
-      console.error(`[cron] aviso de cadastro novo falhou (tenant ${p.id}): ${String(err)}`);
+      console.error(`[cron] aviso de cadastro novo falhou (tenant ${p.id}): ${semDadoPessoal(err)}`);
     }
   }
   return { avisados };
@@ -976,8 +977,8 @@ Deno.serve(async (req: Request) => {
         "agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
     }, 400);
   } catch (err) {
-    console.error(`[cron] task='${task}' erro:`, String(err));
-    return json({ error: String(err) }, 500);
+    console.error(`[cron] task='${task}' erro:`, semDadoPessoal(err));
+    return json({ error: semDadoPessoal(err) }, 500);
   }
 });
 

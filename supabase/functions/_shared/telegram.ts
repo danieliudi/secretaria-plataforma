@@ -7,6 +7,8 @@
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+import { semDadoPessoal } from "./log-seguro.ts";
+
 export interface TelegramDeps {
   fetch: typeof fetch;
   env: (k: string) => string | undefined;
@@ -92,7 +94,7 @@ export async function sendTelegramChatAction(
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
     });
   } catch (err) {
-    console.error(`[telegram] sendChatAction falhou: ${String(err)}`);
+    console.error(`[telegram] sendChatAction falhou: ${semDadoPessoal(err)}`);
   }
 }
 

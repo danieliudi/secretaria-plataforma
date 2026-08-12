@@ -13,6 +13,7 @@
 // a resposta ao usuário. Falhas logam no console do Supabase e seguem.
 
 import { getSupabaseClient } from "./supabase.ts";
+import { apelidoDeUsuario, semDadoPessoal } from "./log-seguro.ts";
 
 export interface ConversationMessage {
   role: "user" | "assistant";
@@ -70,7 +71,7 @@ export async function loadConversationHistory(
   try {
     return await deps.loadRecent(userId, limit);
   } catch (err) {
-    console.error(`[conversation] load falhou p/ ${userId}:`, String(err));
+    console.error(`[conversation] load falhou p/ ${apelidoDeUsuario(userId)}:`, semDadoPessoal(err));
     return [];
   }
 }
@@ -106,7 +107,7 @@ export async function appendConversationTurn(
     ]);
     if (error) throw new Error(error.message);
   } catch (err) {
-    console.error(`[conversation] save falhou p/ ${userId}:`, String(err));
+    console.error(`[conversation] save falhou p/ ${apelidoDeUsuario(userId)}:`, semDadoPessoal(err));
   }
 }
 
@@ -134,6 +135,6 @@ export async function appendAssistantMessage(
     ]);
     if (error) throw new Error(error.message);
   } catch (err) {
-    console.error(`[conversation] append proativo falhou p/ ${userId}:`, String(err));
+    console.error(`[conversation] append proativo falhou p/ ${apelidoDeUsuario(userId)}:`, semDadoPessoal(err));
   }
 }

@@ -20,6 +20,7 @@
 import { getSupabaseClient } from "./supabase.ts";
 import { getAnthropicClient } from "./anthropic.ts";
 import { registraUso } from "./uso.ts";
+import { apelidoDeUsuario, semDadoPessoal } from "./log-seguro.ts";
 
 export type ProfileCategory =
   | "preferencia"
@@ -86,7 +87,9 @@ export async function loadUserProfile(
   try {
     return await deps.loadFacts(userId, limit);
   } catch (err) {
-    console.error(`[profile] load falhou p/ ${userId}:`, String(err));
+    // apelidoDeUsuario, não userId cru: o telefone não pertence a um log sem
+    // dono nem prazo (ver _shared/log-seguro.ts).
+    console.error(`[profile] load falhou p/ ${apelidoDeUsuario(userId)}:`, semDadoPessoal(err));
     return [];
   }
 }
@@ -327,14 +330,14 @@ export async function consolidateUserProfile(
       updated_at: new Date().toISOString(),
     });
     if (error) {
-      return { status: "recusado", antes: facts.length, depois: facts.length, motivo: `upsert falhou: ${error.message}` };
+      return { status: "recusado", antes: facts.length, depois: facts.length, motivo: `upsert falhou: ${semDadoPessoal(error.message)}` };
     }
   }
 
   if (keysRemovidas.length > 0) {
     const { error } = await deps.deleteFactsByKeys(userId, keysRemovidas);
     if (error) {
-      return { status: "recusado", antes: facts.length, depois: facts.length, motivo: `delete falhou: ${error.message}` };
+      return { status: "recusado", antes: facts.length, depois: facts.length, motivo: `delete falhou: ${semDadoPessoal(error.message)}` };
     }
   }
 

@@ -101,6 +101,7 @@ import {
 } from "../_shared/sanwey-crm.ts";
 import { getGoogleAccessToken } from "../_shared/google-oauth.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
+import { semDadoPessoal } from "../_shared/log-seguro.ts";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -960,8 +961,8 @@ async function executeTool(
     return { error: `Unknown tool: ${name}` };
   } catch (err) {
     // [debug 2C] surfaces o erro real pra logs do Supabase
-    console.error(`[fast] tool '${name}' erro:`, String(err));
-    return { error: String(err) };
+    console.error(`[fast] tool '${name}' erro:`, semDadoPessoal(err));
+    return { error: semDadoPessoal(err) };
   }
 }
 
@@ -1004,7 +1005,7 @@ export async function handleFastWithTools(
       // já tentou de novo com backoff; se chegou aqui, estourou mesmo. Devolve
       // uma mensagem humana no tom da secretária em vez de vazar o stack pro
       // Daniel — ele reenvia em alguns segundos e passa.
-      const msg = String(err);
+      const msg = semDadoPessoal(err);
       const isRateLimit = /\b429\b/.test(msg) ||
         /rate.?limit/i.test(msg) ||
         (typeof (err as { status?: number })?.status === "number" &&
@@ -1129,7 +1130,7 @@ Deno.serve(async (req: Request) => {
         );
       }
     } catch (err) {
-      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${String(err)}`);
+      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${semDadoPessoal(err)}`);
     }
   }
 
@@ -1142,7 +1143,7 @@ Deno.serve(async (req: Request) => {
     );
     return resp(result, 200);
   } catch (err) {
-    return resp({ error: String(err) }, 500);
+    return resp({ error: semDadoPessoal(err) }, 500);
   }
 });
 

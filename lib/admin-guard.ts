@@ -6,6 +6,7 @@
 // endereço vira administrador. A coluna só é escrita por migration.
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { semDadoPessoal } from "@/lib/log-seguro";
 
 export interface DonoDaPlataforma {
   authUserId: string;
@@ -32,7 +33,7 @@ export async function carregaDonoDaPlataforma(): Promise<DonoDaPlataforma | null
     .maybeSingle();
 
   if (error) {
-    console.error(`[admin] checagem de dono falhou (auth_user_id=${user.id}): ${error.message}`);
+    console.error(`[admin] checagem de dono falhou (auth_user_id=${user.id}): ${semDadoPessoal(error.message)}`);
     return null;
   }
   if (!data?.is_platform_owner) return null;

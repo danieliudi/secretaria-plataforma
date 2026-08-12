@@ -8,6 +8,7 @@
 // única que dá pra olhar sem risco de ler mensagem de ninguém — mantenha assim.
 
 import { getSupabaseClient } from "./supabase.ts";
+import { semDadoPessoal } from "./log-seguro.ts";
 
 /** De onde partiu a chamada. Serve pra separar o custo reativo do proativo. */
 export type OrigemUso =
@@ -57,7 +58,7 @@ export async function registraUso(
       tokens_saida: usage.output_tokens ?? 0,
     });
   } catch (err) {
-    console.error("[uso] falha ao registrar uso de modelo:", String(err));
+    console.error("[uso] falha ao registrar uso de modelo:", semDadoPessoal(err));
   }
 }
 

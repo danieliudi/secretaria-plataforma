@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { ensureTenantForUser, upsertTenantSecret } from "@/lib/tenant-provisioning";
 import { isOAuthProviderId, OAUTH_PROVIDERS } from "@/lib/oauth-providers";
+import { semDadoPessoal } from "@/lib/log-seguro";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data.session) {
-    console.error("[auth/callback] exchangeCodeForSession falhou:", error?.message);
+    console.error("[auth/callback] exchangeCodeForSession falhou:", semDadoPessoal(error?.message));
     return NextResponse.redirect(failureRedirect("auth_failed"));
   }
 
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
     // Login já aconteceu (sessão válida) — não bloqueia o usuário por causa
     // de um erro no provisionamento; ele cai no onboarding e pode tentar de
     // novo (ex: reconectar) por lá.
-    console.error("[auth/callback] provisionamento do tenant falhou:", String(err));
+    console.error("[auth/callback] provisionamento do tenant falhou:", semDadoPessoal(err));
   }
 
   return NextResponse.redirect(`${origin}/onboarding`);

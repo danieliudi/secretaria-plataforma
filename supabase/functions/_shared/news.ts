@@ -11,6 +11,8 @@
 // e setor macro ficam de fora do resumo DIÁRIO por baixo rendimento/urgência
 // (revisão semanal basta) — ver DAILY_PRIORITY_CATEGORIES.
 
+import { semDadoPessoal } from "./log-seguro.ts";
+
 const GOOGLE_NEWS_RSS = "https://news.google.com/rss/search";
 
 export interface NewsItem {
@@ -196,7 +198,7 @@ export async function getSectorNewsBlock(
             const lines = items.map((i) => `    - ${i.title}${i.source ? ` (${i.source})` : ""}`).join("\n");
             return `  ${cat.title}:\n${lines}`;
           } catch (err) {
-            console.error(`[news] '${frente}'/'${cat.key}' falhou:`, String(err));
+            console.error(`[news] '${frente}'/'${cat.key}' falhou:`, semDadoPessoal(err));
             return `  ${cat.title}: (busca indisponível no momento)`;
           }
         }),

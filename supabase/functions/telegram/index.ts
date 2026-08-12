@@ -10,6 +10,7 @@ import {
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
 import type { Decision } from "../_shared/types.ts";
+import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
   authorizeTelegramChatId,
   buildTenantEnv,
@@ -67,7 +68,7 @@ async function resolveTenant(slug: string | null): Promise<Tenant | null> {
     }
     return tenant;
   } catch (err) {
-    console.error(`[telegram] resolveTenant('${slug}') falhou: ${String(err)}`);
+    console.error(`[telegram] resolveTenant('${slug}') falhou: ${semDadoPessoal(err)}`);
     return null;
   }
 }
@@ -152,7 +153,9 @@ Deno.serve(async (req: Request) => {
   // checagem acima vincula o chat_id; qualquer outro depois disso é recusado.
   const chatAutorizado = await authorizeTelegramChatId(tenant, chatId);
   if (!chatAutorizado) {
-    console.error(`[telegram] tenant '${tenant.slug}': chat_id ${chatId} não autorizado`);
+    // chat_id não é dado técnico solto: identifica a conta de Telegram de uma
+    // pessoa real, então passa pelo mesmo saneamento que telefone.
+    console.error(`[telegram] tenant '${tenant.slug}': ${apelidoDeUsuario(`tg:${chatId}`)} não autorizado`);
     return resp({ ok: true, ignored: "chat_nao_autorizado" }, 200);
   }
 
@@ -175,8 +178,8 @@ Deno.serve(async (req: Request) => {
       try {
         input = await deriveInput(message, telegramDeps, tenant.id);
       } catch (err) {
-        await dbg.from("async_debug").insert({ step: "tg_media_err", detail: String(err) });
-        const msg = String(err).includes("GROQ_API_KEY")
+        await dbg.from("async_debug").insert({ step: "tg_media_err", detail: semDadoPessoal(err) });
+        const msg = semDadoPessoal(err).includes("GROQ_API_KEY")
           ? "Chefe, ainda nao consigo ouvir audio por aqui - me manda por texto que eu resolvo? 🙏"
           : "Chefe, nao consegui processar esse arquivo. Tenta de novo ou me manda por texto? 😅";
         await sendTelegramMessages(chatId, [msg], telegramDeps);
@@ -199,8 +202,8 @@ Deno.serve(async (req: Request) => {
       await sendTelegramMessages(chatId, bubbles, telegramDeps);
       await dbg.from("async_debug").insert({ step: "tg_sent_ok", detail: "" });
     } catch (err) {
-      await dbg.from("async_debug").insert({ step: "tg_bg_err", detail: String(err) });
-      console.error("[telegram] background falhou:", String(err));
+      await dbg.from("async_debug").insert({ step: "tg_bg_err", detail: semDadoPessoal(err) });
+      console.error("[telegram] background falhou:", semDadoPessoal(err));
     }
   })();
 

@@ -12,6 +12,7 @@ import {
   type WhatsAppDeps,
 } from "../_shared/whatsapp.ts";
 import { orchestrateReflex, type OrchestratorDeps, parseReflexIntent } from "./orchestrator.ts";
+import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
   buildTenantEnv,
   consumeWhatsAppLinkCode,
@@ -135,7 +136,7 @@ async function resolveTenant(instance?: string): Promise<Tenant | null> {
     }
     return await getTenantBySlug(DEFAULT_TENANT_SLUG);
   } catch (err) {
-    console.error(`[reflex] resolveTenant falhou, seguindo com env global: ${String(err)}`);
+    console.error(`[reflex] resolveTenant falhou, seguindo com env global: ${semDadoPessoal(err)}`);
     return null;
   }
 }
@@ -236,7 +237,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
   try {
     tenant = await getTenantByAuthorizedPhone(fromE164);
   } catch (err) {
-    console.error(`[reflex] getTenantByAuthorizedPhone falhou: ${String(err)}`);
+    console.error(`[reflex] getTenantByAuthorizedPhone falhou: ${semDadoPessoal(err)}`);
     return resp({ ok: true }, 200);
   }
 
@@ -248,13 +249,13 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
     try {
       pausado = await numeroAguardandoAprovacao(fromE164);
     } catch (err) {
-      console.error(`[reflex] numeroAguardandoAprovacao falhou: ${String(err)}`);
+      console.error(`[reflex] numeroAguardandoAprovacao falhou: ${semDadoPessoal(err)}`);
     }
     if (pausado) {
       try {
         await replyOnSharedNumber(fromRaw, ACCESS_PENDING_MESSAGE);
       } catch (err) {
-        console.error(`[reflex] resposta de acesso pausado falhou: ${String(err)}`);
+        console.error(`[reflex] resposta de acesso pausado falhou: ${semDadoPessoal(err)}`);
       }
       return resp({ ok: true }, 200);
     }
@@ -263,7 +264,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
     try {
       linked = await consumeWhatsAppLinkCode(text, fromE164);
     } catch (err) {
-      console.error(`[reflex] consumeWhatsAppLinkCode falhou: ${String(err)}`);
+      console.error(`[reflex] consumeWhatsAppLinkCode falhou: ${semDadoPessoal(err)}`);
     }
     try {
       if (linked) {
@@ -273,7 +274,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
         await replyOnSharedNumber(fromRaw, looksLikeCodeAttempt ? LINK_INVALID_MESSAGE : LINK_HELP_MESSAGE);
       }
     } catch (err) {
-      console.error(`[reflex] resposta de vínculo/recusa falhou: ${String(err)}`);
+      console.error(`[reflex] resposta de vínculo/recusa falhou: ${semDadoPessoal(err)}`);
     }
     return resp({ ok: true }, 200);
   }
@@ -286,7 +287,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
     decision = await classify(text);
     if (decision.tier === "deep") decision = { ...decision, tier: "fast" };
   } catch (err) {
-    console.error(`[reflex] classify falhou (número compartilhado): ${String(err)}`);
+    console.error(`[reflex] classify falhou (número compartilhado): ${semDadoPessoal(err)}`);
     decision = { tier: "fast", frente: "ambiguo", domain: "outro", action_required: false, irreversible: false, confidence: 0 };
   }
 
@@ -309,7 +310,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
       const whatsappDeps: WhatsAppDeps = { fetch, env: await buildSharedNumberEnv(tenant) };
       await sendWhatsAppMessages(fromRaw, bubbles, whatsappDeps);
     } catch (err) {
-      console.error(`[reflex] entrega (número compartilhado) falhou: ${String(err)}`);
+      console.error(`[reflex] entrega (número compartilhado) falhou: ${semDadoPessoal(err)}`);
     }
   })();
   (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
@@ -368,7 +369,7 @@ Deno.serve(async (req: Request) => {
     try {
       return await handleSharedNumberMessage(text, from);
     } catch (err) {
-      console.error(`[reflex] handleSharedNumberMessage falhou: ${String(err)}`);
+      console.error(`[reflex] handleSharedNumberMessage falhou: ${semDadoPessoal(err)}`);
       return resp({ ok: true }, 200);
     }
   }
@@ -443,12 +444,12 @@ Deno.serve(async (req: Request) => {
               await sendWhatsAppMessages(from, bubbles, whatsappDeps);
               await dbg.from("async_debug").insert({ step: "sent_ok", detail: "" });
             } catch (err) {
-              await dbg.from("async_debug").insert({ step: "send_err", detail: String(err) });
-              console.error("[reflex] entrega async falhou:", String(err));
+              await dbg.from("async_debug").insert({ step: "send_err", detail: semDadoPessoal(err) });
+              console.error("[reflex] entrega async falhou:", semDadoPessoal(err));
             }
           } catch (err) {
-            await dbg.from("async_debug").insert({ step: "bg_err", detail: String(err) });
-            console.error("[reflex] background falhou:", String(err));
+            await dbg.from("async_debug").insert({ step: "bg_err", detail: semDadoPessoal(err) });
+            console.error("[reflex] background falhou:", semDadoPessoal(err));
           }
         })();
         // Mantém a function viva até o background terminar.
@@ -469,7 +470,7 @@ Deno.serve(async (req: Request) => {
     // tier === "deep" — não implementado nesta fase
     return resp({ error: `Tier 'deep' ainda não implementado.`, decision }, 422);
   } catch (err) {
-    return resp({ error: String(err) }, 500);
+    return resp({ error: semDadoPessoal(err) }, 500);
   }
 });
 
