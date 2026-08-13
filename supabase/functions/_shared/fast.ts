@@ -1,6 +1,11 @@
 import { getAnthropicClient } from "./anthropic.ts";
 import type { Decision, ReflexResult } from "./types.ts";
 import { semDadoPessoal } from "./log-seguro.ts";
+import {
+  instrucaoConversa,
+  normalizaPersonalidade,
+  type Personalidade,
+} from "./personalidade.ts";
 
 const FAST_MODEL = "claude-sonnet-4-5-20250929";
 const FAST_MAX_TOKENS = 350;
@@ -18,6 +23,12 @@ export interface TenantPersona {
   usaVocativo?: boolean;
   /** Como chamar a pessoa. Vazio/ausente = "chefe". */
   tratamento?: string | null;
+  /**
+   * Voz da secretária (coluna `personalidade` do tenant). Ausente cai no padrão
+   * `cordial` — mesmo default da migration, para que tenant antigo e tenant
+   * novo falem igual.
+   */
+  personalidade?: Personalidade;
 }
 
 /**
@@ -183,7 +194,15 @@ export function buildFastSystemPrompt(datetime: string, persona: TenantPersona =
 
   // O resto do texto (tom/estilo/limites) ainda fala "Daniel" literalmente —
   // troca pelo primeiro nome real. No-op quando o tenant É o Daniel.
-  return primeiro === "Daniel" ? filled : filled.replace(/\bDaniel\b/g, primeiro);
+  const comNome = primeiro === "Daniel" ? filled : filled.replace(/\bDaniel\b/g, primeiro);
+
+  // VOZ POR TENANT, sempre por último: o que vem depois no system prompt pesa
+  // mais na hora de escolher o tom, e o template acima é genérico de propósito.
+  // Passa por `normalizaPersonalidade` mesmo o tipo já sendo `Personalidade`:
+  // o valor nasce numa coluna de texto, e um CHECK contornado ou uma migration
+  // futura mal aplicada não podem transformar isto em "undefined" no prompt.
+  const voz = instrucaoConversa(normalizaPersonalidade(persona.personalidade));
+  return `${comNome}\n\n## Sua voz\n${voz}`;
 }
 
 export interface FastDeps {

@@ -30,6 +30,8 @@ import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-remind
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared/tenant.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
+import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
+import { getEventsByDate } from "../fast/tools/calendar-read.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
@@ -293,6 +295,52 @@ async function buildNovidadeBlock(tenantId: string): Promise<string | null> {
     : `✨ Novidades:\n${naoVistas.map((e) => `• ${e.descricao}`).join("\n")}`;
 }
 
+// Oferta de confirmação: compromissos de hoje em que alguém ainda não respondeu
+// ao convite. Ver _shared/confirmacoes.ts pra regra (e pro porquê de "talvez" e
+// "recusou" NÃO entrarem).
+//
+// POR QUE ESTE BLOCO É DETERMINÍSTICO, e não escrito pelo /fast como o resumo:
+// ele afirma um fato sobre TERCEIRO ("a Ana não confirmou"). Modelo alucinando
+// aqui faria o chefe cobrar quem já tinha confirmado — constrangimento com
+// cliente, causado por nós. Texto montado em código não inventa convidado.
+//
+// Hoje roda junto do brief da manhã, sobre os compromissos DO DIA. A versão
+// melhor (véspera, ~18h30, sobre o dia seguinte) só depende de uma linha nova
+// no pg_cron chamando este mesmo caminho — a regra e o formato já servem.
+async function buildConfirmacoesBlock(env: EnvFn): Promise<string | null> {
+  const hoje = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  // Reusa o leitor do /fast (com o mapeamento de convidados já coberto por
+  // teste) em vez de duplicar o fetch de calendário que existe em getUpcoming.
+  const eventos = await getEventsByDate(hoje, {
+    getAccessToken: () => getGoogleAccessToken({ env, fetch }),
+    fetch,
+    now: () => new Date(),
+  });
+
+  const { avisos, total } = pendentesDeConfirmacao(eventos);
+  if (avisos.length === 0) return null;
+
+  const linhas = avisos.map((a) => {
+    const hora = a.hora ? `${a.hora} · ` : "";
+    const quem = a.pendentes.map(nomeCurto).join(", ");
+    return `• ${hora}${a.titulo} — ${quem}`;
+  });
+
+  const sobrando = total - avisos.length;
+  const rodape = sobrando > 0
+    ? `\n(e mais ${sobrando} compromisso${sobrando === 1 ? "" : "s"} na mesma situação)`
+    : "";
+
+  return `⚠️ Ainda sem confirmação pra hoje:\n\n${linhas.join("\n")}${rodape}\n\n` +
+    `Quer que eu escreva a confirmação? É só dizer pra quem.`;
+}
+
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
 async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> {
@@ -330,6 +378,21 @@ async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> 
   const text = await askFast(prompt, env) || "Sem itens pra hoje. Bom dia!";
   await sendWhatsAppText(ownerJid(env), text, { fetch, env });
   await appendAssistantMessage(ownerJid(env), text, tenantId);
+
+  // Depois do resumo, e em try próprio: falha de calendário aqui não pode
+  // derrubar um brief que já foi entregue com sucesso.
+  try {
+    const confirmacoes = await buildConfirmacoesBlock(env);
+    if (confirmacoes) {
+      await sendWhatsAppText(ownerJid(env), confirmacoes, { fetch, env });
+      // Vai pro histórico pra que, quando o chefe responder "pode escrever pra
+      // Ana", o /fast saiba de qual reunião ele está falando.
+      await appendAssistantMessage(ownerJid(env), confirmacoes, tenantId);
+    }
+  } catch (err) {
+    console.error("[cron] brief: bloco de confirmações falhou:", semDadoPessoal(err));
+  }
+
   return { len: text.length };
 }
 

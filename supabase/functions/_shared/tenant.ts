@@ -1,5 +1,6 @@
 import { getSupabaseClient } from "./supabase.ts";
 import { semDadoPessoal } from "./log-seguro.ts";
+import type { Personalidade } from "./personalidade.ts";
 
 export const DEFAULT_TENANT_SLUG = "daniel";
 
@@ -30,6 +31,12 @@ export interface Tenant {
   active: boolean;
   usa_vocativo: boolean;
   tratamento: string | null;
+  /**
+   * Voz da secretária. Coluna NOT NULL com default 'cordial', então nunca vem
+   * null — mas passe sempre por `normalizaPersonalidade` antes de usar, porque
+   * o banco só garante o conjunto via CHECK e o tipo aqui é otimista.
+   */
+  personalidade: Personalidade;
   aprovado_em: string | null;
   whatsapp_authorized_number: string | null;
   whatsapp_link_code: string | null;
@@ -45,7 +52,8 @@ const TENANT_COLUMNS = `
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
-  whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at
+  whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at,
+  personalidade
 `;
 
 // ATENÇÃO: comparação EXATA (`eq`), nunca `ilike`. Com `ilike`, o `%` do
