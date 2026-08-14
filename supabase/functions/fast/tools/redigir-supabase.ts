@@ -7,6 +7,36 @@
 import { getSupabaseClient } from "../../_shared/supabase.ts";
 import type { ContatoRow, RedigirDeps } from "./redigir.ts";
 
+/**
+ * Acha o telefone de um participante de evento pelo e-mail.
+ *
+ * É a ponte entre a agenda e o WhatsApp: o Google Calendar identifica quem foi
+ * convidado por E-MAIL, e não existe envio sem telefone. Sem contato cadastrado
+ * a resposta é null — e null significa "vai pelo link", nunca "chuta um número".
+ */
+export async function buscaContatoPorEmail(
+  tenantId: string,
+  email: string,
+): Promise<ContatoRow | null> {
+  const alvo = email.trim().toLowerCase();
+  if (alvo === "" || alvo.length > 320) return null;
+
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from("contatos")
+    .select("id, nome, telefone_e164, email")
+    // Tenant PRIMEIRO e sempre: contato é telefone de terceiro.
+    .eq("tenant_id", tenantId)
+    // `eq` em vez de `ilike`: e-mail é comparação exata, e `ilike` traria de
+    // volta o problema de curinga que o lookup por nome precisa escapar.
+    .eq("email", alvo)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`contatos lookup por email falhou: ${error.message}`);
+  return (data as ContatoRow | null) ?? null;
+}
+
 export function supabaseRedigirDeps(): RedigirDeps {
   return {
     async buscaContatoPorNome(tenantId: string, nome: string): Promise<ContatoRow | null> {

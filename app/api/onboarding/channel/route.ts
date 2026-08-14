@@ -105,7 +105,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "não autenticado" }, { status: 401 });
   }
 
-  let body: { channel_preference?: unknown; telegram_bot_token?: unknown };
+  let body: {
+    channel_preference?: unknown;
+    telegram_bot_token?: unknown;
+    envio_oficial?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -116,6 +120,14 @@ export async function POST(request: Request) {
   if (!VALID_CHANNELS.has(channelPreference)) {
     return NextResponse.json({ error: `canal inválido: '${channelPreference}'` }, { status: 400 });
   }
+
+  // Envio automático pela API oficial. Só aceita `true` quando a plataforma
+  // está de fato configurada com a Meta — sem isso o tenant ligaria uma opção
+  // que nunca faria nada, e a tela mostraria um estado que o backend não honra.
+  // O portão real continua em _shared/envio-decisao.ts, que verifica credencial
+  // a cada mensagem; este aqui só evita gravar intenção impossível.
+  const envioDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
+  const envioOficial = envioDisponivel && body.envio_oficial === true;
 
   const wantsTelegram = channelPreference === "telegram" || channelPreference === "both";
   const telegramToken = wantsTelegram && typeof body.telegram_bot_token === "string"
@@ -184,6 +196,7 @@ export async function POST(request: Request) {
     .from("tenants")
     .update({
       channel_preference: channelPreference,
+      envio_oficial: envioOficial,
       telegram_bot_token_secret_id: telegramSecretId,
       telegram_webhook_secret_id: telegramWebhookSecretId,
       ...(wantsWhatsapp && !alreadyAuthorized

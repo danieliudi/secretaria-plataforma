@@ -164,6 +164,13 @@ export default function OnboardingWizard(props: {
   initialUsaVocativo: boolean;
   initialTratamento: string;
   initialPersonalidade: Personalidade;
+  initialEnvioOficial: boolean;
+  /**
+   * A plataforma já concluiu a verificação na Meta? Vem de env var de RUNTIME
+   * lida no server component — nunca `NEXT_PUBLIC_*`, que é resolvida em tempo
+   * de BUILD e exigiria um deploy novo pra liberar a opção.
+   */
+  envioOficialDisponivel: boolean;
   initialProvider: Provider;
   googleConnected: boolean;
   outlookConnected: boolean;
@@ -192,6 +199,7 @@ export default function OnboardingWizard(props: {
     props.initialUsaVocativo ? props.initialTratamento : "",
   );
   const [personalidade, setPersonalidade] = useState<Personalidade>(props.initialPersonalidade);
+  const [envioOficial, setEnvioOficial] = useState(props.initialEnvioOficial);
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
   const [trelloApiKey, setTrelloApiKey] = useState("");
@@ -377,6 +385,7 @@ export default function OnboardingWizard(props: {
     const result = await submitJson("/api/onboarding/channel", {
       channel_preference: channel,
       telegram_bot_token: telegramToken,
+      envio_oficial: envioOficial,
     });
     if (result) {
       setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
@@ -864,6 +873,71 @@ export default function OnboardingWizard(props: {
                 </p>
               )
             )}
+            <fieldset className="mt-1 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-1 text-sm font-medium text-foreground">
+                Ela pode confirmar compromissos sozinha?
+              </legend>
+              <span className="mb-1 text-xs font-normal text-muted-2">
+                Por padrão ela escreve a mensagem e você envia, do seu WhatsApp. Se preferir,
+                ela mesma manda a confirmação e o lembrete, pelo número oficial da plataforma.
+              </span>
+
+              {([
+                {
+                  v: false,
+                  nm: "Ela escreve, eu envio",
+                  rz: "Sai do seu WhatsApp, com seu nome. Sem custo.",
+                },
+                {
+                  v: true,
+                  nm: "Ela envia confirmação e lembrete",
+                  rz: "Sai do número da plataforma. Cerca de R$ 0,05 por mensagem.",
+                },
+              ] as const).map((opt) => {
+                const ativo = envioOficial === opt.v;
+                return (
+                  <label
+                    key={String(opt.v)}
+                    className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
+                      // Sem verificação concluída na Meta, a segunda opção não é
+                      // clicável: ligar algo que o backend vai recusar a cada
+                      // mensagem seria mentir na tela.
+                      !props.envioOficialDisponivel && opt.v
+                        ? "cursor-not-allowed border-line opacity-50"
+                        : ativo
+                        ? "cursor-pointer border-cyan bg-surface-2"
+                        : "cursor-pointer border-line hover:border-muted-2"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="envio_oficial"
+                      className="mt-1 accent-cyan"
+                      checked={ativo}
+                      disabled={!props.envioOficialDisponivel && opt.v}
+                      onChange={() => setEnvioOficial(opt.v)}
+                    />
+                    <span className="flex flex-col">
+                      <span className="text-[13.5px] font-medium text-foreground">{opt.nm}</span>
+                      <span className="text-xs font-normal text-muted-2">{opt.rz}</span>
+                    </span>
+                  </label>
+                );
+              })}
+
+              {!props.envioOficialDisponivel && (
+                <p className="rounded-lg border border-dashed border-line bg-surface-2 px-3.5 py-2.5 text-xs leading-relaxed text-muted">
+                  O envio automático abre quando a verificação da nossa empresa junto ao
+                  WhatsApp for concluída. Até lá ela escreve e você envia — que continua
+                  valendo pra tudo que não é confirmação ou lembrete.
+                </p>
+              )}
+
+              <span className="text-xs font-normal text-muted-2">
+                Quem receber pode responder SAIR a qualquer momento, e ela para de enviar.
+              </span>
+            </fieldset>
+
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(2)}

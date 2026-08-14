@@ -21,7 +21,7 @@ export default async function OnboardingPage({
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, usa_vocativo, tratamento, personalidade, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
+    .select("slug, nome, cargo, frentes, usa_vocativo, tratamento, personalidade, envio_oficial, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -64,6 +64,11 @@ export default async function OnboardingPage({
       initialUsaVocativo={tenant.usa_vocativo ?? true}
       initialTratamento={tenant.tratamento ?? ""}
       initialPersonalidade={normalizaPersonalidade(tenant.personalidade)}
+      initialEnvioOficial={Boolean(tenant.envio_oficial)}
+      // Env var de RUNTIME, sem NEXT_PUBLIC_: liberar o envio depois da
+      // verificação na Meta passa a ser mudar a variável no Netlify, sem
+      // precisar de build novo (NEXT_PUBLIC_* é resolvida em tempo de build).
+      envioOficialDisponivel={Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL)}
       initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}

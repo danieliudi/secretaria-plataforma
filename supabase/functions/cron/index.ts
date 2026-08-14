@@ -32,6 +32,9 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
 import { getEventsByDate } from "../fast/tools/calendar-read.ts";
+import { buscaContatoPorEmail } from "../fast/tools/redigir-supabase.ts";
+import { decideEnvio } from "../_shared/envio-decisao.ts";
+import { enviaTemplate, temCredencialMeta } from "../_shared/whatsapp-oficial.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
@@ -307,7 +310,7 @@ async function buildNovidadeBlock(tenantId: string): Promise<string | null> {
 // Hoje roda junto do brief da manhã, sobre os compromissos DO DIA. A versão
 // melhor (véspera, ~18h30, sobre o dia seguinte) só depende de uma linha nova
 // no pg_cron chamando este mesmo caminho — a regra e o formato já servem.
-async function buildConfirmacoesBlock(env: EnvFn): Promise<string | null> {
+async function buildConfirmacoesBlock(env: EnvFn, tenantId: string): Promise<string | null> {
   const hoje = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
     year: "numeric",
@@ -326,19 +329,146 @@ async function buildConfirmacoesBlock(env: EnvFn): Promise<string | null> {
   const { avisos, total } = pendentesDeConfirmacao(eventos);
   if (avisos.length === 0) return null;
 
-  const linhas = avisos.map((a) => {
-    const hora = a.hora ? `${a.hora} · ` : "";
-    const quem = a.pendentes.map(nomeCurto).join(", ");
-    return `• ${hora}${a.titulo} — ${quem}`;
-  });
+  // A flag do tenant. Uma consulta, não uma por convidado.
+  const sb = getSupabaseClient();
+  const { data: tRow } = await sb
+    .from("tenants")
+    .select("envio_oficial, nome")
+    .eq("id", tenantId)
+    .maybeSingle();
+  const tenantLigouEnvio = Boolean(tRow?.envio_oficial);
+  const nomeDoChefe = typeof tRow?.nome === "string" ? firstNameSimples(tRow.nome) : "";
 
-  const sobrando = total - avisos.length;
-  const rodape = sobrando > 0
-    ? `\n(e mais ${sobrando} compromisso${sobrando === 1 ? "" : "s"} na mesma situação)`
-    : "";
+  const enviados: string[] = [];
+  const pendentesDeLink: string[] = [];
 
-  return `⚠️ Ainda sem confirmação pra hoje:\n\n${linhas.join("\n")}${rodape}\n\n` +
-    `Quer que eu escreva a confirmação? É só dizer pra quem.`;
+  for (const aviso of avisos) {
+    const semEnvio: string[] = [];
+
+    for (const convidado of aviso.pendentes) {
+      const quem = nomeCurto(convidado);
+
+      // Sem contato cadastrado não existe telefone, e sem telefone não existe
+      // envio. Cai no link, que é onde a Yuka pede o número.
+      let contato = null;
+      try {
+        contato = await buscaContatoPorEmail(tenantId, convidado.email);
+      } catch (err) {
+        console.error("[cron] busca de contato falhou:", semDadoPessoal(err));
+      }
+      if (!contato) {
+        semEnvio.push(quem);
+        continue;
+      }
+
+      const decisao = await decideEnvio({
+        tenantId,
+        tenantLigouEnvio,
+        telefoneE164: contato.telefone_e164,
+        template: "confirmacao_compromisso",
+        variaveis: {
+          destinatario: quem,
+          remetente: nomeDoChefe || "seu contato",
+          compromisso: aviso.titulo,
+          dia: "hoje",
+          hora: aviso.hora ?? "o horário combinado",
+        },
+        origemContato: "participante_evento",
+        eventoId: aviso.eventoId,
+      }, {
+        estaForaDaLista: naoEstaNaListaDeSaida,
+        jaEnviou: jaEnviouTemplate,
+        temCredencial: temCredencialMeta,
+      });
+
+      if (decisao.via === "pular") continue;
+      if (decisao.via === "link") {
+        semEnvio.push(quem);
+        continue;
+      }
+
+      const r = await enviaTemplate(decisao.payload, {
+        tenantId,
+        telefoneE164: contato.telefone_e164,
+        template: "confirmacao_compromisso",
+        origemContato: "participante_evento",
+        eventoId: aviso.eventoId,
+      });
+      if (r.ok) enviados.push(`${quem} (${aviso.titulo})`);
+      else {
+        // Falha de envio volta pro link — o compromisso continua sem confirmar,
+        // e calar sobre isso seria pior que a falha.
+        console.error("[cron] envio de confirmação falhou:", semDadoPessoal(r.motivo));
+        semEnvio.push(quem);
+      }
+    }
+
+    if (semEnvio.length > 0) {
+      const hora = aviso.hora ? `${aviso.hora} · ` : "";
+      pendentesDeLink.push(`• ${hora}${aviso.titulo} — ${semEnvio.join(", ")}`);
+    }
+  }
+
+  const partes: string[] = [];
+
+  if (enviados.length > 0) {
+    partes.push(
+      `✅ Já confirmei pra você:\n\n${enviados.map((e) => `• ${e}`).join("\n")}\n\n` +
+        `Te aviso assim que responderem.`,
+    );
+  }
+
+  if (pendentesDeLink.length > 0) {
+    const sobrando = total - avisos.length;
+    const rodape = sobrando > 0
+      ? `\n(e mais ${sobrando} compromisso${sobrando === 1 ? "" : "s"} na mesma situação)`
+      : "";
+    partes.push(
+      `⚠️ Ainda sem confirmação pra hoje:\n\n${pendentesDeLink.join("\n")}${rodape}\n\n` +
+        `Quer que eu escreva a confirmação? É só dizer pra quem.`,
+    );
+  }
+
+  return partes.length > 0 ? partes.join("\n\n———\n\n") : null;
+}
+
+/** Primeiro nome, sem depender do módulo de persona (que é do /fast). */
+function firstNameSimples(nomeCompleto: string): string {
+  return nomeCompleto.trim().split(/\s+/)[0] ?? "";
+}
+
+/** `DecisaoDeps.estaForaDaLista` — consulta global, sem tenant. */
+async function naoEstaNaListaDeSaida(telefoneE164: string): Promise<boolean> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("whatsapp_opt_out")
+    .select("telefone_e164")
+    .eq("telefone_e164", telefoneE164)
+    .maybeSingle();
+  // Erro PROPAGA de propósito: decideEnvio trata exceção como "cai no link".
+  // Engolir aqui e devolver false faria o envio prosseguir sem ter verificado.
+  if (error) throw new Error(error.message);
+  return data !== null;
+}
+
+/** `DecisaoDeps.jaEnviou` — evita dois avisos do mesmo compromisso. */
+async function jaEnviouTemplate(
+  tenantId: string,
+  telefoneE164: string,
+  template: string,
+  eventoId?: string,
+): Promise<boolean> {
+  const sb = getSupabaseClient();
+  let q = sb
+    .from("envios_whatsapp")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("telefone_e164", telefoneE164)
+    .eq("template", template);
+  q = eventoId ? q.eq("evento_id", eventoId) : q.is("evento_id", null);
+  const { data, error } = await q.limit(1);
+  if (error) throw new Error(error.message);
+  return Array.isArray(data) && data.length > 0;
 }
 
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
@@ -382,7 +512,7 @@ async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
   try {
-    const confirmacoes = await buildConfirmacoesBlock(env);
+    const confirmacoes = await buildConfirmacoesBlock(env, tenantId);
     if (confirmacoes) {
       await sendWhatsAppText(ownerJid(env), confirmacoes, { fetch, env });
       // Vai pro histórico pra que, quando o chefe responder "pode escrever pra
