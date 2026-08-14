@@ -30,6 +30,11 @@ import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-remind
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared/tenant.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
+import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
+import { getEventsByDate } from "../fast/tools/calendar-read.ts";
+import { buscaContatoPorEmail } from "../fast/tools/redigir-supabase.ts";
+import { decideEnvio } from "../_shared/envio-decisao.ts";
+import { enviaTemplate, temCredencialMeta } from "../_shared/whatsapp-oficial.ts";
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
@@ -247,9 +252,238 @@ async function runAlerts(env: EnvFn, tenantId: string): Promise<{ sent: number; 
   return { sent, scanned: tasks.length };
 }
 
+// Avisa novidade do produto (tabela `atualizacoes`, ver /novidades no site)
+// uma vez só, como bloco separado antes do resumo — não fica repetindo.
+//
+// Primeira vez que calculamos isto pra um tenant (novidade_vista_em NULL):
+// marca como visto até agora SEM anunciar nada. Quem está começando agora
+// não viveu o "antes" das entradas antigas — despejar histórico só confunde.
+async function buildNovidadeBlock(tenantId: string): Promise<string | null> {
+  const sb = getSupabaseClient();
+
+  const { data: tenantRow, error: tErr } = await sb
+    .from("tenants")
+    .select("novidade_vista_em")
+    .eq("id", tenantId)
+    .maybeSingle();
+  if (tErr || !tenantRow) {
+    console.error("[cron] brief: falha ao ler novidade_vista_em:", semDadoPessoal(tErr?.message));
+    return null;
+  }
+
+  const { data: entradas, error: eErr } = await sb
+    .from("atualizacoes")
+    .select("descricao, publicado_em")
+    .order("publicado_em", { ascending: true });
+  if (eErr || !entradas || entradas.length === 0) {
+    if (eErr) console.error("[cron] brief: falha ao ler atualizacoes:", semDadoPessoal(eErr.message));
+    return null;
+  }
+
+  const vistoEm = tenantRow.novidade_vista_em as string | null;
+  const maisRecente = entradas[entradas.length - 1].publicado_em as string;
+
+  if (!vistoEm) {
+    await sb.from("tenants").update({ novidade_vista_em: maisRecente }).eq("id", tenantId);
+    return null;
+  }
+
+  const naoVistas = entradas.filter((e) => (e.publicado_em as string) > vistoEm);
+  if (naoVistas.length === 0) return null;
+
+  await sb.from("tenants").update({ novidade_vista_em: maisRecente }).eq("id", tenantId);
+
+  return naoVistas.length === 1
+    ? `✨ Novidade: ${naoVistas[0].descricao}`
+    : `✨ Novidades:\n${naoVistas.map((e) => `• ${e.descricao}`).join("\n")}`;
+}
+
+// Oferta de confirmação: compromissos de hoje em que alguém ainda não respondeu
+// ao convite. Ver _shared/confirmacoes.ts pra regra (e pro porquê de "talvez" e
+// "recusou" NÃO entrarem).
+//
+// POR QUE ESTE BLOCO É DETERMINÍSTICO, e não escrito pelo /fast como o resumo:
+// ele afirma um fato sobre TERCEIRO ("a Ana não confirmou"). Modelo alucinando
+// aqui faria o chefe cobrar quem já tinha confirmado — constrangimento com
+// cliente, causado por nós. Texto montado em código não inventa convidado.
+//
+// Hoje roda junto do brief da manhã, sobre os compromissos DO DIA. A versão
+// melhor (véspera, ~18h30, sobre o dia seguinte) só depende de uma linha nova
+// no pg_cron chamando este mesmo caminho — a regra e o formato já servem.
+async function buildConfirmacoesBlock(env: EnvFn, tenantId: string): Promise<string | null> {
+  const hoje = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  // Reusa o leitor do /fast (com o mapeamento de convidados já coberto por
+  // teste) em vez de duplicar o fetch de calendário que existe em getUpcoming.
+  const eventos = await getEventsByDate(hoje, {
+    getAccessToken: () => getGoogleAccessToken({ env, fetch }),
+    fetch,
+    now: () => new Date(),
+  });
+
+  const { avisos, total } = pendentesDeConfirmacao(eventos);
+  if (avisos.length === 0) return null;
+
+  // A flag do tenant. Uma consulta, não uma por convidado.
+  const sb = getSupabaseClient();
+  const { data: tRow } = await sb
+    .from("tenants")
+    .select("envio_oficial, nome")
+    .eq("id", tenantId)
+    .maybeSingle();
+  const tenantLigouEnvio = Boolean(tRow?.envio_oficial);
+  const nomeDoChefe = typeof tRow?.nome === "string" ? firstNameSimples(tRow.nome) : "";
+
+  const enviados: string[] = [];
+  const pendentesDeLink: string[] = [];
+
+  for (const aviso of avisos) {
+    const semEnvio: string[] = [];
+
+    for (const convidado of aviso.pendentes) {
+      const quem = nomeCurto(convidado);
+
+      // Sem contato cadastrado não existe telefone, e sem telefone não existe
+      // envio. Cai no link, que é onde a Yuka pede o número.
+      let contato = null;
+      try {
+        contato = await buscaContatoPorEmail(tenantId, convidado.email);
+      } catch (err) {
+        console.error("[cron] busca de contato falhou:", semDadoPessoal(err));
+      }
+      if (!contato) {
+        semEnvio.push(quem);
+        continue;
+      }
+
+      const decisao = await decideEnvio({
+        tenantId,
+        tenantLigouEnvio,
+        telefoneE164: contato.telefone_e164,
+        template: "confirmacao_compromisso",
+        variaveis: {
+          destinatario: quem,
+          remetente: nomeDoChefe || "seu contato",
+          compromisso: aviso.titulo,
+          dia: "hoje",
+          hora: aviso.hora ?? "o horário combinado",
+        },
+        origemContato: "participante_evento",
+        eventoId: aviso.eventoId,
+      }, {
+        estaForaDaLista: naoEstaNaListaDeSaida,
+        jaEnviou: jaEnviouTemplate,
+        temCredencial: temCredencialMeta,
+      });
+
+      if (decisao.via === "pular") continue;
+      if (decisao.via === "link") {
+        semEnvio.push(quem);
+        continue;
+      }
+
+      const r = await enviaTemplate(decisao.payload, {
+        tenantId,
+        telefoneE164: contato.telefone_e164,
+        template: "confirmacao_compromisso",
+        origemContato: "participante_evento",
+        eventoId: aviso.eventoId,
+      });
+      if (r.ok) enviados.push(`${quem} (${aviso.titulo})`);
+      else {
+        // Falha de envio volta pro link — o compromisso continua sem confirmar,
+        // e calar sobre isso seria pior que a falha.
+        console.error("[cron] envio de confirmação falhou:", semDadoPessoal(r.motivo));
+        semEnvio.push(quem);
+      }
+    }
+
+    if (semEnvio.length > 0) {
+      const hora = aviso.hora ? `${aviso.hora} · ` : "";
+      pendentesDeLink.push(`• ${hora}${aviso.titulo} — ${semEnvio.join(", ")}`);
+    }
+  }
+
+  const partes: string[] = [];
+
+  if (enviados.length > 0) {
+    partes.push(
+      `✅ Já confirmei pra você:\n\n${enviados.map((e) => `• ${e}`).join("\n")}\n\n` +
+        `Te aviso assim que responderem.`,
+    );
+  }
+
+  if (pendentesDeLink.length > 0) {
+    const sobrando = total - avisos.length;
+    const rodape = sobrando > 0
+      ? `\n(e mais ${sobrando} compromisso${sobrando === 1 ? "" : "s"} na mesma situação)`
+      : "";
+    partes.push(
+      `⚠️ Ainda sem confirmação pra hoje:\n\n${pendentesDeLink.join("\n")}${rodape}\n\n` +
+        `Quer que eu escreva a confirmação? É só dizer pra quem.`,
+    );
+  }
+
+  return partes.length > 0 ? partes.join("\n\n———\n\n") : null;
+}
+
+/** Primeiro nome, sem depender do módulo de persona (que é do /fast). */
+function firstNameSimples(nomeCompleto: string): string {
+  return nomeCompleto.trim().split(/\s+/)[0] ?? "";
+}
+
+/** `DecisaoDeps.estaForaDaLista` — consulta global, sem tenant. */
+async function naoEstaNaListaDeSaida(telefoneE164: string): Promise<boolean> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("whatsapp_opt_out")
+    .select("telefone_e164")
+    .eq("telefone_e164", telefoneE164)
+    .maybeSingle();
+  // Erro PROPAGA de propósito: decideEnvio trata exceção como "cai no link".
+  // Engolir aqui e devolver false faria o envio prosseguir sem ter verificado.
+  if (error) throw new Error(error.message);
+  return data !== null;
+}
+
+/** `DecisaoDeps.jaEnviou` — evita dois avisos do mesmo compromisso. */
+async function jaEnviouTemplate(
+  tenantId: string,
+  telefoneE164: string,
+  template: string,
+  eventoId?: string,
+): Promise<boolean> {
+  const sb = getSupabaseClient();
+  let q = sb
+    .from("envios_whatsapp")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("telefone_e164", telefoneE164)
+    .eq("template", template);
+  q = eventoId ? q.eq("evento_id", eventoId) : q.is("evento_id", null);
+  const { data, error } = await q.limit(1);
+  if (error) throw new Error(error.message);
+  return Array.isArray(data) && data.length > 0;
+}
+
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
 async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> {
+  try {
+    const novidade = await buildNovidadeBlock(tenantId);
+    if (novidade) {
+      await sendWhatsAppText(ownerJid(env), novidade, { fetch, env });
+      await appendAssistantMessage(ownerJid(env), novidade, tenantId);
+    }
+  } catch (err) {
+    console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
+  }
+
   let newsBlock = "";
   try {
     newsBlock = await getSectorNewsBlock(NEWS_FRENTES);
@@ -274,6 +508,21 @@ async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> 
   const text = await askFast(prompt, env) || "Sem itens pra hoje. Bom dia!";
   await sendWhatsAppText(ownerJid(env), text, { fetch, env });
   await appendAssistantMessage(ownerJid(env), text, tenantId);
+
+  // Depois do resumo, e em try próprio: falha de calendário aqui não pode
+  // derrubar um brief que já foi entregue com sucesso.
+  try {
+    const confirmacoes = await buildConfirmacoesBlock(env, tenantId);
+    if (confirmacoes) {
+      await sendWhatsAppText(ownerJid(env), confirmacoes, { fetch, env });
+      // Vai pro histórico pra que, quando o chefe responder "pode escrever pra
+      // Ana", o /fast saiba de qual reunião ele está falando.
+      await appendAssistantMessage(ownerJid(env), confirmacoes, tenantId);
+    }
+  } catch (err) {
+    console.error("[cron] brief: bloco de confirmações falhou:", semDadoPessoal(err));
+  }
+
   return { len: text.length };
 }
 

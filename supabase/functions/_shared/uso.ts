@@ -17,6 +17,7 @@ export type OrigemUso =
   | "cron"
   | "classificador"
   | "visao"
+  | "documento"
   | "consolidacao";
 
 /** Formato do campo `usage` que a API da Anthropic devolve em toda resposta. */

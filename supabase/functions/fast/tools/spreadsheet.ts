@@ -7,6 +7,7 @@
 //   - tasks:           tasks abertas de uma frente (todas as sub-listas ou uma),
 //                       no gerenciador de tarefas configurado (TASK_PROVIDER)
 //   - calendar_events: eventos de uma data ou range (start..end YYYY-MM-DD)
+//   - despesas:        despesas de um mês (YYYY-MM) — o relatório de reembolso
 
 import { type CsvColumn, toCsv, utf8ToBase64 } from "../../_shared/csv.ts";
 import {
@@ -23,8 +24,9 @@ import {
 import { getGoogleAccessToken } from "../../_shared/google-oauth.ts";
 import { getTaskProvider } from "../../_shared/task-provider-factory.ts";
 import type { ListTasksInput, TaskItem } from "../../_shared/task-provider.ts";
+import type { DespesaRow, ListarDespesasResult } from "./despesas.ts";
 
-export type SpreadsheetDataset = "tasks" | "calendar_events";
+export type SpreadsheetDataset = "tasks" | "calendar_events" | "despesas";
 
 export interface ExportSpreadsheetInput {
   dataset: SpreadsheetDataset;
@@ -32,6 +34,8 @@ export interface ExportSpreadsheetInput {
   list?: string;
   date?: string;
   end_date?: string;
+  /** Só pra dataset 'despesas': mês YYYY-MM. */
+  mes?: string;
   file_name?: string;
 }
 
@@ -44,6 +48,11 @@ export interface ExportSpreadsheetResult {
 export interface ExportSpreadsheetDeps {
   listTasks: (input: ListTasksInput) => Promise<TaskItem[]>;
   getEventsByDate: (date: string) => Promise<CalendarEvent[]>;
+  /**
+   * Despesas do mês. Injetada por quem monta as deps (fast/index.ts), porque
+   * depende do tenant — este módulo não resolve tenant sozinho.
+   */
+  listarDespesas?: (mes: string) => Promise<ListarDespesasResult>;
   /** Envia o documento pro canal certo (derivado de `to`). `content` é o CSV cru. */
   sendDocument: (
     to: string,
@@ -114,6 +123,29 @@ const CALENDAR_COLUMNS: CsvColumn<CalendarEvent & { date: string }>[] = [
   { label: "Local", pick: (e) => e.location ?? "" },
 ];
 
+/**
+ * Valor volta pra reais com VÍRGULA decimal — é o que Excel/Sheets em pt-BR
+ * entende como número. Ponto decimal aqui vira texto na planilha e quebra a
+ * soma, que é justamente pra que o arquivo existe.
+ */
+function centavosParaReais(centavos: number): string {
+  return (centavos / 100).toFixed(2).replace(".", ",");
+}
+
+function dataBR(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+}
+
+const DESPESA_COLUMNS: CsvColumn<DespesaRow>[] = [
+  { label: "Data", pick: (d) => dataBR(d.data_despesa) },
+  { label: "Estabelecimento", pick: (d) => d.estabelecimento },
+  { label: "Valor (R$)", pick: (d) => centavosParaReais(d.valor_centavos) },
+  { label: "Categoria", pick: (d) => d.categoria ?? "" },
+  { label: "Frente", pick: (d) => d.frente ?? "" },
+  { label: "Status", pick: (d) => d.status },
+];
+
 function timestampSlug(now: Date): string {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -176,6 +208,31 @@ export async function exportSpreadsheet(
     const fileName = input.file_name ?? `agenda-${range}-${slug}.csv`;
     await deps.sendDocument(to, fileName, "text/csv; charset=utf-8", csv);
     return { dataset: "calendar_events", file_name: fileName, rows: flat.length };
+  }
+
+  if (input.dataset === "despesas") {
+    if (!input.mes) throw new Error("mes (YYYY-MM) é obrigatório para despesas");
+    if (!deps.listarDespesas) throw new Error("despesas indisponível: tenant não resolvido");
+
+    const { despesas, total_centavos } = await deps.listarDespesas(input.mes);
+    // Linha de total no fim — é a primeira coisa que alguém procura num
+    // relatório de reembolso, e evita a pessoa somar na mão de novo.
+    const linhas: DespesaRow[] = [
+      ...despesas,
+      {
+        id: "",
+        data_despesa: "",
+        estabelecimento: "TOTAL",
+        valor_centavos: total_centavos,
+        categoria: null,
+        frente: null,
+        status: "",
+      },
+    ];
+    const csv = toCsv(linhas, DESPESA_COLUMNS);
+    const fileName = input.file_name ?? `reembolso-${input.mes}.csv`;
+    await deps.sendDocument(to, fileName, "text/csv; charset=utf-8", csv);
+    return { dataset: "despesas", file_name: fileName, rows: despesas.length };
   }
 
   throw new Error(`dataset desconhecido: '${input.dataset}'`);

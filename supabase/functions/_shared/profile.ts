@@ -39,6 +39,13 @@ export interface ProfileFact {
 // e cada fato é curto; 60 cobre meses de uso sem inflar o prompt.
 export const PROFILE_LIMIT = 60;
 
+// Um "fato durável" é pra ser curto por natureza (a própria tool já pede
+// isso) — sem teto, `value` entra sem corte no system prompt de TODA
+// conversa futura pra sempre. 500 chars é generoso pra frase/parágrafo curto
+// e barra tanto acidente (dedo no botão errado ditando texto longo) quanto
+// conteúdo de terceiro (e-mail, PDF) acabando ali inteiro por engano.
+const MAX_VALUE_LEN = 500;
+
 type UpsertRow = {
   user_id: string;
   category: string;
@@ -136,7 +143,7 @@ export async function saveProfileFact(
   }
   const k = normalizeKey(key);
   if (!k) throw new Error("key vazia após normalização");
-  const v = value.trim();
+  const v = value.trim().slice(0, MAX_VALUE_LEN);
   if (!v) throw new Error("value vazio");
 
   const { error } = await deps.upsertFact({

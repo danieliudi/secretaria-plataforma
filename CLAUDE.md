@@ -10,8 +10,16 @@ Antes de implementar qualquer mudança de plataforma (tela, fluxo, texto que o
 usuário lê, comportamento da secretária, mudança de dados), **mostre primeiro um
 mockup do que vai ser feito**:
 
-- **Visual** quando a mudança é de interface: layout em ASCII/markdown, HTML
-  renderizável ou print — o que fizer a pessoa *ver* o resultado.
+- **Visual** quando a mudança é de interface: **sempre um artifact HTML
+  renderizado**, nunca caixa de ASCII no terminal. ASCII mostra estrutura; o
+  Daniel precisa ver o resultado pra saber se é aquilo mesmo.
+  - **Fidelidade não é opcional.** Leia o componente real e os tokens reais
+    antes de desenhar (`app/globals.css`, o componente que você vai alterar,
+    a fonte que o `next/font` baixou em `.next/static/media/`). Mockup
+    desenhado de memória erra o que a tela já é, e aí a aprovação vale pouco.
+  - Reproduza a tela como ela vai ficar, e use o espaço em volta pra mostrar
+    o que a tela **não** consegue mostrar sozinha (o efeito no WhatsApp, o
+    estado seguinte, o caso de erro). Se der pra clicar e sentir, melhor.
 - **Só texto** quando a mudança é de comportamento ou de backend: descreva o
   antes/depois, o que muda pro usuário e o que muda no banco.
 
