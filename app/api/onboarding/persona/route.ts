@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { semDadoPessoal } from "@/lib/log-seguro";
+import { normalizaPersonalidade } from "@/lib/personalidade";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
     frentes?: unknown;
     usa_vocativo?: unknown;
     tratamento?: unknown;
+    personalidade?: unknown;
   };
   try {
     body = await request.json();
@@ -43,6 +45,12 @@ export async function POST(request: Request) {
   const usaVocativo = body.usa_vocativo !== false;
   const tratamento = typeof body.tratamento === "string" ? body.tratamento.trim().slice(0, 24) : "";
 
+  // Conjunto FECHADO, sem passagem de texto livre. Valor desconhecido vira o
+  // padrão em vez de 400: a personalidade é preferência, não credencial, e
+  // derrubar o cadastro inteiro por causa dela seria pior que assumir o
+  // meio-termo. O CHECK da coluna é a última barreira se isto aqui falhar.
+  const personalidade = normalizaPersonalidade(body.personalidade);
+
   const admin = createServiceClient();
   const { data, error } = await admin
     .from("tenants")
@@ -52,6 +60,7 @@ export async function POST(request: Request) {
       frentes,
       usa_vocativo: usaVocativo,
       tratamento: usaVocativo ? (tratamento || null) : null,
+      personalidade,
       updated_at: new Date().toISOString(),
     })
     .eq("auth_user_id", user.id)

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
+import { PRESETS, type Personalidade } from "@/lib/personalidade";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
@@ -162,6 +163,7 @@ export default function OnboardingWizard(props: {
   recusado: boolean;
   initialUsaVocativo: boolean;
   initialTratamento: string;
+  initialPersonalidade: Personalidade;
   initialProvider: Provider;
   googleConnected: boolean;
   outlookConnected: boolean;
@@ -189,6 +191,7 @@ export default function OnboardingWizard(props: {
   const [tratamentoLivre, setTratamentoLivre] = useState(
     props.initialUsaVocativo ? props.initialTratamento : "",
   );
+  const [personalidade, setPersonalidade] = useState<Personalidade>(props.initialPersonalidade);
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
   const [trelloApiKey, setTrelloApiKey] = useState("");
@@ -335,6 +338,7 @@ export default function OnboardingWizard(props: {
       frentes: frentesArrTrim,
       usa_vocativo: tratamentoOpcao !== "nenhum",
       tratamento: tratamento || null,
+      personalidade,
     });
     if (result) setStep(2);
   }
@@ -531,6 +535,52 @@ export default function OnboardingWizard(props: {
                     aria-label="Como você quer ser chamado"
                   />
                 )}
+              </fieldset>
+
+              <fieldset className="flex flex-col gap-2 border-0 p-0">
+                <legend className="mb-1 text-sm font-medium text-foreground">
+                  Como ela deve falar com você?
+                </legend>
+                <span className="mb-1 text-xs font-normal text-muted-2">
+                  Quando ela escrever uma mensagem pra você mandar a outra pessoa, o tom sobe
+                  um degrau sozinho — ninguém fala com cliente igual fala com a própria
+                  secretária.
+                </span>
+                {PRESETS.map((preset) => {
+                  const ativo = personalidade === preset.id;
+                  return (
+                    <label
+                      key={preset.id}
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
+                        ativo ? "border-cyan bg-surface-2" : "border-line hover:border-muted-2"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="personalidade"
+                        className="mt-1 accent-cyan"
+                        checked={ativo}
+                        onChange={() => setPersonalidade(preset.id)}
+                      />
+                      <span className="flex flex-col gap-0.5">
+                        <span className="text-[13.5px] font-medium text-foreground">
+                          {preset.label}
+                        </span>
+                        <span className="text-xs font-normal text-muted-2">{preset.resumo}</span>
+                        {/* Prévia só do selecionado: quatro exemplos abertos ao
+                            mesmo tempo viram parede de texto e ninguém lê. */}
+                        {ativo && (
+                          <span className="mt-1.5 rounded-md bg-surface px-2.5 py-2 text-xs font-normal italic text-muted">
+                            “{preset.exemplo}”
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  );
+                })}
+                <span className="text-xs font-normal text-muted-2">
+                  Dá pra trocar depois a qualquer momento.
+                </span>
               </fieldset>
 
               <button
