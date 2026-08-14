@@ -29,3 +29,11 @@ verify_jwt = false
 # como camada extra por enquanto.
 [functions.reflex]
 verify_jwt = true
+
+# /wa-webhook: webhook público da Meta (WhatsApp Cloud API) — não manda JWT
+# nenhum, mesma situação do /telegram. Quem autentica é a assinatura HMAC-SHA256
+# do corpo cru contra o META_APP_SECRET (_shared/meta-webhook.ts), e sem esse
+# secret configurado a função recusa TUDO — ausência de segredo nunca vira
+# modo aberto.
+[functions.wa-webhook]
+verify_jwt = false
