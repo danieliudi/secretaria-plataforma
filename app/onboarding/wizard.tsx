@@ -161,6 +161,8 @@ export default function OnboardingWizard(props: {
   initialFrentes: string;
   aprovado: boolean;
   recusado: boolean;
+  /** `tenants.is_platform_owner` — só quem é dono vê o link pro /admin. */
+  isPlatformOwner: boolean;
   initialUsaVocativo: boolean;
   initialTratamento: string;
   initialPersonalidade: Personalidade;
@@ -1119,6 +1121,17 @@ export default function OnboardingWizard(props: {
               )
             )}
             <p className="mt-3 text-xs text-muted-2">Seu identificador: {props.slug}</p>
+            {props.isPlatformOwner && (
+              // Único caminho na interface pra chegar no /admin — sem isto, a
+              // URL só era alcançável de cor. É onde quem administra a
+              // plataforma aprova (ou recusa) todo cadastro novo.
+              <a
+                href="/admin"
+                className="mt-2 self-start text-xs text-cyan underline underline-offset-2"
+              >
+                Painel de administração
+              </a>
+            )}
             <button
               onClick={() => {
                 setFinished(false);
