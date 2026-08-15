@@ -59,6 +59,22 @@ export async function GET(request: Request) {
           for (const { name, value, options } of cookiesToSet) {
             response.cookies.set(name, value, options);
           }
+          // INSTRUMENTAÇÃO (15/08/2026): a troca do código dá certo — o log de
+          // auth mostra /token 200 e evento "Login" — mas o navegador chega no
+          // /onboarding sem sessão, e a pessoa é jogada pro /login. Ou seja: o
+          // Set-Cookie sai e não cola.
+          //
+          // Isto registra o que foi escrito SEM registrar valor de cookie (é
+          // token de sessão: nunca vai pra log). Se aparecer "0 cookie(s)", o
+          // problema é que o setAll nem é chamado; se aparecer N e a sessão
+          // ainda sumir, o problema é o navegador recusando — aí o caminho é
+          // tamanho/atributo do cookie, não este arquivo.
+          console.log(
+            `[auth/callback] setAll: ${cookiesToSet.length} cookie(s) — ` +
+              cookiesToSet
+                .map((c) => `${c.name}(${c.value.length}b)`)
+                .join(", "),
+          );
         },
       },
     },
