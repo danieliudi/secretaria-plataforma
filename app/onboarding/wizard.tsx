@@ -312,21 +312,53 @@ export default function OnboardingWizard(props: {
     window.location.href = "/login";
   }
 
+  // Conectar agenda/e-mail de um provider. São DOIS caminhos, e usar o errado
+  // foi o bug de 14/08/2026:
+  //
+  // - Provider que a pessoa AINDA NÃO tem como identidade (entrou com Google e
+  //   quer somar o Outlook) → `linkIdentity`, que adiciona a identidade.
+  //
+  // - Provider que JÁ é a identidade dela (entrou com Google e precisa conectar
+  //   o Google Calendar) → `signInWithOAuth`. O Supabase RECUSA `linkIdentity`
+  //   pra uma identidade que o usuário já tem, e o erro chegava na tela como
+  //   "Não conseguimos iniciar a conexão" — mensagem que não ajudava ninguém a
+  //   entender que a operação é que estava errada.
+  //
+  // O que se quer nos dois casos é o mesmo: um `provider_refresh_token` novo,
+  // que só vem com `prompt=consent` (ver lib/oauth-providers.ts) e que o
+  // callback grava no Vault. Reautenticar entrega isso; vincular de novo, não.
   async function handleConnectProvider(provider: OAuthProviderId) {
     setConnectingProvider(provider);
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
-    const { error } = await supabase.auth.linkIdentity({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
-        scopes: cfg.scopes,
-        queryParams: cfg.queryParams,
-      },
-    });
+    const opcoes = {
+      redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+      scopes: cfg.scopes,
+      queryParams: cfg.queryParams,
+    };
+
+    let jaEhIdentidade = false;
+    try {
+      const { data } = await supabase.auth.getUserIdentities();
+      jaEhIdentidade = (data?.identities ?? []).some((i) => i.provider === provider);
+    } catch {
+      // Não conseguir listar identidades não pode travar a conexão. Seguir por
+      // `signInWithOAuth` é o lado seguro: ele funciona nos dois casos, só
+      // reautentica quem já estava logado.
+      jaEhIdentidade = true;
+    }
+
+    const { error } = jaEhIdentidade
+      ? await supabase.auth.signInWithOAuth({ provider, options: opcoes })
+      : await supabase.auth.linkIdentity({ provider, options: opcoes });
+
     if (error) {
       setConnectingProvider(null);
-      setError("Não conseguimos iniciar a conexão — tenta de novo?");
+      console.error(`[onboarding] conectar ${provider} falhou:`, error.message);
+      setError(
+        `Não conseguimos abrir a autorização do ${cfg.label} — tenta de novo? ` +
+          `Se persistir, o motivo aparece no console do navegador.`,
+      );
     }
     // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
   }

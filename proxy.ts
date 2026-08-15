@@ -46,5 +46,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // `/auth` FICA DE FORA. O callback do OAuth precisa ser o único a mexer nos
+  // cookies de sessão: ele troca o `code` e grava a sessão na própria resposta
+  // (ver app/auth/callback/route.ts). Rodar `getUser()` aqui antes disso é
+  // garantidamente inútil — a sessão ainda não existe — e coloca um segundo
+  // escritor de cookie no meio do fluxo PKCE, que é onde uma sessão recém-criada
+  // some sem deixar erro.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|auth).*)"],
 };
