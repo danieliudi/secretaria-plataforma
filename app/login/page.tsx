@@ -85,22 +85,22 @@ export default function LoginPage({
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-8 py-16 md:px-20">
+    <main className="aurora-bg flex min-h-screen items-center justify-center px-8 py-16 md:px-20">
       <div className="flex w-full max-w-md flex-col items-start gap-6 text-left">
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13.5px] font-bold tracking-tight text-foreground">Mia</span>
+          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
+          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
         </div>
-        <h1 className="text-balance text-[32px] font-semibold leading-[1.2] tracking-tight text-foreground">
+        <h1 className="text-balance text-[32px] font-semibold leading-[1.2] tracking-tight text-aurora-fg">
           Sua secretária, em minutos
         </h1>
-        <p className="max-w-sm text-[15px] leading-relaxed text-muted">
+        <p className="max-w-sm text-[15px] leading-relaxed text-aurora-muted">
           Entre com sua conta {providers.map((p) => p.label).join(" ou ")} pra
           conectar agenda, e-mail e tarefas, sem precisar mexer em nada
           técnico. Você configura o resto na próxima tela.
         </p>
         {errorParam && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">
             {ERROR_MESSAGES[errorParam] ?? "Algo deu errado. Tenta de novo?"}
           </p>
         )}
@@ -110,30 +110,30 @@ export default function LoginPage({
               key={cfg.id}
               onClick={() => handleLogin(cfg.id)}
               disabled={loadingProvider !== null}
-              className="inline-flex items-center justify-center gap-2.5 rounded-lg bg-foreground px-5 py-3.5 text-[14.5px] font-semibold text-background transition active:scale-[0.98] disabled:opacity-60"
+              className="inline-flex items-center justify-center gap-2.5 rounded-lg bg-aurora-fg px-5 py-3.5 text-[14.5px] font-semibold text-aurora-bg transition active:scale-[0.98] disabled:opacity-60"
             >
-              <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-background text-[10px] font-bold text-foreground">
+              <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-aurora-bg text-[10px] font-bold text-aurora-fg">
                 {cfg.id === "google" ? "G" : "O"}
               </span>
               {loadingProvider === cfg.id ? "Redirecionando…" : `Entrar com ${cfg.label}`}
             </button>
           ))}
         </div>
-        <p className="text-[13px] text-muted-2">Leva menos de 3 minutos.</p>
-        <details className="w-full rounded-lg border border-line bg-surface-2 px-4 py-3 text-muted">
-          <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
+        <p className="text-[13px] text-aurora-muted-2">Leva menos de 3 minutos.</p>
+        <details className="w-full rounded-lg border border-aurora-line bg-aurora-surface px-4 py-3 text-aurora-muted">
+          <summary className="cursor-pointer text-[12.5px] font-semibold text-aurora-accent-text">
             O que você vai precisar antes de começar
           </summary>
           <div className="mt-3 flex flex-col gap-4">
             {CHECKLIST.map((group) => (
               <div key={group.label} className="flex flex-col gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wide text-muted-2">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">
                   {group.label}
                 </span>
                 <ul className="flex flex-col gap-2">
                   {group.items.map((item) => (
                     <li key={item.title} className="text-[13px] leading-relaxed">
-                      <span className="font-medium text-foreground">{item.title}</span>
+                      <span className="font-medium text-aurora-fg">{item.title}</span>
                       {" — "}
                       {item.desc}
                     </li>

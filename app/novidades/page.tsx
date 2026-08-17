@@ -21,10 +21,12 @@ const TAG_LABEL: Record<Atualizacao["categoria"], string> = {
   correcao: "correção",
 };
 
+// Cor semântica de status — deliberadamente NÃO usa --aurora-accent, senão
+// "isso é novo" se confundiria visualmente com "isso é a marca Mia".
 const TAG_CLASS: Record<Atualizacao["categoria"], string> = {
-  nova: "bg-cyan/10 text-cyan",
-  melhoria: "bg-violet/10 text-violet",
-  correcao: "bg-amber-700/10 text-amber-700",
+  nova: "bg-aurora-ok/10 text-aurora-ok",
+  melhoria: "bg-aurora-info/10 text-aurora-info",
+  correcao: "bg-aurora-warn/10 text-aurora-warn",
 };
 
 function formataData(iso: string): string {
@@ -45,18 +47,18 @@ export default async function NovidadesPage() {
   const entradas = (error ? [] : data) as Atualizacao[];
 
   return (
-    <main className="flex flex-col">
+    <main className="aurora-bg flex min-h-screen flex-col">
       {/* ── topo (mesmo padrão da landing) ── */}
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
         <Link href="/" className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13.5px] font-bold tracking-tight text-foreground">Mia</span>
+          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
+          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
         </Link>
         <div className="flex items-center gap-6">
-          <span className="text-[13.5px] font-semibold text-foreground">Novidades</span>
+          <span className="text-[13.5px] font-semibold text-aurora-fg">Novidades</span>
           <Link
             href="/login"
-            className="rounded-lg border border-line px-4 py-2 text-[13.5px] font-semibold text-foreground transition hover:border-muted-2"
+            className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
           >
             Entrar
           </Link>
@@ -65,40 +67,40 @@ export default async function NovidadesPage() {
 
       <section className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-6 pb-24 pt-6 md:pt-10">
         <div className="flex flex-col gap-3">
-          <span className="text-[11px] font-bold uppercase tracking-[0.09em] text-muted-2">
+          <span className="text-[11px] font-bold uppercase tracking-[0.09em] text-aurora-accent-text">
             Histórico de atualizações
           </span>
-          <h1 className="text-balance text-[32px] font-semibold leading-tight tracking-tight text-foreground md:text-[38px]">
+          <h1 className="text-balance text-[32px] font-semibold leading-tight tracking-tight text-aurora-fg md:text-[38px]">
             O que mudou na Mia
           </h1>
-          <p className="max-w-xl text-[15px] leading-relaxed text-muted">
+          <p className="max-w-xl text-[15px] leading-relaxed text-aurora-muted">
             Tudo que sua secretária ganhou ou melhorou, na ordem em que aconteceu.
           </p>
         </div>
 
         {entradas.length === 0 ? (
-          <p className="text-[14px] text-muted">Nada por aqui ainda — volte em breve.</p>
+          <p className="text-[14px] text-aurora-muted">Nada por aqui ainda — volte em breve.</p>
         ) : (
           <div className="flex flex-col">
             {entradas.map((e, i) => (
               <div
                 key={e.id}
                 className="grid grid-cols-1 gap-1.5 py-5 sm:grid-cols-[88px_1fr] sm:gap-5"
-                style={{ borderTop: i === 0 ? "none" : "1px solid var(--line-soft)" }}
+                style={{ borderTop: i === 0 ? "none" : "1px solid var(--aurora-line-soft)" }}
               >
-                <span className="font-mono text-[11.5px] text-muted-2 sm:pt-0.5">
+                <span className="font-mono text-[11.5px] text-aurora-muted-2 sm:pt-0.5">
                   {formataData(e.publicado_em)}
                 </span>
                 <div className="flex flex-col gap-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[15px] font-semibold text-foreground">{e.titulo}</span>
+                    <span className="text-[15px] font-semibold text-aurora-fg">{e.titulo}</span>
                     <span
                       className={`rounded-full px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-wide ${TAG_CLASS[e.categoria]}`}
                     >
                       {TAG_LABEL[e.categoria]}
                     </span>
                   </div>
-                  <p className="text-[13.5px] leading-relaxed text-muted">{e.descricao}</p>
+                  <p className="text-[13.5px] leading-relaxed text-aurora-muted">{e.descricao}</p>
                 </div>
               </div>
             ))}
@@ -106,10 +108,10 @@ export default async function NovidadesPage() {
         )}
       </section>
 
-      <footer className="border-t border-line-soft">
+      <footer className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
-          <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13px] font-semibold text-muted">Mia</span>
+          <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
+          <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
         </div>
       </footer>
     </main>

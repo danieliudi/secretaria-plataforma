@@ -11,6 +11,31 @@
   --muted-2: #7a8089;
   --cyan: #0e7a82;
   --violet: #6e58a8;
+
+  /* Aurora — identidade fixa das páginas públicas (/, /login, /novidades).
+     NÃO é dark mode alternável: é a pele definitiva dessas três rotas, por
+     escolha de marca, independente do tema do sistema operacional de quem
+     olha. Os tokens acima (--background, --foreground etc.) continuam
+     servindo /onboarding e /admin, que ainda não passaram pela mesma
+     reestilização — por isso Aurora vive num namespace próprio em vez de
+     sobrescrever os tokens compartilhados. */
+  --aurora-bg: #120c1e;
+  --aurora-surface: rgba(255, 255, 255, 0.035);
+  --aurora-surface-2: rgba(255, 255, 255, 0.06);
+  --aurora-line: rgba(255, 255, 255, 0.09);
+  --aurora-line-soft: rgba(255, 255, 255, 0.06);
+  --aurora-fg: #f1eef8;
+  --aurora-muted: #a79fc2;
+  --aurora-muted-2: #847c9e;
+  --aurora-accent: #8b5cf6;
+  --aurora-accent-text: #c3aeff;
+  --aurora-accent-ink: #0f0a1a;
+  --aurora-glow: rgba(139, 92, 246, 0.3);
+  /* Semânticas de /novidades — deliberadamente NÃO usam --aurora-accent, pra
+     "isso é novo" nunca se confundir com "isso é a marca Mia". */
+  --aurora-ok: #57d9a3;
+  --aurora-info: #6db8f2;
+  --aurora-warn: #f0b45c;
 }
 
 @theme inline {
@@ -24,6 +49,22 @@
   --color-muted-2: var(--muted-2);
   --color-cyan: var(--cyan);
   --color-violet: var(--violet);
+
+  --color-aurora-bg: var(--aurora-bg);
+  --color-aurora-surface: var(--aurora-surface);
+  --color-aurora-surface-2: var(--aurora-surface-2);
+  --color-aurora-line: var(--aurora-line);
+  --color-aurora-line-soft: var(--aurora-line-soft);
+  --color-aurora-fg: var(--aurora-fg);
+  --color-aurora-muted: var(--aurora-muted);
+  --color-aurora-muted-2: var(--aurora-muted-2);
+  --color-aurora-accent: var(--aurora-accent);
+  --color-aurora-accent-text: var(--aurora-accent-text);
+  --color-aurora-accent-ink: var(--aurora-accent-ink);
+  --color-aurora-ok: var(--aurora-ok);
+  --color-aurora-info: var(--aurora-info);
+  --color-aurora-warn: var(--aurora-warn);
+
   --font-sans: var(--font-body);
 }
 
@@ -31,4 +72,19 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* O gradiente radial de Aurora não é expressável como token de cor simples —
+   fica de fora do @theme inline, como classe utilitária própria. */
+.aurora-bg {
+  background-color: var(--aurora-bg);
+  background-image: radial-gradient(circle at 15% -10%, #241242 0%, transparent 45%);
+}
+
+.aurora-glow {
+  box-shadow: 0 0 14px var(--aurora-glow);
+}
+
+.aurora-glow-btn {
+  box-shadow: 0 0 22px var(--aurora-glow);
 }
