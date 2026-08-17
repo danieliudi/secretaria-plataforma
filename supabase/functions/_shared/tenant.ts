@@ -4,7 +4,7 @@ import type { Personalidade } from "./personalidade.ts";
 
 export const DEFAULT_TENANT_SLUG = "daniel";
 
-export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks";
+export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "sanwey_tasks";
 
 export interface Tenant {
   id: string;
@@ -295,6 +295,7 @@ const PROVIDER_LIST_MAP_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_DATABASE_MAP",
   trello: "TRELLO_LIST_MAP",
   google_tasks: "GOOGLE_TASKS_LIST_MAP",
+  sanwey_tasks: "SANWEY_TASKS_LIST_MAP",
 };
 
 // ClickUp/Notion/Google Tasks usam 1 token só; Trello precisa de key+token —
@@ -306,6 +307,7 @@ const PROVIDER_TOKEN_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_API_TOKEN",
   trello: "TRELLO_API_TOKEN",
   google_tasks: "", // Google Tasks reusa as credenciais do Google — sem token próprio.
+  sanwey_tasks: "SANWEY_TASKS_API_TOKEN",
 };
 
 /**
