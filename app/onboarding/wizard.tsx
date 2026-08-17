@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 import { PRESETS, type Personalidade } from "@/lib/personalidade";
 
-type Provider = "clickup" | "notion" | "trello" | "google_tasks";
+type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "sanwey_tasks";
 type Channel = "whatsapp" | "telegram" | "both";
 type RemoteList = { id: string; name: string; path: string };
 
@@ -84,6 +84,19 @@ const PROVIDER_OPTIONS: Array<{
     },
     mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
     pickerKind: "nested",
+  },
+  {
+    value: "sanwey_tasks",
+    label: "Sanwey Tasks (Meu To-Do do Daniel)",
+    hint: "Só pra quem administra a plataforma — conecta com o \"Meu To-Do\" pessoal dentro do sanwey-crm (Gestão Sanwey). Não é uma opção pra uso geral.",
+    placeholder: '{"resibag": "Resibag"}',
+    tokenSteps: [
+      "Esse token não é gerado por você aqui — é o mesmo valor de PERSONAL_TASKS_AGENT_KEY configurado nos secrets da function personal-tasks-agent, no projeto Supabase do sanwey-crm.",
+      "Se você não configurou isso pessoalmente, essa opção não é pra sua conta — fale com quem administra a plataforma.",
+    ],
+    helpLink: null,
+    mapHint: "Mapeie cada frente para a tag correspondente no seu \"Meu To-Do\" do sanwey-crm (ex: resibag → tag \"Resibag\").",
+    pickerKind: "manual",
   },
 ];
 
@@ -256,14 +269,22 @@ export default function OnboardingWizard(props: {
     setRemoteListsLoading(true);
     setRemoteListsError(null);
     try {
-      const endpoints: Record<Exclude<Provider, "google_tasks">, string> = {
+      // Partial, não Record<Exclude<Provider, "google_tasks">, string>: nem
+      // todo provider fora do Google Tasks busca lista remota — sanwey_tasks
+      // é "manual" (frente → tag digitada, sem endpoint de busca).
+      const endpoints: Partial<Record<Provider, string>> = {
         clickup: "clickup-lists",
         notion: "notion-databases",
         trello: "trello-lists",
       };
+      const endpoint = endpoints[provider];
+      if (provider !== "google_tasks" && !endpoint) {
+        setRemoteListsError("Essa plataforma não busca listas automaticamente — preencha o mapa manualmente.");
+        return;
+      }
       const res = provider === "google_tasks"
         ? await fetch("/api/onboarding/google-tasks-lists")
-        : await fetch(`/api/onboarding/${endpoints[provider]}`, {
+        : await fetch(`/api/onboarding/${endpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(

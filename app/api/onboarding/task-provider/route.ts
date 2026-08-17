@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { upsertTenantSecret } from "@/lib/tenant-provisioning";
 
-const VALID_PROVIDERS = new Set(["clickup", "notion", "trello", "google_tasks"]);
+const VALID_PROVIDERS = new Set(["clickup", "notion", "trello", "google_tasks", "sanwey_tasks"]);
 
 export async function POST(request: Request) {
   const supabase = await createClient();
