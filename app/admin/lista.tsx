@@ -76,7 +76,7 @@ export default function AdminLista({ cadastros }: { cadastros: CadastroAdmin[] }
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
           <span className="text-[13.5px] font-bold tracking-tight text-foreground">
-            sinal <span className="font-medium text-muted-2">· admin</span>
+            Mia <span className="font-medium text-muted-2">· admin</span>
           </span>
         </div>
         <a href="/onboarding" className="text-[12.5px] font-medium text-muted-2 underline underline-offset-2 hover:text-muted">

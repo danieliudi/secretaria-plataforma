@@ -83,7 +83,7 @@ export default async function Home() {
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13.5px] font-bold tracking-tight text-foreground">sinal</span>
+          <span className="text-[13.5px] font-bold tracking-tight text-foreground">Mia</span>
         </div>
         <div className="flex items-center gap-6">
           <Link
@@ -282,7 +282,7 @@ export default async function Home() {
       <footer className="border-t border-line-soft">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13px] font-semibold text-muted">sinal</span>
+          <span className="text-[13px] font-semibold text-muted">Mia</span>
         </div>
       </footer>
     </main>

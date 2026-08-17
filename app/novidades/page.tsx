@@ -50,7 +50,7 @@ export default async function NovidadesPage() {
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
         <Link href="/" className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13.5px] font-bold tracking-tight text-foreground">sinal</span>
+          <span className="text-[13.5px] font-bold tracking-tight text-foreground">Mia</span>
         </Link>
         <div className="flex items-center gap-6">
           <span className="text-[13.5px] font-semibold text-foreground">Novidades</span>
@@ -69,7 +69,7 @@ export default async function NovidadesPage() {
             Histórico de atualizações
           </span>
           <h1 className="text-balance text-[32px] font-semibold leading-tight tracking-tight text-foreground md:text-[38px]">
-            O que mudou no sinal
+            O que mudou na Mia
           </h1>
           <p className="max-w-xl text-[15px] leading-relaxed text-muted">
             Tudo que sua secretária ganhou ou melhorou, na ordem em que aconteceu.
@@ -109,7 +109,7 @@ export default async function NovidadesPage() {
       <footer className="border-t border-line-soft">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13px] font-semibold text-muted">sinal</span>
+          <span className="text-[13px] font-semibold text-muted">Mia</span>
         </div>
       </footer>
     </main>

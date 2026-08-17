@@ -89,7 +89,7 @@ export default function LoginPage({
       <div className="flex w-full max-w-md flex-col items-start gap-6 text-left">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-sm bg-cyan" />
-          <span className="text-[13.5px] font-bold tracking-tight text-foreground">sinal</span>
+          <span className="text-[13.5px] font-bold tracking-tight text-foreground">Mia</span>
         </div>
         <h1 className="text-balance text-[32px] font-semibold leading-[1.2] tracking-tight text-foreground">
           Sua secretária, em minutos
