@@ -16,7 +16,7 @@
 // canal — ver o `throw` em fast/tools/documentos.ts e spreadsheet.ts).
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
-import { sendTeamsMessages, type TeamsDeps } from "../_shared/teams.ts";
+import { sendTeamsMessages, type TeamsDeps, type TeamsReplyContext } from "../_shared/teams.ts";
 import { validarTokenBotFramework } from "../_shared/teams-auth.ts";
 import { consumeTeamsLinkCode, getTenantByAuthorizedTeamsUserId, type Tenant } from "../_shared/tenant.ts";
 import { splitMessages } from "../_shared/whatsapp.ts";
@@ -45,6 +45,7 @@ interface TeamsActivity {
   type: string;
   text?: string;
   from?: { id: string; aadObjectId?: string; name?: string };
+  recipient?: { id: string; name?: string };
   conversation?: { id: string };
   serviceUrl?: string;
   channelId?: string;
@@ -96,6 +97,13 @@ Deno.serve(async (req: Request) => {
 
   const teamsUserId = activity.from?.aadObjectId ?? activity.from?.id;
   if (!teamsUserId) return resp({ ok: true, ignored: "sem_from" }, 200);
+  if (!activity.from || !activity.recipient) return resp({ ok: true, ignored: "sem_from_ou_recipient" }, 200);
+
+  // O Connector recusa a resposta sem identificar quem manda e quem recebe.
+  // `from`/`recipient` aqui são COPIADOS da Activity recebida (o bot só
+  // inverte o sentido) — mesmo padrão do TurnContext.getConversationReference
+  // do SDK oficial, não dá pra inventar um id de bot próprio.
+  const replyContext: TeamsReplyContext = { from: activity.recipient, recipient: activity.from };
 
   const userId = `ms:${conversationId}`;
   const text = activity.text.trim();
@@ -119,13 +127,14 @@ Deno.serve(async (req: Request) => {
     }
     try {
       if (linked) {
-        await sendTeamsMessages(serviceUrl, conversationId, [LINK_SUCCESS_MESSAGE], teamsDeps);
+        await sendTeamsMessages(serviceUrl, conversationId, [LINK_SUCCESS_MESSAGE], replyContext, teamsDeps);
       } else {
         const looksLikeCodeAttempt = /^[A-Z0-9]{4,8}$/i.test(text);
         await sendTeamsMessages(
           serviceUrl,
           conversationId,
           [looksLikeCodeAttempt ? LINK_INVALID_MESSAGE : LINK_HELP_MESSAGE],
+          replyContext,
           teamsDeps,
         );
       }
@@ -157,7 +166,7 @@ Deno.serve(async (req: Request) => {
         step: "teams_fast_done",
         detail: `ok=${result.ok} bubbles=${bubbles.length}`,
       });
-      await sendTeamsMessages(serviceUrl, conversationId, bubbles, teamsDeps);
+      await sendTeamsMessages(serviceUrl, conversationId, bubbles, replyContext, teamsDeps);
       await dbg.from("async_debug").insert({ step: "teams_sent_ok", detail: "" });
     } catch (err) {
       await dbg.from("async_debug").insert({ step: "teams_bg_err", detail: semDadoPessoal(err) });

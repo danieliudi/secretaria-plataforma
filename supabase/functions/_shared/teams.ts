@@ -32,6 +32,25 @@ export interface TeamsDeps {
   env: (k: string) => string | undefined;
 }
 
+/** Identifica quem manda e quem recebe a Activity — o Connector recusa sem isso. */
+export interface TeamsChannelAccount {
+  id: string;
+  name?: string;
+}
+
+/**
+ * Quem é o bot e quem é o usuário nessa conversa, do jeito que o próprio
+ * canal (Teams) representa esses IDs — não dá pra inventar, tem que ser
+ * copiado da Activity recebida: `from` = `recipient` da Activity recebida
+ * (o bot, do ponto de vista de quem mandou); `recipient` = `from` da
+ * Activity recebida (o usuário). Mesmo padrão do TurnContext.getConversationReference
+ * do SDK oficial (botbuilder-core/turnContext.ts).
+ */
+export interface TeamsReplyContext {
+  from: TeamsChannelAccount;
+  recipient: TeamsChannelAccount;
+}
+
 export function defaultTeamsDeps(): TeamsDeps {
   return { fetch, env: (k) => Deno.env.get(k) };
 }
@@ -88,6 +107,7 @@ export async function sendTeamsMessage(
   serviceUrl: string,
   conversationId: string,
   text: string,
+  replyContext: TeamsReplyContext,
   deps: TeamsDeps = defaultTeamsDeps(),
 ): Promise<void> {
   const token = await getAppToken(deps);
@@ -99,7 +119,13 @@ export async function sendTeamsMessage(
       "Content-Type": "application/json",
       "Authorization": `Bearer ${token}`,
     },
-    body: JSON.stringify({ type: "message", text }),
+    body: JSON.stringify({
+      type: "message",
+      text,
+      from: replyContext.from,
+      recipient: replyContext.recipient,
+      conversation: { id: conversationId },
+    }),
   });
   if (!res.ok) {
     throw new Error(`Bot Framework sendMessage ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -111,11 +137,12 @@ export async function sendTeamsMessages(
   serviceUrl: string,
   conversationId: string,
   bubbles: string[],
+  replyContext: TeamsReplyContext,
   deps: TeamsDeps = defaultTeamsDeps(),
 ): Promise<void> {
   for (const bubble of bubbles) {
     try {
-      await sendTeamsMessage(serviceUrl, conversationId, bubble, deps);
+      await sendTeamsMessage(serviceUrl, conversationId, bubble, replyContext, deps);
     } catch (err) {
       console.error(`[teams] sendMessage falhou: ${semDadoPessoal(err)}`);
     }
