@@ -156,6 +156,8 @@ function primeiroNome(nomeCompleto: string): string {
 export default function OnboardingWizard(props: {
   slug: string;
   email: string;
+  /** Vem de `?step=` — link de "editar" no /app pousando no passo certo. */
+  initialStep?: Step;
   initialNome: string;
   initialCargo: string;
   initialFrentes: string;
@@ -184,7 +186,7 @@ export default function OnboardingWizard(props: {
   initialWhatsappLinkCode: string | null;
   initialWhatsappLinkCodeExpiresAt: string | null;
 }) {
-  const [step, setStep] = useState<Step>(1);
+  const [step, setStep] = useState<Step>(props.initialStep ?? 1);
   const [nome, setNome] = useState(props.initialNome);
   const [cargo, setCargo] = useState(props.initialCargo);
   const [frentes, setFrentes] = useState(props.initialFrentes);

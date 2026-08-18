@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
   // CONVENIÊNCIA, não é a trava — a checagem que vale (is_platform_owner) roda
   // dentro da página e da API, em carregaDonoDaPlataforma(). Middleware sozinho
   // nunca deve ser a única barreira de uma rota administrativa.
-  const exigeSessao = ["/onboarding", "/admin"].some((p) => request.nextUrl.pathname.startsWith(p));
+  const exigeSessao = ["/onboarding", "/admin", "/app"].some((p) => request.nextUrl.pathname.startsWith(p));
   if (!user && exigeSessao) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

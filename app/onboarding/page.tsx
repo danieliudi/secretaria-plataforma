@@ -11,9 +11,9 @@ import { normalizaPersonalidade } from "@/lib/personalidade";
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ link_error?: string }>;
+  searchParams: Promise<{ link_error?: string; step?: string }>;
 }) {
-  const { link_error: linkError } = await searchParams;
+  const { link_error: linkError, step: stepParam } = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
@@ -44,6 +44,13 @@ export default async function OnboardingPage({
     );
   }
 
+  // Quem já foi aprovado tem casa própria em /app — o wizard só reabre se for
+  // pra editar algo específico (link com ?step=), não como destino padrão.
+  if (tenant.aprovado_em && !stepParam) redirect("/app");
+
+  const stepNumero = Number(stepParam);
+  const initialStep = [1, 2, 3, 4].includes(stepNumero) ? (stepNumero as 1 | 2 | 3 | 4) : undefined;
+
   // Código pendente só é válido se ainda não venceu — mesma regra de
   // consumeWhatsAppLinkCode no backend (supabase/functions/_shared/tenant.ts).
   const pendingCodeValid = Boolean(
@@ -56,6 +63,7 @@ export default async function OnboardingPage({
     <OnboardingWizard
       slug={tenant.slug}
       email={user.email ?? ""}
+      initialStep={initialStep}
       initialNome={tenant.nome ?? ""}
       initialCargo={tenant.cargo ?? ""}
       initialFrentes={(tenant.frentes ?? []).join(", ")}
