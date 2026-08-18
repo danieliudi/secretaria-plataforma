@@ -13,10 +13,17 @@ export const dynamic = "force-dynamic";
 
 const PROVIDER_LABEL: Record<string, string> = {
   google_tasks: "Google Tasks",
+  microsoft_todo: "Microsoft To Do",
   clickup: "ClickUp",
   notion: "Notion",
   trello: "Trello",
 };
+
+/** "a" / "a e b" / "a, b e c" — nunca vírgula antes do último item. */
+function juntaComE(itens: string[]): string {
+  if (itens.length <= 1) return itens.join("");
+  return `${itens.slice(0, -1).join(", ")} e ${itens[itens.length - 1]}`;
+}
 
 function primeiroNome(nomeCompleto: string): string {
   return nomeCompleto.trim().split(/\s+/)[0] ?? "";
@@ -31,7 +38,7 @@ export default async function AppPage() {
   const { data: tenant, error } = await admin
     .from("tenants")
     .select(
-      "nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, envio_oficial, aprovado_em, is_platform_owner",
+      "nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, teams_authorized_user_id, envio_oficial, aprovado_em, is_platform_owner",
     )
     .eq("auth_user_id", user.id)
     .maybeSingle();
@@ -67,12 +74,21 @@ export default async function AppPage() {
   const ferramentaConectada =
     tenant.task_provider === "google_tasks"
       ? Boolean(tenant.google_refresh_token_secret_id)
+      : tenant.task_provider === "microsoft_todo"
+      ? Boolean(tenant.outlook_refresh_token_secret_id)
       : Boolean(tenant.task_provider_token_secret_id);
 
   const whatsappVinculado = Boolean(tenant.whatsapp_authorized_number);
   const telegramVinculado = Boolean(tenant.telegram_authorized_chat_id);
-  const canalVinculado = whatsappVinculado || telegramVinculado;
-  const canalNome = whatsappVinculado ? "WhatsApp" : telegramVinculado ? "Telegram" : null;
+  const teamsVinculado = Boolean(tenant.teams_authorized_user_id);
+  const canaisVinculadosNomes = [
+    whatsappVinculado && "WhatsApp",
+    telegramVinculado && "Telegram",
+    teamsVinculado && "Teams",
+  ].filter((v): v is string => Boolean(v));
+  const canalVinculado = canaisVinculadosNomes.length > 0;
+  const canalNome = canaisVinculadosNomes.length > 0 ? juntaComE(canaisVinculadosNomes) : null;
+  const canalPreferidoNome = canalPreferido(tenant.channel_preference);
 
   const envioOficialDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioAutomaticoAtivo = Boolean(tenant.envio_oficial) && envioOficialDisponivel;
@@ -145,7 +161,9 @@ export default async function AppPage() {
               <>
                 <SignalBars />
                 <span className="text-[15px] tabular-nums text-aurora-muted">
-                  {whatsappVinculado ? tenant.whatsapp_authorized_number : "Conta do Telegram vinculada"}
+                  {whatsappVinculado && canaisVinculadosNomes.length === 1
+                    ? tenant.whatsapp_authorized_number
+                    : canaisVinculadosNomes.join(" · ")}
                 </span>
               </>
             ) : (
@@ -186,7 +204,7 @@ export default async function AppPage() {
           <PrefRow
             icon={<CanalIcon />}
             title="Canal"
-            value={canalNome ?? CHANNEL_LABEL[tenant.channel_preference ?? ""] ?? "—"}
+            value={canalNome ?? canalPreferidoNome ?? "—"}
             desc="Onde a Mia troca mensagem com você."
             status={<StatusMeter state={canalVinculado ? "on" : "pending"} text={canalVinculado ? "Vinculado" : "Pendente"} />}
             editHref="/onboarding?step=3"
@@ -216,8 +234,21 @@ export default async function AppPage() {
 const CHANNEL_LABEL: Record<string, string> = {
   whatsapp: "WhatsApp",
   telegram: "Telegram",
-  both: "WhatsApp e Telegram",
+  teams: "Teams",
 };
+
+/**
+ * `channel_preference` virou texto livre ("whatsapp,teams") desde que o
+ * passo 3 do wizard passou a ser múltipla escolha — antes de qualquer canal
+ * estar de fato vinculado, é a única pista de qual a pessoa pretende usar.
+ */
+function canalPreferido(channelPreference: string | null): string | null {
+  const nomes = (channelPreference ?? "")
+    .split(",")
+    .map((c) => CHANNEL_LABEL[c.trim()])
+    .filter((v): v is string => Boolean(v));
+  return nomes.length > 0 ? juntaComE(nomes) : null;
+}
 
 function SignalBars() {
   const heights = [6, 14, 9, 12];

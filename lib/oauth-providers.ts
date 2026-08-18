@@ -12,9 +12,10 @@ export interface OAuthProviderConfig {
   secretColumn: "google_refresh_token_secret_id" | "outlook_refresh_token_secret_id";
   /** Liga/desliga o botão na UI. O App Registration do Azure e o provider no
    * Supabase Auth já estão configurados (18/08/2026) — login/vínculo com
-   * Outlook funciona de ponta a ponta. O que AINDA não existe é o backend
-   * (supabase/functions) ler/escrever Calendar/Mail via Microsoft Graph —
-   * hoje calendar-read.ts, calendar-write.ts e gmail-read.ts só falam com
+   * Outlook funciona de ponta a ponta. Microsoft To Do (tarefas) já tem
+   * backend real via Microsoft Graph (_shared/providers/microsoft-todo-provider.ts,
+   * 18/08/2026). O que AINDA não existe é Calendar/Mail via Graph — hoje
+   * calendar-read.ts, calendar-write.ts e gmail-read.ts só falam com
    * googleapis.com. Isso é trabalho futuro (Fase 2) — ver README.md. */
   enabled: boolean;
 }
@@ -45,6 +46,7 @@ export const OAUTH_PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
       "offline_access",
       "https://graph.microsoft.com/Calendars.ReadWrite",
       "https://graph.microsoft.com/Mail.Read",
+      "https://graph.microsoft.com/Tasks.ReadWrite",
     ].join(" "),
     queryParams: { prompt: "consent" },
     secretColumn: "outlook_refresh_token_secret_id",

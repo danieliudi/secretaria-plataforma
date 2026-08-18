@@ -14,6 +14,7 @@ import { createClickUpProvider } from "./providers/clickup-provider.ts";
 import { createGoogleTasksProvider } from "./providers/google-tasks-provider.ts";
 import { createTrelloProvider } from "./providers/trello-provider.ts";
 import { createNotionProvider, defaultNotionDeps } from "./providers/notion-provider.ts";
+import { createMicrosoftTodoProvider } from "./providers/microsoft-todo-provider.ts";
 
 /** Instancia o provider ativo, conforme TASK_PROVIDER no `env` passado (ou global). */
 export function getTaskProvider(
@@ -23,5 +24,6 @@ export function getTaskProvider(
   if (kind === "notion") return createNotionProvider({ ...defaultNotionDeps(), env });
   if (kind === "trello") return createTrelloProvider(env);
   if (kind === "google_tasks") return createGoogleTasksProvider(env);
+  if (kind === "microsoft_todo") return createMicrosoftTodoProvider(env);
   return createClickUpProvider(env);
 }

@@ -4,6 +4,11 @@ import { createServiceClient } from "@/lib/supabase/service";
 import OnboardingWizard from "./wizard";
 import { semDadoPessoal } from "@/lib/log-seguro";
 import { normalizaPersonalidade } from "@/lib/personalidade";
+import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
+
+function primeiroNome(nomeCompleto: string): string {
+  return nomeCompleto.trim().split(/\s+/)[0] ?? "";
+}
 
 // Server Component: carrega o tenant já criado no /auth/callback e entrega
 // pro wizard (Client Component) como estado inicial. Não cria a linha aqui —
@@ -21,7 +26,7 @@ export default async function OnboardingPage({
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, is_platform_owner, usa_vocativo, tratamento, personalidade, envio_oficial, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at")
+    .select("slug, nome, cargo, frentes, is_platform_owner, usa_vocativo, tratamento, personalidade, envio_oficial, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at, teams_authorized_user_id, teams_link_code, teams_link_code_expires_at")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -52,24 +57,58 @@ export default async function OnboardingPage({
   const initialStep = [1, 2, 3, 4].includes(stepNumero) ? (stepNumero as 1 | 2 | 3 | 4) : undefined;
 
   // Código pendente só é válido se ainda não venceu — mesma regra de
-  // consumeWhatsAppLinkCode no backend (supabase/functions/_shared/tenant.ts).
+  // consumeWhatsAppLinkCode/consumeTeamsLinkCode no backend
+  // (supabase/functions/_shared/tenant.ts).
   const pendingCodeValid = Boolean(
     tenant.whatsapp_link_code &&
     tenant.whatsapp_link_code_expires_at &&
     new Date(tenant.whatsapp_link_code_expires_at) > new Date(),
   );
+  const pendingTeamsCodeValid = Boolean(
+    tenant.teams_link_code &&
+    tenant.teams_link_code_expires_at &&
+    new Date(tenant.teams_link_code_expires_at) > new Date(),
+  );
+
+  // channel_preference virou texto livre ("whatsapp,teams") desde que o
+  // passo 3 passou a ser múltipla escolha — sem enum fechado pra validar,
+  // então filtra pros 3 valores que o wizard reconhece.
+  const VALID_CHANNELS = new Set(["whatsapp", "telegram", "teams"]);
+  const initialChannels = String(tenant.channel_preference ?? "")
+    .split(",")
+    .map((c: string) => c.trim())
+    .filter((c: string) => VALID_CHANNELS.has(c));
+
+  // Mesmo cálculo de app/app/page.tsx — o AppHeader é compartilhado entre as
+  // duas telas, então o badge de pendentes precisa existir aqui também.
+  const isPlatformOwner = Boolean(tenant.is_platform_owner);
+  let pendentes = 0;
+  if (isPlatformOwner) {
+    const dono = await carregaDonoDaPlataforma();
+    if (dono) {
+      const { count } = await admin
+        .from("tenants")
+        .select("slug", { count: "exact", head: true })
+        .eq("active", true)
+        .is("aprovado_em", null)
+        .is("recusado_em", null);
+      pendentes = count ?? 0;
+    }
+  }
 
   return (
     <OnboardingWizard
       slug={tenant.slug}
       email={user.email ?? ""}
+      userLabel={primeiroNome(tenant.nome ?? "") || user.email || ""}
+      pendentes={pendentes}
       initialStep={initialStep}
       initialNome={tenant.nome ?? ""}
       initialCargo={tenant.cargo ?? ""}
       initialFrentes={(tenant.frentes ?? []).join(", ")}
       aprovado={Boolean(tenant.aprovado_em)}
       recusado={Boolean(tenant.recusado_em)}
-      isPlatformOwner={Boolean(tenant.is_platform_owner)}
+      isPlatformOwner={isPlatformOwner}
       initialUsaVocativo={tenant.usa_vocativo ?? true}
       initialTratamento={tenant.tratamento ?? ""}
       initialPersonalidade={normalizaPersonalidade(tenant.personalidade)}
@@ -78,16 +117,19 @@ export default async function OnboardingPage({
       // verificação na Meta passa a ser mudar a variável no Netlify, sem
       // precisar de build novo (NEXT_PUBLIC_* é resolvida em tempo de build).
       envioOficialDisponivel={Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL)}
-      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks"}
+      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}
       linkError={linkError ?? null}
-      initialChannelPreference={tenant.channel_preference as "whatsapp" | "telegram" | "both" | null}
+      initialChannels={initialChannels as ("whatsapp" | "telegram" | "teams")[]}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
       trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}
       whatsappConnected={Boolean(tenant.whatsapp_authorized_number)}
       initialWhatsappLinkCode={pendingCodeValid ? tenant.whatsapp_link_code : null}
       initialWhatsappLinkCodeExpiresAt={pendingCodeValid ? tenant.whatsapp_link_code_expires_at : null}
+      teamsConnected={Boolean(tenant.teams_authorized_user_id)}
+      initialTeamsLinkCode={pendingTeamsCodeValid ? tenant.teams_link_code : null}
+      initialTeamsLinkCodeExpiresAt={pendingTeamsCodeValid ? tenant.teams_link_code_expires_at : null}
     />
   );
 }

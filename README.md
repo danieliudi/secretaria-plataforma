@@ -150,13 +150,23 @@ deploy automático — dá pra continuar deployando manualmente com
    3. Certificates & secrets → novo client secret → copiar o **Value** na
       hora (só aparece uma vez).
    4. API permissions → Microsoft Graph → Delegated →
-      `Calendars.ReadWrite`, `Mail.Read`, `offline_access`, `email`,
-      `openid`, `profile`.
+      `Calendars.ReadWrite`, `Mail.Read`, `Tasks.ReadWrite`, `offline_access`,
+      `email`, `openid`, `profile`.
    5. Colar o Application (client) ID + o secret em Supabase Dashboard →
       Authentication → Providers → Azure, habilitar.
    6. Habilitar **"Manual Linking"** nas configurações de Authentication do
       projeto Supabase — obrigatório pro `linkIdentity()` funcionar (é o que
       permite vincular uma segunda conta a quem já está logado).
+   7. **Além do provider do Supabase Auth** (que só serve pro LOGIN), colar o
+      MESMO Application (client) ID + client secret também em Supabase
+      Dashboard → Edge Functions → Secrets, como `MICROSOFT_CLIENT_ID` e
+      `MICROSOFT_CLIENT_SECRET` — é o que `_shared/microsoft-oauth.ts` usa
+      pra trocar o refresh_token de cada tenant por access_token na hora de
+      falar com o Graph (Microsoft To Do). Sem isso o login funciona mas
+      Microsoft To Do falha em toda chamada. Mesmo App Registration reusado
+      pelo bot do Teams (`TEAMS_APP_ID`/`TEAMS_APP_PASSWORD`) — são o MESMO
+      app, só duplicado sob nomes de secret diferentes porque cada
+      integração lê sua própria variável.
    * Risco a documentar: TI de empresas costuma bloquear consentimento de
      apps novos pedindo Calendar/Mail — isso acontece na tela da própria
      Microsoft, antes de chegar no nosso callback, não dá pra contornar em
@@ -184,9 +194,6 @@ deploy automático — dá pra continuar deployando manualmente com
   número de teste e mandar o código gerado pro número da plataforma — a
   resposta esperada é a mensagem de sucesso de `LINK_SUCCESS_MESSAGE` em
   `reflex/index.ts` ("✅ Pronto, esse WhatsApp já está vinculado...").
-* Mapa de frentes só é JSON cru no fallback do Trello quando nem a API key
-  própria nem a `TRELLO_API_KEY` global estão disponíveis (ClickUp, Notion e
-  Google Tasks sempre têm UI guiada com busca automática).
 * As colunas `tenants.trello_api_key_secret_id` e
   `tenants.outlook_refresh_token_secret_id` já foram aplicadas em produção
   (migration `tenants_add_trello_api_key_and_outlook_refresh_token`) —
@@ -198,17 +205,36 @@ deploy automático — dá pra continuar deployando manualmente com
   Developer Program não qualificou a conta pessoal) e provider Azure ligado
   no Supabase Auth; `enabled: true` em `lib/oauth-providers.ts`. Login e
   vinculação funcionam de ponta a ponta (callback, colunas, Vault — tudo já
-  suportava os dois provedores). **O que ainda falta (Fase 2, trabalho
-  futuro):** a secretária (backend, `supabase/functions`) ainda não
-  lê/escreve Calendar/Mail via Microsoft Graph — só fala com
-  `googleapis.com`. Ou seja, hoje dá pra logar/conectar com Outlook, mas a
-  agenda e o e-mail que a secretária usa continuam sendo os do Google até o
-  `_shared/microsoft-oauth.ts` + as versões Graph de calendário/e-mail
-  existirem. Decisão já tomada sobre como isso vai funcionar quando alguém
-  conectar os dois: **por capacidade** — Agenda e E-mail viram escolhas
-  independentes no wizard (cada uma podendo vir de um provedor diferente),
-  Tarefas continua sendo escolha à parte (Google Tasks/ClickUp/Notion/
-  Trello), não um provedor "principal" que governa tudo.
+  suportava os dois provedores). **Microsoft To Do (tarefas) tem backend
+  completo** (`_shared/microsoft-oauth.ts` + `_shared/providers/microsoft-todo-provider.ts`,
+  18/08/2026) — 5º provedor de tarefas, ao lado de Google Tasks/ClickUp/
+  Notion/Trello, recomendado no wizard quando a pessoa loga com Outlook. **O
+  que ainda falta (Fase 2, trabalho futuro):** Calendar/Mail via Microsoft
+  Graph — hoje `calendar-read.ts`, `calendar-write.ts` e `gmail-read.ts` só
+  falam com `googleapis.com`. Decisão já tomada sobre como isso vai
+  funcionar quando alguém conectar os dois: **por capacidade** — Agenda e
+  E-mail viram escolhas independentes no wizard (cada uma podendo vir de um
+  provedor diferente), Tarefas continua sendo escolha à parte, não um
+  provedor "principal" que governa tudo.
+* **Mapa de frentes virou auto-criação (18/08/2026)** — o wizard não pede
+  mais pra escolher uma lista/database já existente: ao concluir o passo de
+  Tarefas, a Mia cria 1 lista nova por área nos 5 provedores
+  (`lib/task-list-create.ts`, rota `/api/onboarding/task-provider`), sem
+  exigir que a pessoa vá criar nada na origem antes. Efeitos colaterais a
+  saber: ClickUp usa o primeiro space do primeiro workspace acessível pelo
+  token, Trello usa o primeiro board, e o Notion exige que pelo menos 1
+  PÁGINA (não só databases) esteja compartilhada com a integração — sem
+  isso não tem onde criar o database novo. Idempotente: só cria lista pra
+  área que ainda não está no `task_provider_list_map` salvo.
+* **Canal virou múltipla escolha (18/08/2026)** — o passo 3 do wizard deixou
+  de ser um rádio único (`whatsapp` | `telegram` | `both`) e virou checkbox:
+  WhatsApp, Telegram e Teams, qualquer combinação. `tenants.channel_preference`
+  perdeu o CHECK de enum fechado e agora guarda texto livre separado por
+  vírgula (ex: `"whatsapp,teams"`) — é só exibição (cron de avisos, /admin),
+  quem autoriza de verdade continua sendo cada coluna própria
+  (`whatsapp_authorized_number` / `telegram_authorized_chat_id` /
+  `teams_authorized_user_id`). Teams entrou no wizard usando o mesmo
+  código de vínculo de 6 letras do WhatsApp.
 
 ## Repositório
 

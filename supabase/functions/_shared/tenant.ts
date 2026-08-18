@@ -4,7 +4,7 @@ import type { Personalidade } from "./personalidade.ts";
 
 export const DEFAULT_TENANT_SLUG = "daniel";
 
-export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks";
+export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo";
 
 export interface Tenant {
   id: string;
@@ -21,6 +21,7 @@ export interface Tenant {
   google_client_id: string | null;
   google_client_secret_secret_id: string | null;
   google_refresh_token_secret_id: string | null;
+  outlook_refresh_token_secret_id: string | null;
   ga4_property_map: Record<string, unknown>;
   whatsapp_evolution_instance: string | null;
   whatsapp_evolution_api_key_secret_id: string | null;
@@ -51,6 +52,7 @@ const TENANT_COLUMNS = `
   task_provider, task_provider_list_map, task_provider_token_secret_id,
   trello_api_key_secret_id,
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
+  outlook_refresh_token_secret_id,
   ga4_property_map,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
@@ -371,6 +373,7 @@ const PROVIDER_LIST_MAP_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_DATABASE_MAP",
   trello: "TRELLO_LIST_MAP",
   google_tasks: "GOOGLE_TASKS_LIST_MAP",
+  microsoft_todo: "MICROSOFT_TODO_LIST_MAP",
 };
 
 // ClickUp/Notion/Google Tasks usam 1 token só; Trello precisa de key+token —
@@ -382,6 +385,7 @@ const PROVIDER_TOKEN_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_API_TOKEN",
   trello: "TRELLO_API_TOKEN",
   google_tasks: "", // Google Tasks reusa as credenciais do Google — sem token próprio.
+  microsoft_todo: "", // Idem — reusa as credenciais do Outlook (outlook_refresh_token_secret_id).
 };
 
 /**
@@ -413,6 +417,11 @@ const SHARED_INFRA_KEYS = new Set([
   // pessoal é o refresh token, que continua fora desta lista.
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
+  // Mesma lógica pro App Registration do Microsoft ("Secretaria-plataforma") —
+  // um app só pra toda a plataforma; MICROSOFT_REFRESH_TOKEN (pessoal) fica
+  // fora desta lista.
+  "MICROSOFT_CLIENT_ID",
+  "MICROSOFT_CLIENT_SECRET",
   // Key de APLICAÇÃO do Trello (o token de acesso é que é pessoal).
   "TRELLO_API_KEY",
 ]);
@@ -428,10 +437,11 @@ const SHARED_INFRA_KEYS = new Set([
 export async function buildTenantEnv(
   tenant: Tenant,
 ): Promise<(key: string) => string | undefined> {
-  const [googleClientSecret, googleRefreshToken, taskProviderToken, trelloApiKey, evolutionApiKey, telegramBotToken] =
+  const [googleClientSecret, googleRefreshToken, outlookRefreshToken, taskProviderToken, trelloApiKey, evolutionApiKey, telegramBotToken] =
     await Promise.all([
       readSecret(tenant.google_client_secret_secret_id),
       readSecret(tenant.google_refresh_token_secret_id),
+      readSecret(tenant.outlook_refresh_token_secret_id),
       readSecret(tenant.task_provider_token_secret_id),
       readSecret(tenant.trello_api_key_secret_id),
       readSecret(tenant.whatsapp_evolution_api_key_secret_id),
@@ -442,6 +452,7 @@ export async function buildTenantEnv(
   if (tenant.google_client_id) overrides.set("GOOGLE_CLIENT_ID", tenant.google_client_id);
   if (googleClientSecret) overrides.set("GOOGLE_CLIENT_SECRET", googleClientSecret);
   if (googleRefreshToken) overrides.set("GOOGLE_REFRESH_TOKEN", googleRefreshToken);
+  if (outlookRefreshToken) overrides.set("MICROSOFT_REFRESH_TOKEN", outlookRefreshToken);
   if (Object.keys(tenant.ga4_property_map ?? {}).length > 0) {
     overrides.set("GA4_PROPERTY_MAP", JSON.stringify(tenant.ga4_property_map));
   }

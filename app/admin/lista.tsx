@@ -19,10 +19,15 @@ export interface CadastroAdmin {
   criadoEm: string;
 }
 
+// `channel_preference` virou texto livre ("whatsapp,teams") desde que o
+// passo 3 do wizard passou a ser múltipla escolha (18/08/2026) — o map
+// abaixo só cobre os tokens individuais; o fallback (`?? c.canal`) mostra o
+// valor cru quando vem mais de um junto. Tela só do dono da plataforma, não
+// prioritário deixar bonito pra combinação.
 const CANAL_LABEL: Record<string, string> = {
   whatsapp: "WhatsApp",
   telegram: "Telegram",
-  both: "WhatsApp e Telegram",
+  teams: "Teams",
 };
 
 function dataHora(iso: string): string {
