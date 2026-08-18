@@ -14,6 +14,7 @@ import { semDadoPessoal } from "./log-seguro.ts";
 export type OrigemUso =
   | "whatsapp"
   | "telegram"
+  | "teams"
   | "cron"
   | "classificador"
   | "visao"
@@ -65,10 +66,15 @@ export async function registraUso(
 
 /**
  * Deduz o canal a partir do identificador de quem falou. O `/fast` é chamado
- * tanto pelo WhatsApp quanto pelo Telegram e só recebe esse identificador —
- * o prefixo `tg:` é posto pelo telegram/index.ts.
+ * pelo WhatsApp, Telegram e Teams e só recebe esse identificador — os
+ * prefixos `tg:`/`ms:` são postos por telegram/index.ts e teams/index.ts
+ * respectivamente (ver _shared/channel.ts). Sem o prefixo `ms:` aqui, toda
+ * mensagem do Teams caía contada como "whatsapp" — achado ao montar o
+ * medidor de uso por conta (18/08/2026).
  */
 export function origemPorUsuario(userId: string | undefined): OrigemUso {
   if (!userId) return "cron";
-  return userId.startsWith("tg:") ? "telegram" : "whatsapp";
+  if (userId.startsWith("tg:")) return "telegram";
+  if (userId.startsWith("ms:")) return "teams";
+  return "whatsapp";
 }

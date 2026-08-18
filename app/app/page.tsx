@@ -38,7 +38,7 @@ export default async function AppPage() {
   const { data: tenant, error } = await admin
     .from("tenants")
     .select(
-      "nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, teams_authorized_user_id, envio_oficial, aprovado_em, is_platform_owner",
+      "id, nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, teams_authorized_user_id, envio_oficial, aprovado_em, is_platform_owner",
     )
     .eq("auth_user_id", user.id)
     .maybeSingle();
@@ -89,6 +89,29 @@ export default async function AppPage() {
   const canalVinculado = canaisVinculadosNomes.length > 0;
   const canalNome = canaisVinculadosNomes.length > 0 ? juntaComE(canaisVinculadosNomes) : null;
   const canalPreferidoNome = canalPreferido(tenant.channel_preference);
+
+  // Uso do mês — conta linhas de uso_modelo por `origem` (ver
+  // _shared/uso.ts). Só contagem de chamada, nunca conteúdo — a tabela é
+  // seguríssima de ler nesse sentido (ver comentário lá). "classificador" e
+  // "consolidacao" ficam de fora do total: são chamada interna derivada de
+  // uma mensagem já contada em "mensagens", não uma ação nova do usuário.
+  const inicioDoMes = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+  const { data: usoRows } = await admin
+    .from("uso_modelo")
+    .select("origem")
+    .eq("tenant_id", tenant.id)
+    .gte("ts", inicioDoMes);
+
+  const usoPorOrigem: Record<string, number> = {};
+  for (const row of usoRows ?? []) {
+    const origem = (row as { origem: string }).origem;
+    usoPorOrigem[origem] = (usoPorOrigem[origem] ?? 0) + 1;
+  }
+  const usoMensagens = (usoPorOrigem.whatsapp ?? 0) + (usoPorOrigem.telegram ?? 0) + (usoPorOrigem.teams ?? 0);
+  const usoImagens = usoPorOrigem.visao ?? 0;
+  const usoDocumentos = usoPorOrigem.documento ?? 0;
+  const usoAutomatico = usoPorOrigem.cron ?? 0;
+  const usoMaximo = Math.max(usoMensagens, usoImagens, usoDocumentos, usoAutomatico, 1);
 
   const envioOficialDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioAutomaticoAtivo = Boolean(tenant.envio_oficial) && envioOficialDisponivel;
@@ -177,6 +200,18 @@ export default async function AppPage() {
             )}
           </div>
         </section>
+
+        {/* uso — o que puxou a Mia esse mês, sem valor em R$ (preço ainda não existe) */}
+        <div className="mb-1.5 flex items-center gap-4">
+          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-aurora-muted-2">Uso este mês</span>
+          <span className="h-px flex-1 bg-aurora-line-soft" />
+        </div>
+        <div className="mb-[68px] grid grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-4">
+          <UsoStat icon={<MensagensIcon />} label="Mensagens" valor={usoMensagens} max={usoMaximo} desc="WhatsApp, Telegram e Teams" />
+          <UsoStat icon={<ImagensIcon />} label="Imagens" valor={usoImagens} max={usoMaximo} desc="Fotos e recibos analisados" />
+          <UsoStat icon={<DocumentosIcon />} label="Documentos" valor={usoDocumentos} max={usoMaximo} desc="PDFs lidos" />
+          <UsoStat icon={<AutomaticoIcon />} label="Automático" valor={usoAutomatico} max={usoMaximo} desc="Resumos e lembretes por conta própria" />
+        </div>
 
         {/* configuração — lista de preferências, não cards */}
         <div className="mb-1.5 flex items-center gap-4">
@@ -346,6 +381,72 @@ function CanalIcon() {
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
       <line x1="3" y1="10" x2="12.5" y2="10" />
       <circle cx="16" cy="10" r="2.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function UsoStat({
+  icon,
+  label,
+  valor,
+  max,
+  desc,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  valor: number;
+  max: number;
+  desc: string;
+}) {
+  const pct = Math.max(4, Math.round((valor / max) * 100));
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-center gap-2 text-aurora-muted-2">
+        {icon}
+        <span className="text-[11px] font-bold uppercase tracking-wide">{label}</span>
+      </div>
+      <span className="font-mono text-[22px] font-semibold tabular-nums leading-none text-aurora-fg">{valor}</span>
+      <div className="h-1 w-full rounded-full bg-aurora-surface-2">
+        <div className="h-1 rounded-full bg-aurora-accent" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[11.5px] leading-snug text-aurora-muted-2">{desc}</span>
+    </div>
+  );
+}
+
+function MensagensIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 5.5h14v8H8l-3.5 3v-3H3z" />
+    </svg>
+  );
+}
+
+function ImagensIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="14" height="12" rx="1.5" />
+      <circle cx="7.3" cy="8.3" r="1.3" fill="currentColor" stroke="none" />
+      <path d="M4 14l4-4 3 3 2.5-2.5L17 14" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DocumentosIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 2.5h6l3 3V17a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z" />
+      <path d="M12 2.5V6h3" />
+    </svg>
+  );
+}
+
+function AutomaticoIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="10" cy="10.5" r="6.5" />
+      <path d="M10 6.5V10.5L12.5 12.5" />
+      <path d="M7 2.5h6" />
     </svg>
   );
 }

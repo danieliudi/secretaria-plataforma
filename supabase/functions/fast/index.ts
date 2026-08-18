@@ -962,8 +962,8 @@ export function defaultFastWithToolsDeps(
   // tocam tabela com dono (quick_capture) recusam em vez de cair numa pilha
   // global compartilhada entre todos os usuários.
   tenantId: string | null = null,
-  // Só pra medição de custo (uso_modelo) — separa o gasto do WhatsApp do
-  // Telegram e do proativo. Não influencia nada no comportamento.
+  // Só pra medição de custo (uso_modelo) — separa o gasto do WhatsApp, do
+  // Telegram, do Teams e do proativo. Não influencia nada no comportamento.
   origem: OrigemUso = "whatsapp",
 ): FastWithToolsDeps {
   const getAccessToken = () => getGoogleAccessToken({ env, fetch });
