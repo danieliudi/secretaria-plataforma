@@ -10,9 +10,12 @@ export interface OAuthProviderConfig {
   scopes: string;
   queryParams: Record<string, string>;
   secretColumn: "google_refresh_token_secret_id" | "outlook_refresh_token_secret_id";
-  /** Azure ainda não está configurado no Supabase Auth (App Registration pendente) —
-   * fica fora da UI até isso ser feito, pra não mostrar um botão que não funciona.
-   * O resto do código (callback, colunas, etc.) já suporta os dois; é só um flag de UI. */
+  /** Liga/desliga o botão na UI. O App Registration do Azure e o provider no
+   * Supabase Auth já estão configurados (18/08/2026) — login/vínculo com
+   * Outlook funciona de ponta a ponta. O que AINDA não existe é o backend
+   * (supabase/functions) ler/escrever Calendar/Mail via Microsoft Graph —
+   * hoje calendar-read.ts, calendar-write.ts e gmail-read.ts só falam com
+   * googleapis.com. Isso é trabalho futuro (Fase 2) — ver README.md. */
   enabled: boolean;
 }
 
@@ -45,7 +48,7 @@ export const OAUTH_PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
     ].join(" "),
     queryParams: { prompt: "consent" },
     secretColumn: "outlook_refresh_token_secret_id",
-    enabled: false,
+    enabled: true,
   },
 };
 

@@ -193,14 +193,22 @@ deploy automático — dá pra continuar deployando manualmente com
   `/onboarding` já pode gravar/ler as duas, e `buildTenantEnv`
   (`supabase/functions/_shared/tenant.ts`) já usa a key própria do Trello por
   tenant quando presente, caindo pra `TRELLO_API_KEY` global quando não.
-* **Outlook desabilitado na UI por enquanto** (`enabled: false` em
-  `lib/oauth-providers.ts`) — o Azure App Registration não foi concluído
-  ainda, e mesmo depois de concluído, a secretária (backend) ainda não
-  lê/escreve Calendar/Mail via Microsoft Graph, só Google (Fase 2, trabalho
-  futuro: novo `_shared/microsoft-oauth.ts` + providers de calendário/e-mail
-  que agreguem Google e Outlook ao mesmo tempo). Todo o resto (callback,
-  colunas, vinculação) já está pronto — reativar é só virar o flag quando o
-  Azure estiver configurado.
+* **Outlook habilitado na UI (18/08/2026)** — Azure App Registration
+  concluído (tenant próprio criado via conta Azure — o Microsoft 365
+  Developer Program não qualificou a conta pessoal) e provider Azure ligado
+  no Supabase Auth; `enabled: true` em `lib/oauth-providers.ts`. Login e
+  vinculação funcionam de ponta a ponta (callback, colunas, Vault — tudo já
+  suportava os dois provedores). **O que ainda falta (Fase 2, trabalho
+  futuro):** a secretária (backend, `supabase/functions`) ainda não
+  lê/escreve Calendar/Mail via Microsoft Graph — só fala com
+  `googleapis.com`. Ou seja, hoje dá pra logar/conectar com Outlook, mas a
+  agenda e o e-mail que a secretária usa continuam sendo os do Google até o
+  `_shared/microsoft-oauth.ts` + as versões Graph de calendário/e-mail
+  existirem. Decisão já tomada sobre como isso vai funcionar quando alguém
+  conectar os dois: **por capacidade** — Agenda e E-mail viram escolhas
+  independentes no wizard (cada uma podendo vir de um provedor diferente),
+  Tarefas continua sendo escolha à parte (Google Tasks/ClickUp/Notion/
+  Trello), não um provedor "principal" que governa tudo.
 
 ## Repositório
 
