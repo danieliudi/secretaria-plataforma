@@ -60,7 +60,13 @@ export function defaultGerarDocumentoDeps(
     gerarDocx,
     gerarPptx,
     sendDocument: async (to, fileName, mimeType, bytes) => {
-      if (channelFromUserId(to) === "telegram") {
+      const canal = channelFromUserId(to);
+      if (canal === "teams") {
+        // Mesmo motivo do spreadsheet.ts: anexo no Bot Framework é outro
+        // mecanismo, fora do escopo do v1 (só texto).
+        throw new Error("Envio de arquivo pelo Teams ainda não é suportado.");
+      }
+      if (canal === "telegram") {
         await sendTelegramDocument(telegramChatId(to), fileName, mimeType, bytes, telegramDeps);
       } else {
         await sendWhatsAppDocument(

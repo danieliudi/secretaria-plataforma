@@ -37,3 +37,11 @@ verify_jwt = true
 # modo aberto.
 [functions.wa-webhook]
 verify_jwt = false
+
+# /teams: webhook público do Bot Framework Connector — manda um JWT, mas é o
+# DELE (assinado com a chave do Bot Framework, não a do nosso projeto
+# Supabase), então verify_jwt=true recusaria tudo. Quem autentica é
+# validarTokenBotFramework (_shared/teams-auth.ts) contra o JWKS público do
+# Bot Framework — mesmo espírito do secret_token do Telegram/HMAC da Meta.
+[functions.teams]
+verify_jwt = false

@@ -41,6 +41,9 @@ export interface Tenant {
   whatsapp_authorized_number: string | null;
   whatsapp_link_code: string | null;
   whatsapp_link_code_expires_at: string | null;
+  teams_authorized_user_id: string | null;
+  teams_link_code: string | null;
+  teams_link_code_expires_at: string | null;
 }
 
 const TENANT_COLUMNS = `
@@ -53,6 +56,7 @@ const TENANT_COLUMNS = `
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at,
+  teams_authorized_user_id, teams_link_code, teams_link_code_expires_at,
   personalidade
 `;
 
@@ -163,7 +167,7 @@ const LINK_CODE_TTL_MIN = 30;
 // reconstruível a partir de poucas saídas — bastava gerar vários códigos
 // próprios pra prever os dos outros. O módulo evita o viés de `% length`
 // descartando os valores da cauda incompleta do byte.
-function generateWhatsAppLinkCode(): string {
+function generateLinkCode(): string {
   const limite = 256 - (256 % LINK_CODE_ALPHABET.length);
   let code = "";
   while (code.length < LINK_CODE_LENGTH) {
@@ -179,7 +183,7 @@ function generateWhatsAppLinkCode(): string {
 
 /** Gera (substituindo qualquer pendente) o código de vínculo do tenant. Chamado pelo onboarding self-serve. */
 export async function createWhatsAppLinkCode(tenantId: string): Promise<{ code: string; expiresAt: string }> {
-  const code = generateWhatsAppLinkCode();
+  const code = generateLinkCode();
   const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
   const { error } = await getSupabaseClient()
     .from("tenants")
@@ -232,6 +236,78 @@ export async function consumeWhatsAppLinkCode(text: string, fromE164: string): P
     whatsapp_authorized_number: fromE164,
     whatsapp_link_code: null,
     whatsapp_link_code_expires_at: null,
+  };
+}
+
+// ─── Teams: bot único compartilhado, vínculo por código (mesmo modelo do
+// WhatsApp por número compartilhado — NÃO o modelo de bot próprio por
+// tenant do Telegram) ────────────────────────────────────────────────────
+
+/** Busca o tenant autorizado pra este aadObjectId do Teams. null = não vinculado (ou não aprovado). */
+export async function getTenantByAuthorizedTeamsUserId(teamsUserId: string): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("teams_authorized_user_id", teamsUserId)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (teams_authorized_user_id) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/** Gera (substituindo qualquer pendente) o código de vínculo do Teams do tenant. Chamado pelo onboarding self-serve. */
+export async function createTeamsLinkCode(tenantId: string): Promise<{ code: string; expiresAt: string }> {
+  const code = generateLinkCode();
+  const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
+  const { error } = await getSupabaseClient()
+    .from("tenants")
+    .update({ teams_link_code: code, teams_link_code_expires_at: expiresAt })
+    .eq("id", tenantId);
+  if (error) throw new Error(`teams_link_code update falhou: ${error.message}`);
+  return { code, expiresAt };
+}
+
+/**
+ * Mesma lógica de consumeWhatsAppLinkCode, adaptada pro aadObjectId do
+ * Teams. aadObjectId já vinculado a OUTRO tenant faz o update falhar
+ * (constraint unique) — propaga como erro, não sobrescreve.
+ */
+export async function consumeTeamsLinkCode(text: string, teamsUserId: string): Promise<Tenant | null> {
+  const code = text.trim().toUpperCase();
+  if (!code) return null;
+
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("teams_link_code", code)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`teams_link_code lookup falhou: ${error.message}`);
+  const tenant = data as Tenant | null;
+  if (!tenant) return null;
+  if (!tenant.teams_link_code_expires_at || new Date(tenant.teams_link_code_expires_at) < new Date()) {
+    return null;
+  }
+
+  const { error: updateErr } = await getSupabaseClient()
+    .from("tenants")
+    .update({
+      teams_authorized_user_id: teamsUserId,
+      teams_link_code: null,
+      teams_link_code_expires_at: null,
+    })
+    .eq("id", tenant.id);
+  if (updateErr) throw new Error(`teams_authorized_user_id update falhou: ${updateErr.message}`);
+
+  return {
+    ...tenant,
+    teams_authorized_user_id: teamsUserId,
+    teams_link_code: null,
+    teams_link_code_expires_at: null,
   };
 }
 

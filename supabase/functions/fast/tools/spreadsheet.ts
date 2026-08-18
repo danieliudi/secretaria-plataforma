@@ -77,7 +77,15 @@ export function defaultExportSpreadsheetDeps(
     listTasks: (input) => getTaskProvider(env).listTasks(input),
     getEventsByDate: (date) => defaultGetEventsByDate(date, { getAccessToken, fetch, now: () => new Date() }),
     sendDocument: async (to, fileName, mimeType, content) => {
-      if (channelFromUserId(to) === "telegram") {
+      const canal = channelFromUserId(to);
+      if (canal === "teams") {
+        // Anexo no Bot Framework usa outro mecanismo (contentUrl com data URI
+        // ou hospedado) — fora do escopo do v1, que só cobre texto. Falha
+        // explícita em vez de cair no ramo do WhatsApp com um id que não é
+        // telefone nenhum.
+        throw new Error("Envio de arquivo pelo Teams ainda não é suportado.");
+      }
+      if (canal === "telegram") {
         await sendTelegramDocument(
           telegramChatId(to),
           fileName,
