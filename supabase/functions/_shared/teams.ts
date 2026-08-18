@@ -8,12 +8,20 @@
 // espírito de PLATFORM_EVOLUTION_INSTANCE pro WhatsApp):
 //   TEAMS_APP_ID       — Application (client) ID do App Registration do bot
 //   TEAMS_APP_PASSWORD — client secret desse mesmo App Registration
+//   TEAMS_TENANT_ID    — Directory (tenant) ID do App Registration
 //
-// Valores de endpoint/scope conferidos contra o código-fonte oficial do SDK
-// (microsoft/botbuilder-js, authenticationConstants.ts) em 18/08/2026.
+// O tenant do token importa: bots "Multi Tenant" clássicos pedem token no
+// tenant genérico "botframework.com", mas bots "Single Tenant" (o tipo que
+// criamos no Azure Bot) precisam pedir no tenant AAD do PRÓPRIO app — senão
+// o token é emitido normalmente (200 na chamada de token), mas o Connector
+// recusa com 401 na hora de mandar a mensagem. Confirmado contra o
+// código-fonte oficial do SDK (microsoft/botbuilder-js,
+// passwordServiceClientCredentialFactory.ts + authenticationConstants.ts:
+// DefaultChannelAuthTenant = 'botframework.com', usado só quando nenhum
+// tenantId é passado) em 18/08/2026.
 import { semDadoPessoal } from "./log-seguro.ts";
 
-const TOKEN_URL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token";
+const DEFAULT_TENANT = "botframework.com";
 const OAUTH_SCOPE = "https://api.botframework.com/.default";
 // Margem de segurança antes do vencimento real — evita usar um token que
 // expira no meio da chamada por causa de latência de rede.
@@ -43,6 +51,8 @@ async function getAppToken(deps: TeamsDeps): Promise<string> {
   }
 
   const { appId, appPassword } = appCredentials(deps.env);
+  const tenant = deps.env("TEAMS_TENANT_ID") || DEFAULT_TENANT;
+  const tokenUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: appId,
@@ -50,7 +60,7 @@ async function getAppToken(deps: TeamsDeps): Promise<string> {
     scope: OAUTH_SCOPE,
   });
 
-  const res = await deps.fetch(TOKEN_URL, {
+  const res = await deps.fetch(tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
