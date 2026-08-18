@@ -32,7 +32,11 @@ export function toCsv<T>(rows: T[], columns: CsvColumn<T>[]): string {
 
 /** UTF-8 → base64. Usado pelo envio via Evolution. */
 export function utf8ToBase64(s: string): string {
-  const bytes = new TextEncoder().encode(s);
+  return bytesToBase64(new TextEncoder().encode(s));
+}
+
+/** Bytes crus → base64. Usado pra anexo binário (ex: .docx/.pptx) via Evolution. */
+export function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);

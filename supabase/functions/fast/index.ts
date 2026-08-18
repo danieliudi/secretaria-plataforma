@@ -88,6 +88,12 @@ import {
   exportSpreadsheet as defaultExportSpreadsheet,
 } from "./tools/spreadsheet.ts";
 import {
+  defaultGerarDocumentoDeps,
+  type GerarDocumentoInput,
+  type GerarDocumentoResult,
+  gerarDocumento as defaultGerarDocumento,
+} from "./tools/documentos.ts";
+import {
   buildGa4SystemBlock,
   type Ga4Snapshot,
   getGa4Snapshot as defaultGetGa4Snapshot,
@@ -465,6 +471,42 @@ const TOOLS = [
     },
   },
   {
+    name: "gerar_documento",
+    description:
+      "Gera um documento Word (.docx) ou apresentação PowerPoint (.pptx) a partir de um título e seções de conteúdo, e envia direto pelo canal como anexo. Use quando o chefe pedir 'monta um documento sobre X', 'me faz uma apresentação de Y', 'escreve um relatório em Word', 'prepara um PPT pra reunião'. Você decide o conteúdo (título de cada seção + linhas de texto/tópicos) a partir da conversa — cada linha de 'conteudo' vira um parágrafo no Word ou um marcador no PowerPoint (a apresentação ganha 1 slide de capa + 1 slide por seção). O arquivo chega na hora — não descreva o conteúdo de novo na mensagem, só confirme o envio com uma bolha curta (ex: 'Prontinho, mandei a apresentação 📎').",
+    input_schema: {
+      type: "object",
+      properties: {
+        tipo: {
+          type: "string",
+          enum: ["word", "powerpoint"],
+          description: "'word' pra documento de texto corrido, 'powerpoint' pra slides.",
+        },
+        titulo: {
+          type: "string",
+          description: "Título do documento (Word) ou da capa (PowerPoint).",
+        },
+        secoes: {
+          type: "array",
+          description: "Cada item vira um bloco com título + parágrafos/marcadores.",
+          items: {
+            type: "object",
+            properties: {
+              titulo: { type: "string", description: "Título da seção (Word) ou do slide (PowerPoint)." },
+              conteudo: {
+                type: "array",
+                items: { type: "string" },
+                description: "Linhas de texto — parágrafo no Word, marcador no PowerPoint.",
+              },
+            },
+            required: ["titulo", "conteudo"],
+          },
+        },
+      },
+      required: ["tipo", "titulo", "secoes"],
+    },
+  },
+  {
     name: "registrar_despesa",
     description:
       "Registra uma despesa de reembolso já CONFIRMADA pelo chefe. Use depois que ele confirmar os dados que você leu de um recibo/nota fiscal (ou que ele ditou por texto). NUNCA chame esta tool sem confirmação explícita dele nesta conversa — valor lido de foto erra, e erro silencioso aqui vira relatório de reembolso errado. O fluxo é: você diz o que entendeu (valor, estabelecimento, data), ele confirma ou corrige, e SÓ ENTÃO você registra. Retorna o total acumulado do mês da despesa.",
@@ -739,6 +781,11 @@ EXPORTAR PLANILHA (CSV via WhatsApp)
 - Datasets: 'tasks' (precisa frente; list opcional), 'calendar_events' (precisa date; opcional end_date pra range) ou 'despesas' (precisa mes YYYY-MM).
 - O arquivo é enviado pelo SISTEMA durante a tool — você NÃO precisa anexar nada. Sua resposta de texto deve ser uma confirmação curta: "Mandei a planilha, chefe 📎" (ou similar). Não anuncie o conteúdo do arquivo.
 
+DOCUMENTO (Word/PowerPoint)
+- 1 tool: gerar_documento(tipo, titulo, secoes). Use quando o chefe pedir "monta um documento sobre X", "me faz uma apresentação", "escreve isso em Word", "prepara um PPT".
+- Você decide o conteúdo: título geral + uma lista de seções, cada uma com seu próprio título e linhas de texto. No Word cada linha vira um parágrafo; no PowerPoint vira 1 slide de capa + 1 slide por seção, com as linhas como marcadores.
+- Mesma regra do export_spreadsheet: o arquivo já chega como anexo — não descreva o conteúdo de novo na resposta, só confirme o envio.
+
 REGISTRO & TRIAGEM (inbox + tarefas)
 - Captura ampla: sempre que o chefe mencionar algo que soa como tarefa, entrega, compromisso, pendência ou "preciso / tenho que / não posso esquecer" — MESMO sem ele dizer "anota" — é candidato a registro.
 - REGRA DURA: quando foi VOCÊ que detectou (o chefe só comentou, não pediu pra registrar), NÃO chame nenhuma tool nessa resposta. Responda APENAS com uma pergunta curta confirmando, já sugerindo cliente + list. Ex: "Quer que eu registre? Parece entrega da Sanwey — crio em 'Entregas', prazo sexta?". Só chame create_task (ou save_quick_capture) DEPOIS que ele confirmar numa próxima mensagem.
@@ -866,6 +913,10 @@ export interface FastWithToolsDeps {
       input: ExportSpreadsheetInput,
       to: string,
     ) => Promise<ExportSpreadsheetResult>;
+    gerarDocumento: (
+      input: GerarDocumentoInput,
+      to: string,
+    ) => Promise<GerarDocumentoResult>;
     registrarDespesa: (
       input: RegistrarDespesaInput,
       userId?: string,
@@ -1016,6 +1067,7 @@ export function defaultFastWithToolsDeps(
             ? (mes) => defaultListarDespesas({ mes }, despesasDeps())
             : undefined,
         }),
+      gerarDocumento: (input, to) => defaultGerarDocumento(input, to, defaultGerarDocumentoDeps(env)),
       registrarDespesa: (input, userId) => defaultRegistrarDespesa(input, despesasDeps(userId)),
       listarDespesas: (input) => defaultListarDespesas(input, despesasDeps()),
       fecharMesDespesas: (input) => defaultFecharMesDespesas(input, despesasDeps()),
@@ -1175,6 +1227,24 @@ async function executeTool(
           date: input.date ? String(input.date) : undefined,
           end_date: input.end_date ? String(input.end_date) : undefined,
           mes: input.mes ? String(input.mes) : undefined,
+        },
+        userId,
+      );
+      return { result };
+    }
+    if (name === "gerar_documento") {
+      if (!userId) {
+        return { error: "Sem user_id no contexto — não dá pra enviar o documento." };
+      }
+      const secoesInput = Array.isArray(input.secoes) ? input.secoes : [];
+      const result = await deps.tools.gerarDocumento(
+        {
+          tipo: String(input.tipo) as GerarDocumentoInput["tipo"],
+          titulo: String(input.titulo ?? ""),
+          secoes: secoesInput.map((s: Record<string, unknown>) => ({
+            titulo: String(s.titulo ?? ""),
+            conteudo: Array.isArray(s.conteudo) ? s.conteudo.map(String) : [],
+          })),
         },
         userId,
       );
