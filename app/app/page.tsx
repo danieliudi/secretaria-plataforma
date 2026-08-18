@@ -80,6 +80,17 @@ export default async function AppPage() {
   const personalidadeLabel =
     PRESETS.find((p) => p.id === normalizaPersonalidade(tenant.personalidade))?.label ?? "Cordial";
 
+  const envioLabel = envioAutomaticoAtivo ? "Confirmação e lembrete automáticos" : "Confirmação e lembrete manuais";
+  const envioDesc = envioAutomaticoAtivo
+    ? "Sai do número oficial da plataforma."
+    : "Ela escreve, você envia. Envio automático aguarda verificação na Meta.";
+  const envioMeter: "on" | "pending" = envioAutomaticoAtivo || envioOficialDisponivel ? "on" : "pending";
+  const envioStatusText = envioAutomaticoAtivo
+    ? "Ativo"
+    : envioOficialDisponivel
+      ? "Manual, por escolha sua"
+      : "Pendente";
+
   return (
     <main className="aurora-bg min-h-screen">
       <AppHeader
@@ -89,110 +100,114 @@ export default async function AppPage() {
         userLabel={primeiroNome(tenant.nome ?? "") || user.email || ""}
       />
 
-      <div className="mx-auto flex max-w-[1040px] flex-col gap-6 px-8 py-9">
-        <h1 className="text-[26px] font-extrabold tracking-tight text-aurora-fg">
+      <div className="mx-auto flex max-w-[1040px] flex-col px-8 py-9 sm:py-14">
+        <h1 className="mb-10 text-[26px] font-extrabold tracking-tight text-aurora-fg">
           Bom te ver, {primeiroNome(tenant.nome ?? "") || "por aqui"}.
         </h1>
 
-        <div className="flex flex-col gap-1 rounded-2xl border border-aurora-line bg-aurora-surface p-6 backdrop-blur">
-          <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-aurora-muted-2">
-            Sua secretária
-          </span>
-          {canalVinculado ? (
-            <>
-              <span className="text-[21px] font-bold text-aurora-fg">Ativa no {canalNome}</span>
-              <span className="text-[13px] text-aurora-muted">
-                {whatsappVinculado
-                  ? tenant.whatsapp_authorized_number
-                  : "Sua conta do Telegram está vinculada."}
-              </span>
-            </>
-          ) : (
-            <>
-              <span className="text-[21px] font-bold text-aurora-fg">Ainda não vinculada</span>
-              <span className="text-[13px] text-aurora-muted">
+        {/* hero — única manchete da página */}
+        <section className="relative mb-[68px] overflow-hidden rounded-[22px] border border-aurora-line bg-aurora-surface px-8 py-9 backdrop-blur sm:px-[52px] sm:py-11">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 opacity-40"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(135deg, rgba(255,255,255,0.018) 0px, rgba(255,255,255,0.018) 1px, transparent 1px, transparent 13px)",
+            }}
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-24 -top-24 h-[280px] w-[280px] rounded-full opacity-50"
+            style={{ background: "radial-gradient(circle, var(--aurora-glow) 0%, transparent 70%)" }}
+          />
+
+          <div className="relative mb-6 flex items-center gap-4">
+            <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-aurora-muted-2">
+              Sua secretária
+            </span>
+            <span className="h-px flex-1 bg-aurora-line" />
+          </div>
+
+          <p className="relative font-serif text-[34px] font-semibold leading-[1.05] tracking-tight text-aurora-fg sm:text-[46px]">
+            {canalVinculado ? (
+              <>
+                <em className="text-aurora-accent-text italic">Ativa</em> no {canalNome}.
+              </>
+            ) : (
+              <>
+                Ainda <em className="text-aurora-warn italic">não vinculada</em>.
+              </>
+            )}
+          </p>
+
+          <div className="relative mt-6 flex items-center gap-3.5">
+            {canalVinculado ? (
+              <>
+                <SignalBars />
+                <span className="text-[15px] tabular-nums text-aurora-muted">
+                  {whatsappVinculado ? tenant.whatsapp_authorized_number : "Conta do Telegram vinculada"}
+                </span>
+              </>
+            ) : (
+              <span className="text-[14px] text-aurora-muted">
                 Termine o vínculo em{" "}
                 <Link href="/onboarding?step=3" className="text-aurora-accent-text underline underline-offset-2 hover:text-aurora-fg">
                   Canal
                 </Link>
                 .
               </span>
-            </>
-          )}
-        </div>
-
-        <span className="mt-1 text-[11px] font-bold uppercase tracking-[0.09em] text-aurora-muted-2">
-          Configuração
-        </span>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-2 rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-2.5">
-              <h4 className="text-[14.5px] font-bold text-aurora-fg">Você</h4>
-              <Link href="/onboarding?step=1" className="text-[12px] font-semibold text-aurora-accent-text hover:text-aurora-fg">
-                editar
-              </Link>
-            </div>
-            <span className="text-[13px] leading-relaxed text-aurora-muted">
-              <b className="font-semibold text-aurora-fg">{tenant.nome || "(sem nome)"}</b>
-              {tenant.cargo ? ` · ${tenant.cargo}` : ""}
-            </span>
-            <span className="text-[13px] leading-relaxed text-aurora-muted">
-              Voz: <b className="font-semibold text-aurora-fg">{personalidadeLabel}</b>
-              {(tenant.frentes ?? []).length > 0 ? ` · ${(tenant.frentes ?? []).join(", ")}` : ""}
-            </span>
-          </div>
-
-          <div className="flex flex-col gap-2 rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-2.5">
-              <h4 className="text-[14.5px] font-bold text-aurora-fg">Ferramentas</h4>
-              <Link href="/onboarding?step=2" className="text-[12px] font-semibold text-aurora-accent-text hover:text-aurora-fg">
-                editar
-              </Link>
-            </div>
-            <span className="text-[13px] leading-relaxed text-aurora-muted">
-              Tarefas em <b className="font-semibold text-aurora-fg">{providerLabel}</b>
-            </span>
-            <StatusLine ok={ferramentaConectada} okText="Conectado" warnText="Ainda não conectado" />
-          </div>
-
-          <div className="flex flex-col gap-2 rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-2.5">
-              <h4 className="text-[14.5px] font-bold text-aurora-fg">Canal</h4>
-              <Link href="/onboarding?step=3" className="text-[12px] font-semibold text-aurora-accent-text hover:text-aurora-fg">
-                editar
-              </Link>
-            </div>
-            <span className="text-[13px] leading-relaxed text-aurora-muted">
-              Conversa por{" "}
-              <b className="font-semibold text-aurora-fg">{canalNome ?? CHANNEL_LABEL[tenant.channel_preference ?? ""] ?? "—"}</b>
-            </span>
-            <StatusLine ok={canalVinculado} okText="Vinculado" warnText="Ainda não vinculado" />
-          </div>
-
-          <div className="flex flex-col gap-2 rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-2.5">
-              <h4 className="text-[14.5px] font-bold text-aurora-fg">Envio oficial</h4>
-              <Link href="/onboarding?step=3" className="text-[12px] font-semibold text-aurora-accent-text hover:text-aurora-fg">
-                editar
-              </Link>
-            </div>
-            <span className="text-[13px] leading-relaxed text-aurora-muted">
-              Confirmação e lembrete{" "}
-              <b className="font-semibold text-aurora-fg">{envioAutomaticoAtivo ? "automáticos" : "manuais"}</b>
-              {envioAutomaticoAtivo ? " (sai do número oficial)" : " (ela escreve, você envia)"}
-            </span>
-            {envioAutomaticoAtivo ? (
-              <StatusLine ok okText="Envio oficial ativo" warnText="" />
-            ) : !envioOficialDisponivel ? (
-              <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-aurora-warn">
-                <span className="h-1.5 w-1.5 flex-none rounded-full bg-aurora-warn" />
-                Envio automático aguarda verificação na Meta
-              </span>
-            ) : (
-              <StatusLine ok okText="Manual, por escolha sua" warnText="" />
             )}
           </div>
+        </section>
+
+        {/* configuração — lista de preferências, não cards */}
+        <div className="mb-1.5 flex items-center gap-4">
+          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-aurora-muted-2">Configuração</span>
+          <span className="h-px flex-1 bg-aurora-line-soft" />
         </div>
+
+        <div className="mt-2 border-t border-aurora-line-soft">
+          <PrefRow
+            icon={<VoceIcon />}
+            title="Você"
+            value={tenant.nome || "(sem nome)"}
+            desc={tenant.cargo || undefined}
+            meta={`Voz: ${personalidadeLabel}${(tenant.frentes ?? []).length > 0 ? ` · ${(tenant.frentes ?? []).join(", ")}` : ""}`}
+            editHref="/onboarding?step=1"
+          />
+          <PrefRow
+            icon={<FerramentasIcon />}
+            title="Ferramentas"
+            value={providerLabel}
+            desc="Provedor de tarefas e lembretes da secretária."
+            status={<StatusMeter state={ferramentaConectada ? "on" : "pending"} text={ferramentaConectada ? "Conectado" : "Pendente"} />}
+            editHref="/onboarding?step=2"
+          />
+          <PrefRow
+            icon={<CanalIcon />}
+            title="Canal"
+            value={canalNome ?? CHANNEL_LABEL[tenant.channel_preference ?? ""] ?? "—"}
+            desc="Onde a Mia troca mensagem com você."
+            status={<StatusMeter state={canalVinculado ? "on" : "pending"} text={canalVinculado ? "Vinculado" : "Pendente"} />}
+            editHref="/onboarding?step=3"
+          />
+          <PrefRow
+            icon={<EnvioIcon />}
+            title="Envio oficial"
+            value={envioLabel}
+            desc={envioDesc}
+            status={<StatusMeter state={envioMeter} text={envioStatusText} />}
+            editHref="/onboarding?step=3"
+          />
+        </div>
+
+        {canalVinculado && (
+          <footer className="mt-16 border-t border-aurora-line-soft pt-7">
+            <p className="max-w-[460px] font-serif text-[17px] italic leading-relaxed text-aurora-muted">
+              Mia cuida disso. Qualquer coisa, é só chamar no {canalNome}.
+            </p>
+          </footer>
+        )}
       </div>
     </main>
   );
@@ -204,13 +219,111 @@ const CHANNEL_LABEL: Record<string, string> = {
   both: "WhatsApp e Telegram",
 };
 
-function StatusLine({ ok, okText, warnText }: { ok: boolean; okText: string; warnText: string }) {
+function SignalBars() {
+  const heights = [6, 14, 9, 12];
   return (
-    <span
-      className={`flex items-center gap-1.5 text-[11.5px] font-bold ${ok ? "text-aurora-ok" : "text-aurora-warn"}`}
-    >
-      <span className={`h-1.5 w-1.5 flex-none rounded-full ${ok ? "bg-aurora-ok" : "bg-aurora-warn"}`} />
-      {ok ? okText : warnText}
+    <span className="flex flex-none items-end gap-[3px]" aria-hidden="true">
+      {heights.map((h, i) => (
+        <span key={i} className="w-[3px] rounded-sm bg-aurora-ok" style={{ height: h }} />
+      ))}
     </span>
+  );
+}
+
+function StatusMeter({ state, text }: { state: "on" | "pending"; text: string }) {
+  return (
+    <span className="flex items-center gap-2 whitespace-nowrap pt-0.5">
+      <span
+        className={
+          state === "on"
+            ? "h-1 w-3.5 flex-none rounded-sm bg-aurora-ok"
+            : "h-1 w-3.5 flex-none rounded-sm border border-dashed border-aurora-warn"
+        }
+      />
+      <span className="text-[12.5px] text-aurora-muted">{text}</span>
+    </span>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg width="7" height="11" viewBox="0 0 8 12" fill="none" aria-hidden="true" className="opacity-70 transition-transform group-hover:translate-x-0.5">
+      <path d="M1 1l5 5-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PrefRow({
+  icon,
+  title,
+  value,
+  desc,
+  meta,
+  status,
+  editHref,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  value: string;
+  desc?: string;
+  meta?: string;
+  status?: React.ReactNode;
+  editHref: string;
+}) {
+  return (
+    <div className="grid grid-cols-[20px_minmax(0,1fr)] items-start gap-x-[22px] gap-y-2.5 border-b border-aurora-line-soft py-[22px] last:border-none sm:grid-cols-[20px_minmax(0,1fr)_128px_58px] sm:gap-y-0">
+      <span className="mt-[3px] flex-none text-aurora-muted-2">{icon}</span>
+      <div className="min-w-0">
+        <div className="mb-[7px] text-[11.5px] font-bold uppercase tracking-wide text-aurora-muted-2">{title}</div>
+        <div className="text-[16px] font-semibold leading-snug text-aurora-fg">{value}</div>
+        {desc && <div className="mt-[5px] text-[13.5px] leading-relaxed text-aurora-muted">{desc}</div>}
+        {meta && <div className="mt-2.5 text-[12px] text-aurora-muted-2">{meta}</div>}
+      </div>
+      {status && <div className="col-start-2 sm:col-start-3 sm:pt-0.5">{status}</div>}
+      <Link
+        href={editHref}
+        className="group col-start-2 flex items-center gap-1 text-[13px] font-medium text-aurora-muted-2 hover:text-aurora-accent-text sm:col-start-4 sm:pt-0.5"
+      >
+        editar
+        <ChevronRightIcon />
+      </Link>
+    </div>
+  );
+}
+
+function VoceIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <rect x="4" y="6" width="8" height="3" rx="1.5" />
+      <rect x="4" y="12" width="12" height="2" rx="1" />
+    </svg>
+  );
+}
+
+function FerramentasIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <rect x="4.2" y="3.5" width="2.6" height="13" rx="1.3" fill="currentColor" stroke="none" />
+      <rect x="13.2" y="3.5" width="2.6" height="13" rx="1.3" fill="currentColor" stroke="none" />
+      <line x1="4.2" y1="10" x2="15.8" y2="10" />
+    </svg>
+  );
+}
+
+function CanalIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <line x1="3" y1="10" x2="12.5" y2="10" />
+      <circle cx="16" cy="10" r="2.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function EnvioIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="3" y="6" width="14" height="3" rx="1.5" fill="currentColor" stroke="none" />
+      <rect x="3" y="13" width="14" height="3" rx="1.5" fill="none" stroke="currentColor" strokeDasharray="2.6 2.6" />
+    </svg>
   );
 }
