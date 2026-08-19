@@ -110,6 +110,7 @@ export async function POST(request: Request) {
     channels?: unknown;
     telegram_bot_token?: unknown;
     envio_oficial?: unknown;
+    resposta_audio_sempre?: unknown;
   };
   try {
     body = await request.json();
@@ -133,6 +134,7 @@ export async function POST(request: Request) {
   // a cada mensagem; este aqui só evita gravar intenção impossível.
   const envioDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioOficial = envioDisponivel && body.envio_oficial === true;
+  const respostaAudioSempre = body.resposta_audio_sempre === true;
 
   const wantsTelegram = channels.includes("telegram");
   const wantsWhatsapp = channels.includes("whatsapp");
@@ -218,6 +220,7 @@ export async function POST(request: Request) {
       // teams_authorized_user_id).
       channel_preference: channels.join(","),
       envio_oficial: envioOficial,
+      resposta_audio_sempre: respostaAudioSempre,
       telegram_bot_token_secret_id: telegramSecretId,
       telegram_webhook_secret_id: telegramWebhookSecretId,
       ...(wantsWhatsapp && !whatsappAlreadyAuthorized

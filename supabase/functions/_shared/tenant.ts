@@ -45,6 +45,8 @@ export interface Tenant {
   teams_authorized_user_id: string | null;
   teams_link_code: string | null;
   teams_link_code_expires_at: string | null;
+  /** Toggle do wizard: sempre responder em áudio, além do espelhamento por formato recebido. */
+  resposta_audio_sempre: boolean;
 }
 
 const TENANT_COLUMNS = `
@@ -59,7 +61,7 @@ const TENANT_COLUMNS = `
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at,
   teams_authorized_user_id, teams_link_code, teams_link_code_expires_at,
-  personalidade
+  personalidade, resposta_audio_sempre
 `;
 
 // ATENÇÃO: comparação EXATA (`eq`), nunca `ilike`. Com `ilike`, o `%` do
@@ -404,6 +406,7 @@ const SHARED_INFRA_KEYS = new Set([
   // Contas de API da plataforma
   "ANTHROPIC_API_KEY",
   "GROQ_API_KEY",
+  "GOOGLE_TTS_API_KEY",
   // Infra do próprio Supabase
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",

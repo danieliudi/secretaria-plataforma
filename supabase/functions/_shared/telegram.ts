@@ -122,6 +122,26 @@ export async function sendTelegramDocument(
   }
 }
 
+/**
+ * Envia uma nota de voz nativa (bubble com waveform). Aceita OGG/Opus, MP3 ou
+ * M4A — outros formatos viram Document/Audio em vez do bubble de voz.
+ */
+export async function sendTelegramVoice(
+  chatId: number | string,
+  audioBytes: Uint8Array,
+  deps: TelegramDeps = defaultTelegramDeps(),
+): Promise<void> {
+  const url = `${TELEGRAM_API}/bot${botToken(deps.env)}/sendVoice`;
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("voice", new Blob([audioBytes], { type: "audio/ogg" }), "voice.ogg");
+
+  const res = await deps.fetch(url, { method: "POST", body: form });
+  if (!res.ok) {
+    throw new Error(`Telegram sendVoice ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+}
+
 // ─── Recepção de mídia (download) ──────────────────────────────────────────────
 
 /**

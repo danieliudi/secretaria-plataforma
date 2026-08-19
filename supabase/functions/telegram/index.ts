@@ -4,9 +4,12 @@ import {
   getTelegramFileBytes,
   sendTelegramChatAction,
   sendTelegramMessages,
+  sendTelegramVoice,
   splitMessages,
   type TelegramDeps,
 } from "../_shared/telegram.ts";
+import { deveResponderEmAudio } from "../_shared/audio-reply.ts";
+import { synthesizeSpeech } from "../_shared/google-tts.ts";
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
 import { describePdf, PdfInvalidoError, PdfLimiteExcedidoError, verificaTamanhoDeclarado } from "../_shared/pdf.ts";
@@ -50,6 +53,30 @@ function isPdfDocument(doc?: TgDocument): boolean {
   if (!doc) return false;
   if (doc.mime_type === "application/pdf") return true;
   return (doc.file_name ?? "").toLowerCase().endsWith(".pdf");
+}
+
+/**
+ * Manda a resposta em áudio (se decidido) ou texto (padrão) — se a síntese ou
+ * o envio de áudio falhar por qualquer motivo, cai pra texto em vez de
+ * deixar a pessoa sem resposta nenhuma. Mesmo padrão de
+ * reflex/index.ts:entregarRespostaWhatsApp.
+ */
+async function entregarRespostaTelegram(
+  chatId: number,
+  mensagem: string,
+  emAudio: boolean,
+  deps: TelegramDeps,
+): Promise<void> {
+  if (emAudio) {
+    try {
+      const audio = await synthesizeSpeech(mensagem, deps);
+      await sendTelegramVoice(chatId, audio, deps);
+      return;
+    } catch (err) {
+      console.error(`[telegram] resposta em áudio falhou, caindo pra texto: ${semDadoPessoal(err)}`);
+    }
+  }
+  await sendTelegramMessages(chatId, splitMessages(mensagem), deps);
 }
 
 function extractTenantSlug(reqUrl: string): string | null {
@@ -229,7 +256,12 @@ Deno.serve(async (req: Request) => {
         step: "tg_fast_done",
         detail: `kind=${kind} ok=${result.ok} bubbles=${bubbles.length}`,
       });
-      await sendTelegramMessages(chatId, bubbles, telegramDeps);
+      await entregarRespostaTelegram(
+        chatId,
+        result.message,
+        deveResponderEmAudio(kind === "voice", tenant.resposta_audio_sempre),
+        telegramDeps,
+      );
       await dbg.from("async_debug").insert({ step: "tg_sent_ok", detail: "" });
     } catch (err) {
       await dbg.from("async_debug").insert({ step: "tg_bg_err", detail: semDadoPessoal(err) });

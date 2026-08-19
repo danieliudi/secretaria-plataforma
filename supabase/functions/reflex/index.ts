@@ -6,11 +6,14 @@ import { classifyWithHaiku, checkRegexReflex } from "../_shared/router.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
 import {
   hasEvolutionConfig,
+  sendWhatsAppAudio,
   sendWhatsAppMessages,
   sendWhatsAppText,
   splitMessages,
   type WhatsAppDeps,
 } from "../_shared/whatsapp.ts";
+import { deveResponderEmAudio } from "../_shared/audio-reply.ts";
+import { synthesizeSpeech } from "../_shared/google-tts.ts";
 import { orchestrateReflex, type OrchestratorDeps, parseReflexIntent } from "./orchestrator.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
@@ -228,7 +231,34 @@ async function replyOnSharedNumber(to: string, text: string): Promise<void> {
 }
 
 /** Processa uma mensagem chegada pela instância compartilhada. Sempre resolve com 200 — quem chama (n8n) não trata erro; falhas de envio só logam. */
-async function handleSharedNumberMessage(text: string, fromRaw: string | undefined): Promise<Response> {
+/**
+ * Manda a resposta em áudio (se decidido) ou texto (padrão) — nunca perde a
+ * resposta: se a síntese ou o envio de áudio falhar por qualquer motivo, cai
+ * pra texto em vez de deixar a pessoa sem resposta nenhuma.
+ */
+async function entregarRespostaWhatsApp(
+  to: string,
+  mensagem: string,
+  emAudio: boolean,
+  deps: WhatsAppDeps,
+): Promise<void> {
+  if (emAudio) {
+    try {
+      const audio = await synthesizeSpeech(mensagem, deps);
+      await sendWhatsAppAudio(to, audio, deps);
+      return;
+    } catch (err) {
+      console.error(`[reflex] resposta em áudio falhou, caindo pra texto: ${semDadoPessoal(err)}`);
+    }
+  }
+  await sendWhatsAppMessages(to, splitMessages(mensagem), deps);
+}
+
+async function handleSharedNumberMessage(
+  text: string,
+  fromRaw: string | undefined,
+  entradaEraAudio: boolean,
+): Promise<Response> {
   if (!fromRaw) return resp({ ok: true }, 200);
   const fromE164 = normalizeWhatsAppJidToE164(fromRaw);
   if (!fromE164) return resp({ ok: true }, 200); // grupo ou remetente não-parseável — ignora, sem gerar dado nenhum
@@ -306,9 +336,13 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
         timeoutMs: FAST_BG_TIMEOUT_MS,
         tenantSlug: tenant.slug,
       });
-      const bubbles = splitMessages(result.message);
       const whatsappDeps: WhatsAppDeps = { fetch, env: await buildSharedNumberEnv(tenant) };
-      await sendWhatsAppMessages(fromRaw, bubbles, whatsappDeps);
+      await entregarRespostaWhatsApp(
+        fromRaw,
+        result.message,
+        deveResponderEmAudio(entradaEraAudio, tenant.resposta_audio_sempre),
+        whatsappDeps,
+      );
     } catch (err) {
       console.error(`[reflex] entrega (número compartilhado) falhou: ${semDadoPessoal(err)}`);
     }
@@ -339,7 +373,7 @@ Deno.serve(async (req: Request) => {
     } catch { /* observabilidade não pode derrubar o request */ }
   }
 
-  let body: { text?: unknown; from?: unknown; instance?: unknown };
+  let body: { text?: unknown; from?: unknown; instance?: unknown; kind?: unknown };
   try { body = await req.json(); } catch { return resp({ error: "Invalid JSON" }, 400); }
 
   if (!body.text || typeof body.text !== "string") {
@@ -366,6 +400,13 @@ Deno.serve(async (req: Request) => {
   const instanceRaw = typeof body.instance === "string" ? body.instance.trim() : "";
   const instance = instanceRaw.length > 0 ? instanceRaw : undefined;
 
+  // `kind` ("text"|"audio"|"image") vem do node "Extract Message" do workflow
+  // do n8n, repassado pelo node "Call Edge Function" — decide se a resposta
+  // espelha em áudio (ver _shared/audio-reply.ts). Sem o campo (n8n mais
+  // antigo, ou outro chamador), cai em "não sei" — nunca assume áudio por
+  // falta de informação.
+  const entradaEraAudio = body.kind === "audio";
+
   // Número compartilhado: roteamento por quem mandou, não por instância. Ver
   // comentário grande acima de handleSharedNumberMessage — só ativa quando
   // PLATFORM_EVOLUTION_INSTANCE estiver setado E bater com o `instance` do
@@ -373,7 +414,7 @@ Deno.serve(async (req: Request) => {
   const platformInstance = platformEvolutionInstance();
   if (platformInstance && instance === platformInstance) {
     try {
-      return await handleSharedNumberMessage(text, from);
+      return await handleSharedNumberMessage(text, from, entradaEraAudio);
     } catch (err) {
       console.error(`[reflex] handleSharedNumberMessage falhou: ${semDadoPessoal(err)}`);
       return resp({ ok: true }, 200);
@@ -449,10 +490,19 @@ Deno.serve(async (req: Request) => {
               detail: `ok=${result.ok} len=${result.message.length} bubbles=${bubbles.length}`,
             });
             try {
-              const whatsappDeps: WhatsAppDeps | undefined = tenant
-                ? { fetch, env: await buildTenantEnv(tenant) }
-                : undefined;
-              await sendWhatsAppMessages(from, bubbles, whatsappDeps);
+              if (tenant) {
+                const whatsappDeps: WhatsAppDeps = { fetch, env: await buildTenantEnv(tenant) };
+                await entregarRespostaWhatsApp(
+                  from,
+                  result.message,
+                  deveResponderEmAudio(entradaEraAudio, tenant.resposta_audio_sempre),
+                  whatsappDeps,
+                );
+              } else {
+                // Sem tenant resolvido não dá pra saber a preferência de áudio
+                // — mesmo comportamento de sempre (texto, env global).
+                await sendWhatsAppMessages(from, bubbles, undefined);
+              }
               await dbg.from("async_debug").insert({ step: "sent_ok", detail: "" });
             } catch (err) {
               await dbg.from("async_debug").insert({ step: "send_err", detail: semDadoPessoal(err) });

@@ -177,6 +177,7 @@ export default function OnboardingWizard(props: {
   teamsConnected: boolean;
   initialTeamsLinkCode: string | null;
   initialTeamsLinkCodeExpiresAt: string | null;
+  initialRespostaAudioSempre: boolean;
 }) {
   const [step, setStep] = useState<Step>(props.initialStep ?? 1);
   const [nome, setNome] = useState(props.initialNome);
@@ -214,6 +215,7 @@ export default function OnboardingWizard(props: {
   const [teamsLinkCode, setTeamsLinkCode] = useState<string | null>(props.initialTeamsLinkCode);
   const [teamsLinkCodeExpiresAt, setTeamsLinkCodeExpiresAt] = useState<string | null>(props.initialTeamsLinkCodeExpiresAt);
   const [teamsConnected, setTeamsConnected] = useState(props.teamsConnected);
+  const [respostaAudioSempre, setRespostaAudioSempre] = useState(props.initialRespostaAudioSempre);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -361,6 +363,7 @@ export default function OnboardingWizard(props: {
       channels: [...channels],
       telegram_bot_token: telegramToken,
       envio_oficial: envioOficial,
+      resposta_audio_sempre: respostaAudioSempre,
     });
     if (result) {
       setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
@@ -888,6 +891,32 @@ export default function OnboardingWizard(props: {
               <span className="text-[11.5px] font-normal text-aurora-muted-2">
                 Quem receber pode responder SAIR a qualquer momento, e ela para de enviar.
               </span>
+            </fieldset>
+
+            <fieldset className="mt-1 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-1 text-[13.5px] font-semibold text-aurora-fg">
+                Ela responde em áudio?
+              </legend>
+              <span className="mb-1 text-[11.5px] font-normal text-aurora-muted-2">
+                Por padrão, ela espelha o que você manda — áudio pra áudio, texto pra texto. Dá
+                pra forçar sempre áudio, bom pra quem tá dirigindo ou andando.
+              </span>
+              <label
+                className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition ${
+                  respostaAudioSempre ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-muted-2"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-1 h-[15px] w-[15px] accent-aurora-accent"
+                  checked={respostaAudioSempre}
+                  onChange={(e) => setRespostaAudioSempre(e.target.checked)}
+                />
+                <span className="flex flex-col">
+                  <span className="text-[13.5px] font-medium text-aurora-fg">Sempre responder em áudio</span>
+                  <span className="text-xs font-normal text-aurora-muted-2">Mesmo quando você escreve em texto, ela responde falando.</span>
+                </span>
+              </label>
             </fieldset>
 
             <div className="mt-2 flex gap-3">

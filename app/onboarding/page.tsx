@@ -26,7 +26,7 @@ export default async function OnboardingPage({
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
-    .select("slug, nome, cargo, frentes, is_platform_owner, usa_vocativo, tratamento, personalidade, envio_oficial, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at, teams_authorized_user_id, teams_link_code, teams_link_code_expires_at")
+    .select("slug, nome, cargo, frentes, is_platform_owner, usa_vocativo, tratamento, personalidade, envio_oficial, aprovado_em, recusado_em, task_provider, task_provider_list_map, trello_api_key_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, telegram_bot_token_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at, teams_authorized_user_id, teams_link_code, teams_link_code_expires_at, resposta_audio_sempre")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -130,6 +130,7 @@ export default async function OnboardingPage({
       teamsConnected={Boolean(tenant.teams_authorized_user_id)}
       initialTeamsLinkCode={pendingTeamsCodeValid ? tenant.teams_link_code : null}
       initialTeamsLinkCodeExpiresAt={pendingTeamsCodeValid ? tenant.teams_link_code_expires_at : null}
+      initialRespostaAudioSempre={Boolean(tenant.resposta_audio_sempre)}
     />
   );
 }
