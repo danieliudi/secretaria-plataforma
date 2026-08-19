@@ -109,9 +109,17 @@ export default async function NovidadesPage() {
       </section>
 
       <footer className="border-t border-aurora-line-soft">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
+        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-x-2 gap-y-2 px-6 py-7">
           <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
           <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
+          <span className="mx-1 text-aurora-line">·</span>
+          <Link href="/privacidade" className="text-[13px] text-aurora-muted-2 transition hover:text-aurora-muted">
+            Privacidade
+          </Link>
+          <span className="text-aurora-line">·</span>
+          <Link href="/termos" className="text-[13px] text-aurora-muted-2 transition hover:text-aurora-muted">
+            Termos de Uso
+          </Link>
         </div>
       </footer>
     </main>
