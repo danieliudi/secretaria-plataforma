@@ -3,6 +3,7 @@
 import { use, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
+import { siteOrigin } from "@/lib/site-url";
 
 const providers = enabledOAuthProviders();
 
@@ -82,7 +83,7 @@ export default function LoginPage({
     setLoadingProvider(provider);
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
-    const redirectTo = `${window.location.origin}/auth/callback?provider=${provider}&intent=login`;
+    const redirectTo = `${siteOrigin()}/auth/callback?provider=${provider}&intent=login`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {

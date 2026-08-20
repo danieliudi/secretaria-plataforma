@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 import { PRESETS, type Personalidade } from "@/lib/personalidade";
+import { siteOrigin } from "@/lib/site-url";
 import { AppHeader } from "@/components/AppHeader";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo";
@@ -284,7 +285,7 @@ export default function OnboardingWizard(props: {
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
     const opcoes = {
-      redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+      redirectTo: `${siteOrigin()}/auth/callback?provider=${provider}&intent=link`,
       scopes: cfg.scopes,
       queryParams: cfg.queryParams,
     };
