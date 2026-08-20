@@ -31,7 +31,7 @@ import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared/tenant.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
-import { getEventsByDate } from "../fast/tools/calendar-read.ts";
+import { type CalendarAttendee, getEventsBetween, getEventsByDate } from "../fast/tools/calendar-read.ts";
 import { buscaContatoPorEmail } from "../fast/tools/redigir-supabase.ts";
 import { decideEnvio } from "../_shared/envio-decisao.ts";
 import { enviaTemplate, temCredencialMeta } from "../_shared/whatsapp-oficial.ts";
@@ -85,6 +85,14 @@ const DESPESA_ANOMALA_MULTIPLICADOR = 2.5;
 const DESPESA_ANOMALA_VALOR_MINIMO_CENTAVOS = 5000; // R$ 50 — piso pra não alertar gasto pequeno
 const DESPESA_ANOMALA_AMOSTRA_MINIMA = 3; // categoria nova (menos que isso) nunca dispara
 const DESPESA_ANOMALA_BASELINE_LIMITE = 30; // teto de linhas buscadas pra calcular a média
+// Relação esfriando: alguém que você costuma se reunir sumiu da agenda. Sinal
+// é PARTICIPANTE DE EVENTO (Calendar), não troca de mensagem — a Mia não vê a
+// conversa de WhatsApp com terceiros, só a própria (mockup aprovado 20/08/2026).
+const RELACAO_LOOKBACK_DIAS = 180; // 6 meses pra decidir quem é contato "regular"
+const RELACAO_MIN_REUNIOES = 2; // encontro único não conta como relação a acompanhar
+const RELACAO_MAX_PARTICIPANTES = 3; // inclui você — filtra reunião grande/all-hands
+const RELACAO_GAP_MIN_DIAS = 35; // 5 semanas sem encontro
+const RELACAO_MAX_CARDS_POR_EXECUCAO = 3; // resto fica pra fila do dia seguinte
 const TZ = "America/Sao_Paulo";
 
 const CALENDAR_BASE =
@@ -531,6 +539,140 @@ async function runDespesaAnomala(
   }
 
   return { sent, scanned: recentes.length };
+}
+
+// ─── relação esfriando ──────────────────────────────────────────────────────
+
+interface ContatoAgenda {
+  email: string;
+  nome: string | null;
+  datas: Date[];
+}
+
+/**
+ * Alguém que você costuma se REUNIR sumiu da agenda por um tempo. Sinal é
+ * participante de evento do Calendar — NÃO troca de mensagem: a Mia não vê a
+ * conversa de WhatsApp com terceiros, só a que ela mesma tem com você (mockup
+ * aprovado 20/08/2026, escopo reduzido do item nº 3 da lista de proativos).
+ * Só considera evento pequeno (≤ RELACAO_MAX_PARTICIPANTES, você incluído) —
+ * reunião grande/all-hands não é sinal de relação pessoal.
+ */
+async function runRelacionamentoEsfriando(
+  env: EnvFn,
+  tenantId: string,
+  dryRun = false,
+): Promise<{ sent: number; candidatos: number; motivo?: string; card_kb?: number }> {
+  const sb = getSupabaseClient();
+  const agora = new Date();
+  const desde = new Date(agora.getTime() - RELACAO_LOOKBACK_DIAS * 24 * 3600_000);
+  const eventos = await getEventsBetween(desde.toISOString(), agora.toISOString(), {
+    getAccessToken: () => getGoogleAccessToken({ env, fetch }),
+    fetch,
+    now: () => agora,
+  });
+
+  const porEmail = new Map<string, ContatoAgenda>();
+  for (const ev of eventos) {
+    // Teto de tamanho conta TODOS os participantes (você incluído) — um 1:1
+    // tem 2. `attendees` já vem sem sala/equipamento (mapAttendees filtra).
+    if (ev.attendees.length > RELACAO_MAX_PARTICIPANTES) continue;
+    const data = new Date(ev.startISO);
+    if (Number.isNaN(data.getTime())) continue;
+    for (const p of ev.attendees) {
+      if (p.eu) continue;
+      const atual = porEmail.get(p.email) ?? { email: p.email, nome: p.nome, datas: [] };
+      if (p.nome) atual.nome = p.nome; // fica com o nome mais recente que o Google mandou
+      atual.datas.push(data);
+      porEmail.set(p.email, atual);
+    }
+  }
+
+  const candidatos = [...porEmail.values()]
+    .filter((c) => c.datas.length >= RELACAO_MIN_REUNIOES)
+    .map((c) => {
+      const ultima = new Date(Math.max(...c.datas.map((d) => d.getTime())));
+      const gapDias = Math.floor((agora.getTime() - ultima.getTime()) / 86_400_000);
+      return { email: c.email, nome: c.nome, ultima, gapDias, totalReunioes: c.datas.length };
+    })
+    .filter((c) => c.gapDias >= RELACAO_GAP_MIN_DIAS)
+    .sort((a, b) => b.gapDias - a.gapDias);
+
+  const { CARD, caixaAcoes, cardShell, el, renderCardPngBase64 } = await import("../_shared/card.ts");
+
+  function montaCard(
+    nomeExibido: string,
+    ultima: Date,
+    gapDias: number,
+    totalReunioes: number,
+  ): ReturnType<typeof cardShell> {
+    const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+      .format(ultima).replace(".", "");
+    const dataLonga = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "long" }).format(ultima);
+    const meses = Math.round(RELACAO_LOOKBACK_DIAS / 30);
+    return cardShell(
+      "ESFRIANDO",
+      nomeExibido,
+      dataCurta,
+      [
+        el(
+          "div",
+          { display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 },
+          el("div", { display: "flex", fontSize: 36, fontWeight: 700, color: CARD.crit }, `${gapDias} dias`),
+          el("div", { display: "flex", fontSize: 15, color: CARD.mut }, "sem reunião"),
+        ),
+        el(
+          "div",
+          { display: "flex", fontSize: 14, color: CARD.mut, marginBottom: 4 },
+          `${totalReunioes} encontro${totalReunioes === 1 ? "" : "s"} nos últimos ${meses} meses — o último foi em ${dataLonga}`,
+        ),
+        caixaAcoes([`Quer que eu ajude a marcar um catch-up com ${nomeExibido}?`]),
+      ],
+      "sinal · sua agenda",
+    );
+  }
+
+  let sent = 0;
+  for (const c of candidatos.slice(0, RELACAO_MAX_CARDS_POR_EXECUCAO)) {
+    // Chave = pessoa + data do último encontro: se vocês se encontrarem de
+    // novo, a chave muda e o alerta "reseta" sozinho pro próximo gap.
+    const chave = `${c.email}-${c.ultima.toISOString().slice(0, 10)}`;
+    const { data: jaAvisado } = await sb
+      .from("avisos_enviados")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("tipo", "relacionamento_esfriando")
+      .eq("chave", chave)
+      .limit(1);
+    if (jaAvisado && jaAvisado.length > 0) continue;
+
+    const nomeExibido = c.nome ?? c.email;
+    const png = await renderCardPngBase64(montaCard(nomeExibido, c.ultima, c.gapDias, c.totalReunioes));
+    const jid = ownerJid(env);
+    const dataFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" }).format(c.ultima);
+    const texto = `${nomeExibido}, ${c.totalReunioes} reunião${c.totalReunioes === 1 ? "" : "ões"} nos últimos ` +
+      `${Math.round(RELACAO_LOOKBACK_DIAS / 30)} meses, a última em ${dataFmt} — ${c.gapDias} dias atrás. ` +
+      `Quer que eu ajude a remarcar?`;
+    await sendWhatsAppImage(jid, { base64: png, fileName: "relacionamento-esfriando.png" }, { fetch, env });
+    await sendWhatsAppText(jid, texto, { fetch, env });
+    await appendAssistantMessage(jid, texto, tenantId);
+    await sb.from("avisos_enviados").insert({ tenant_id: tenantId, tipo: "relacionamento_esfriando", chave });
+    sent++;
+  }
+
+  if (sent === 0 && dryRun) {
+    // Sem candidato real batendo o limiar agora — renderiza um exemplo só
+    // pra exercer o pipeline satori/resvg (mesmo motivo dos outros dry runs).
+    const exemploUltima = new Date(agora.getTime() - 40 * 24 * 3600_000);
+    const png = await renderCardPngBase64(montaCard("Marina Costa", exemploUltima, 40, 4));
+    return {
+      sent: 0,
+      candidatos: candidatos.length,
+      motivo: "dry run — card renderizado, nada enviado",
+      card_kb: Math.round(png.length * 0.75 / 1024),
+    };
+  }
+
+  return { sent, candidatos: candidatos.length };
 }
 
 // Alertas de prazo: tasks Beehave vencidas ou vencendo nas próximas 24h.
@@ -1562,6 +1704,8 @@ Deno.serve(async (req: Request) => {
     if (task === "prep_reuniao_dry") return json({ ok: true, ...(await runPrepReuniao(env, tenant.id, tenant.frentes, true)) });
     if (task === "despesa_anomala") return json({ ok: true, ...(await runDespesaAnomala(env, tenant.id)) });
     if (task === "despesa_anomala_dry") return json({ ok: true, ...(await runDespesaAnomala(env, tenant.id, true)) });
+    if (task === "relacionamento_esfriando") return json({ ok: true, ...(await runRelacionamentoEsfriando(env, tenant.id)) });
+    if (task === "relacionamento_esfriando_dry") return json({ ok: true, ...(await runRelacionamentoEsfriando(env, tenant.id, true)) });
     if (task === "alerts") return json({ ok: true, ...(await runAlerts(env, tenant.id)) });
     if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant.id)) });
     if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
@@ -1578,8 +1722,8 @@ Deno.serve(async (req: Request) => {
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id, true)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     return json({
-      error: "task: reminders | prep_reuniao | despesa_anomala | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
-        "agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
+      error: "task: reminders | prep_reuniao | despesa_anomala | relacionamento_esfriando | alerts | brief | weekly | " +
+        "scheduled | marketing | evening_recap | agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
     }, 400);
   } catch (err) {
     console.error(`[cron] task='${task}' erro:`, semDadoPessoal(err));

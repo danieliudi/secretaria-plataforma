@@ -27,6 +27,13 @@ export interface CalendarEvent {
   id: string;
   /** "HH:MM" no fuso de SP. `null` para eventos de dia inteiro. */
   time: string | null;
+  /**
+   * Início em ISO — `dateTime` quando o evento tem horário, ou a meia-noite
+   * (SP) de `date` pra evento de dia inteiro. Usado por rotinas que precisam
+   * saber QUANDO o evento foi/será, não só a hora do dia (ex: última reunião
+   * com alguém, dentro de uma janela que olha meses pra trás).
+   */
+  startISO: string;
   title: string;
   location: string | null;
   /**
@@ -129,6 +136,7 @@ function mapEvent(e: GCalEvent): CalendarEvent {
   return {
     id: e.id,
     time: e.start.dateTime ? formatTimeInSP(e.start.dateTime) : null,
+    startISO: e.start.dateTime ?? `${e.start.date}T00:00:00${SP_OFFSET}`,
     title: e.summary ?? "(sem título)",
     location: e.location ?? null,
     attendees: mapAttendees(e.attendees),
@@ -174,6 +182,23 @@ export async function getNextEvents(
       singleEvents: "true",
       orderBy: "startTime",
     },
+    deps,
+  );
+}
+
+/**
+ * Eventos entre dois instantes ISO quaisquer (passado incluso), COM
+ * attendees — diferente de getNextEvents/getEventsByDate, que são pensados
+ * pro futuro. Usada por rotinas proativas que precisam olhar pra trás (ex:
+ * quando foi a última reunião com alguém), não só pra frente.
+ */
+export async function getEventsBetween(
+  deISO: string,
+  ateISO: string,
+  deps: CalendarReadDeps = defaultCalendarReadDeps(),
+): Promise<CalendarEvent[]> {
+  return listEvents(
+    { timeMin: deISO, timeMax: ateISO, singleEvents: "true", orderBy: "startTime" },
     deps,
   );
 }
