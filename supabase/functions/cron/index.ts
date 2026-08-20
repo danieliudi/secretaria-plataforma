@@ -71,6 +71,12 @@ function ownerJid(env: EnvFn): string {
 const LEAD_MIN = 10; // antecedência do lembrete de agenda
 const SCAN_AHEAD_MIN = 15; // largura da varredura de agenda
 const ALERT_AHEAD_MS = 24 * 60 * 60_000; // alerta tasks vencendo nas próx. 24h
+// Janela do prep de reunião: cedo o bastante pra dar tempo de reação, tarde o
+// bastante pra estar fresco na cabeça — mesmo raciocínio do LEAD_MIN acima,
+// só que numa faixa mais larga (aprovado no mockup como "30-40min antes").
+const PREP_LEAD_MIN = 30;
+const PREP_SCAN_AHEAD_MIN = 40;
+const DESPESAS_JANELA_DIAS = 30;
 const TZ = "America/Sao_Paulo";
 
 const CALENDAR_BASE =
@@ -215,6 +221,147 @@ async function runReminders(env: EnvFn, tenantId: string): Promise<{ sent: numbe
     await sb.from("reminders_sent").insert({ event_id: ev.id, event_start: ev.startISO, title: ev.title });
     sent++;
   }
+  return { sent, scanned: events.length };
+}
+
+// ─── prep de reunião ────────────────────────────────────────────────────────
+
+/** Nome de frente que aparece no título do evento — comparação simples por substring, sem acento-sensibilidade. */
+function matchFrente(titulo: string, frentes: string[]): string | null {
+  const alvo = titulo.toLowerCase();
+  return frentes.find((f) => f.trim() && alvo.includes(f.trim().toLowerCase())) ?? null;
+}
+
+function formatBRL(centavos: number): string {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(centavos / 100);
+}
+
+/** "YYYY-MM-DD" de N dias atrás, em SP — pro filtro `gte` de data_despesa. */
+function diasAtras(n: number): string {
+  const d = new Date(Date.now() - n * 24 * 3600_000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);
+}
+
+interface DespesaResumo {
+  id: string;
+  valor_centavos: number;
+  data_despesa: string;
+  estabelecimento: string;
+}
+
+/**
+ * Antes de uma reunião cujo título bate com uma frente do tenant, junta as
+ * despesas recentes dessa frente — cruza agenda + despesas, sem tabela nova
+ * (mockup aprovado 20/08/2026). Só dispara se achar despesa: reunião sem
+ * gasto relacionado não gera card, pra não virar ruído (mesmo princípio do
+ * conflito de agenda — card é exceção, não rotina).
+ */
+async function runPrepReuniao(
+  env: EnvFn,
+  tenantId: string,
+  frentes: string[],
+  dryRun = false,
+): Promise<{ sent: number; scanned: number; motivo?: string; card_kb?: number }> {
+  const sb = getSupabaseClient();
+  const now = Date.now();
+  const events = frentes.length > 0 ? await getUpcoming(PREP_SCAN_AHEAD_MIN, env) : [];
+
+  const { CARD, caixaAcoes, cardShell, el, renderCardPngBase64 } = await import("../_shared/card.ts");
+
+  function linhaDespesa(d: DespesaResumo): ReturnType<typeof el> {
+    const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+      .format(new Date(`${d.data_despesa}T12:00:00`)).replace(".", "");
+    return el(
+      "div",
+      { display: "flex", gap: 12, alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${CARD.line}` },
+      el("div", { display: "flex", width: 62, fontSize: 17, color: CARD.mut }, dataCurta),
+      el("div", { display: "flex", flex: 1, fontSize: 19, fontWeight: 600, color: CARD.fg }, d.estabelecimento),
+      el("div", { display: "flex", fontSize: 17, color: CARD.mut }, formatBRL(d.valor_centavos)),
+    );
+  }
+
+  async function montaCard(
+    frente: string,
+    tituloEvento: string,
+    horaEvento: string,
+    despesas: DespesaResumo[],
+  ): Promise<{ png: string; total: number; texto: string }> {
+    const total = despesas.reduce((s, d) => s + d.valor_centavos, 0);
+    const linhas = despesas.slice(0, 3).map(linhaDespesa);
+    const png = await renderCardPngBase64(
+      cardShell(
+        "PRÓXIMA REUNIÃO",
+        tituloEvento,
+        horaEvento,
+        [
+          el(
+            "div",
+            { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 },
+            el("div", { display: "flex", fontSize: 16, color: CARD.mut }, `gasto com ${frente} · últimos ${DESPESAS_JANELA_DIAS} dias`),
+            el("div", { display: "flex", fontSize: 19, fontWeight: 700, color: CARD.fg }, formatBRL(total)),
+          ),
+          el("div", { display: "flex", flexDirection: "column" }, ...linhas),
+          caixaAcoes(["Quer que eu prepare um resumo pra levar na reunião?"]),
+        ],
+        "sinal · agenda + despesas",
+      ),
+    );
+    const texto = `Sua próxima reunião é "${tituloEvento}" (${horaEvento}) — vocês tiveram ` +
+      `${despesas.length} despesa${despesas.length === 1 ? "" : "s"} com ${frente} nos últimos ` +
+      `${DESPESAS_JANELA_DIAS} dias, total de ${formatBRL(total)}. Quer que eu prepare um resumo?`;
+    return { png, total, texto };
+  }
+
+  let sent = 0;
+  for (const ev of events) {
+    const minsUntil = (new Date(ev.startISO).getTime() - now) / 60_000;
+    if (minsUntil > PREP_SCAN_AHEAD_MIN || minsUntil < PREP_LEAD_MIN) continue;
+
+    const frente = matchFrente(ev.title, frentes);
+    if (!frente) continue;
+
+    const chave = `${ev.id}-${ev.startISO}`;
+    const { data: jaAvisado } = await sb
+      .from("avisos_enviados")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("tipo", "prep_reuniao")
+      .eq("chave", chave)
+      .limit(1);
+    if (jaAvisado && jaAvisado.length > 0) continue;
+
+    const { data: despesasData } = await sb
+      .from("despesas")
+      .select("id, valor_centavos, data_despesa, estabelecimento")
+      .eq("tenant_id", tenantId)
+      .ilike("frente", frente)
+      .gte("data_despesa", diasAtras(DESPESAS_JANELA_DIAS))
+      .order("data_despesa", { ascending: false })
+      .limit(10);
+    const despesas = (despesasData ?? []) as DespesaResumo[];
+    if (despesas.length === 0) continue;
+
+    const { png, texto } = await montaCard(frente, ev.title, fmtTime(ev.startISO), despesas);
+    const jid = ownerJid(env);
+    await sendWhatsAppImage(jid, { base64: png, fileName: "prep-reuniao.png" }, { fetch, env });
+    await sendWhatsAppText(jid, texto, { fetch, env });
+    await appendAssistantMessage(jid, texto, tenantId);
+    await sb.from("avisos_enviados").insert({ tenant_id: tenantId, tipo: "prep_reuniao", chave });
+    sent++;
+  }
+
+  if (sent === 0 && dryRun) {
+    // Sem evento real casando frente+despesa agora — renderiza um exemplo só
+    // pra exercer o pipeline satori/resvg (mesmo motivo do runAgendaCheck).
+    const exemplo: DespesaResumo[] = [
+      { id: "x1", valor_centavos: 18000, data_despesa: diasAtras(2), estabelecimento: "Posto Shell — combustível" },
+      { id: "x2", valor_centavos: 96000, data_despesa: diasAtras(8), estabelecimento: "Gráfica — material comercial" },
+      { id: "x3", valor_centavos: 10000, data_despesa: diasAtras(15), estabelecimento: "Uber — visita cliente" },
+    ];
+    const { png } = await montaCard("Resibag", "Resibag · Alinhamento diário", "09:00", exemplo);
+    return { sent: 0, scanned: events.length, motivo: "dry run — card renderizado, nada enviado", card_kb: Math.round(png.length * 0.75 / 1024) };
+  }
+
   return { sent, scanned: events.length };
 }
 
@@ -1243,6 +1390,8 @@ Deno.serve(async (req: Request) => {
     const env = await buildTenantEnv(tenant);
 
     if (task === "reminders") return json({ ok: true, ...(await runReminders(env, tenant.id)) });
+    if (task === "prep_reuniao") return json({ ok: true, ...(await runPrepReuniao(env, tenant.id, tenant.frentes)) });
+    if (task === "prep_reuniao_dry") return json({ ok: true, ...(await runPrepReuniao(env, tenant.id, tenant.frentes, true)) });
     if (task === "alerts") return json({ ok: true, ...(await runAlerts(env, tenant.id)) });
     if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant.id)) });
     if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
@@ -1259,7 +1408,7 @@ Deno.serve(async (req: Request) => {
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id, true)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     return json({
-      error: "task: reminders | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
+      error: "task: reminders | prep_reuniao | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
         "agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
     }, 400);
   } catch (err) {

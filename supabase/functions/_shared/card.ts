@@ -127,13 +127,18 @@ export function cardShell(
         padding: "30px 34px 24px",
         borderBottom: `1px solid ${CARD.line}`,
       },
+      // `flex: 1` + `minWidth: 0` no bloco do título: sem isso, um título
+      // longo o bastante pra quebrar linha empurra o `canto` pra fora da
+      // largura do card em vez de quebrar dentro do próprio espaço — achado
+      // testando o card de prep de reunião (20/08/2026), mas é bug do shell,
+      // vale pra qualquer card com título comprido.
       el(
         "div",
-        { display: "flex", flexDirection: "column" },
+        { display: "flex", flexDirection: "column", flex: 1, minWidth: 0 },
         el("div", { display: "flex", fontSize: 16, letterSpacing: 2, color: CARD.accent, fontWeight: 700 }, kicker),
         el("div", { display: "flex", fontSize: 34, fontWeight: 700, marginTop: 6 }, titulo),
       ),
-      el("div", { display: "flex", fontSize: 20, color: CARD.mut, paddingTop: 8 }, canto),
+      el("div", { display: "flex", flexShrink: 0, marginLeft: 16, fontSize: 20, color: CARD.mut, paddingTop: 8 }, canto),
     ),
     el("div", { display: "flex", flexDirection: "column", padding: "22px 34px 26px" }, ...corpo),
     el(
