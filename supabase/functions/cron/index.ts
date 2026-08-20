@@ -32,6 +32,7 @@ import { getTenantBySlug, buildTenantEnv, DEFAULT_TENANT_SLUG } from "../_shared
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
 import { type CalendarAttendee, getEventsBetween, getEventsByDate } from "../fast/tools/calendar-read.ts";
+import { listaRelacionamentosIgnorados } from "../fast/tools/relacionamento.ts";
 import { buscaContatoPorEmail } from "../fast/tools/redigir-supabase.ts";
 import { decideEnvio } from "../_shared/envio-decisao.ts";
 import { enviaTemplate, temCredencialMeta } from "../_shared/whatsapp-oficial.ts";
@@ -587,7 +588,9 @@ async function runRelacionamentoEsfriando(
     }
   }
 
+  const ignorados = await listaRelacionamentosIgnorados(tenantId);
   const candidatos = [...porEmail.values()]
+    .filter((c) => !ignorados.has(c.email))
     .filter((c) => c.datas.length >= RELACAO_MIN_REUNIOES)
     .map((c) => {
       const ultima = new Date(Math.max(...c.datas.map((d) => d.getTime())));

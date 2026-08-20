@@ -134,6 +134,11 @@ import {
   type ConsultarImportacaoResult,
   defaultConsultarImportacaoDeps,
 } from "./tools/importacao.ts";
+import {
+  ignorarRelacionamento as defaultIgnorarRelacionamento,
+  type IgnorarRelacionamentoInput,
+  type IgnorarRelacionamentoResult,
+} from "./tools/relacionamento.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
@@ -750,6 +755,25 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: "ignorar_relacionamento",
+    description:
+      "Marca uma pessoa pra NUNCA MAIS aparecer no card de 'relação esfriando' (aviso de reunião sumida da agenda). Use quando o chefe disser que não quer ser lembrado de se reunir com alguém — família, cônjuge, amigo, ou qualquer contato que não é uma relação profissional a acompanhar. O e-mail SEMPRE vem de uma mensagem sua anterior nesta conversa (o card e o resumo em texto sempre mostram o e-mail da pessoa) — nunca invente ou adivinhe o e-mail a partir só do nome/apelido que o chefe usou.",
+    input_schema: {
+      type: "object",
+      properties: {
+        email: {
+          type: "string",
+          description: "E-mail exato da pessoa, copiado de uma mensagem sua anterior nesta conversa.",
+        },
+        nome: {
+          type: "string",
+          description: "(opcional) Nome ou relação da pessoa, se o chefe mencionou (ex: 'esposa', 'Erika').",
+        },
+      },
+      required: ["email"],
+    },
+  },
 ];
 
 // ─── System prompt builder ───────────────────────────────────────────────────
@@ -782,6 +806,11 @@ DADOS IMPORTADOS (CSV que o chefe manda de outra ferramenta)
 - Retorna colunas + até 2000 linhas cruas, como vieram do CSV — cruze/some/filtre você mesmo a partir dos dados, não existe cálculo pronto. Se vier 'truncado: true', avise que analisou só uma parte.
 - Se a tool disser que não achou nenhuma importação, OU se o chefe perguntar algo que só existe numa ferramenta que a Mia não tem acesso nenhum (nem CRM configurado, nem CSV importado) — SUGIRA que ele exporte um CSV de lá (a maioria das ferramentas tem um botão "exportar") e mande aqui pelo Telegram. Depois disso você já consegue responder sobre aquele dado. Não peça API, chave nem integração — é sempre exportar e mandar o arquivo.
 - Mandar de novo o mesmo arquivo/ferramenta SUBSTITUI a importação anterior inteira (não soma) — é assim que ele atualiza o dado.
+
+RELAÇÃO ESFRIANDO (parar de rastrear alguém)
+- 1 tool: ignorar_relacionamento(email, nome?). Use quando o chefe pedir pra parar de ser avisado sobre "sumiu da agenda"/"esfriando" com uma pessoa específica — geralmente porque é família, cônjuge, amigo, ou qualquer relação que não é profissional.
+- O e-mail SEMPRE vem de uma mensagem sua anterior nesta conversa (o card "ESFRIANDO" e o resumo em texto sempre mostram o e-mail) — nunca invente ou adivinhe o e-mail só pelo nome/apelido que ele usou. Se não tiver o e-mail visível na conversa, pergunte a pessoa de quem ele está falando antes de chamar a tool.
+- Depois de chamar, confirme em uma bolha curta (ex: "Combinado, não vou mais te lembrar de reunião com ela 👍") — sem repetir o e-mail de volta.
 
 LEMBRETES AGENDADOS (proativo no horário marcado)
 - 1 tool: schedule_reminder(fire_at, text, recurrence?, confirm_duplicate?). Use quando o chefe pedir "me lembra X amanhã às 14h", "me cutuca em 1h pra Y", "me avisa antes de Z começar", "todo mês/toda semana/todo dia me lembra de W".
@@ -967,6 +996,7 @@ export interface FastWithToolsDeps {
       userId?: string,
     ) => Promise<MontarLinkResult>;
     consultarImportacao: (input: ConsultarImportacaoInput) => Promise<ConsultarImportacaoResult>;
+    ignorarRelacionamento: (input: IgnorarRelacionamentoInput) => Promise<IgnorarRelacionamentoResult>;
   };
   /** Memória de conversa (2E). Default usa a tabela conversation_history. */
   loadHistory: (userId: string) => Promise<ConversationMessage[]>;
@@ -1127,6 +1157,14 @@ export function defaultFastWithToolsDeps(
         return montarLinkParaContato(tenantId, userId ?? null, input, supabaseRedigirDeps());
       },
       consultarImportacao: (input) => defaultConsultarImportacao(input, importacaoDeps()),
+      ignorarRelacionamento: (input) => {
+        if (!tenantId) {
+          throw new Error(
+            "não foi possível identificar de quem é esta conversa pra guardar essa preferência",
+          );
+        }
+        return defaultIgnorarRelacionamento(tenantId, input);
+      },
     },
     loadHistory: (userId) => loadConversationHistory(userId),
     saveTurn: (userId, userText, assistantText) =>
@@ -1368,6 +1406,13 @@ async function executeTool(
     if (name === "consultar_importacao") {
       const result = await deps.tools.consultarImportacao({
         origem: input.origem ? String(input.origem) : undefined,
+      });
+      return result;
+    }
+    if (name === "ignorar_relacionamento") {
+      const result = await deps.tools.ignorarRelacionamento({
+        email: String(input.email),
+        nome: input.nome ? String(input.nome) : undefined,
       });
       return result;
     }
