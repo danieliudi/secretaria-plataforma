@@ -36,6 +36,7 @@
   --aurora-ok: #57d9a3;
   --aurora-info: #6db8f2;
   --aurora-warn: #f0b45c;
+  --aurora-crit: #f2707a;
 }
 
 @theme inline {
@@ -64,6 +65,7 @@
   --color-aurora-ok: var(--aurora-ok);
   --color-aurora-info: var(--aurora-info);
   --color-aurora-warn: var(--aurora-warn);
+  --color-aurora-crit: var(--aurora-crit);
 
   --font-sans: var(--font-body);
   --font-serif: var(--font-display);

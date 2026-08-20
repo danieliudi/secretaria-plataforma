@@ -19,9 +19,14 @@ import { Resvg, initWasm } from "npm:@resvg/resvg-wasm@2.6.2";
 // A fonte precisa vir como bytes (satori não usa fonte do sistema) e o resvg
 // wasm precisa ser inicializado uma vez. Ambos ficam em cache de módulo — a
 // edge function reaproveita entre invocações no mesmo isolate.
-const FONT_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/files/inter-latin-400-normal.woff";
-const FONT_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/files/inter-latin-700-normal.woff";
+//
+// Instrument Sans — mesma fonte de corpo do site (ver app/layout.tsx) — pra
+// manter o card visualmente do mesmo produto que o WhatsApp mostra em texto.
+const FONT_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-400-normal.woff";
+const FONT_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-700-normal.woff";
 const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
+
+const FONT_NAME = "Instrument Sans";
 
 let fontesCache: Array<{ name: string; data: ArrayBuffer; weight: 400 | 700; style: "normal" }> | null = null;
 let wasmPronto = false;
@@ -33,8 +38,8 @@ async function carregaFontes() {
     fetch(FONT_BOLD_URL).then((r) => r.arrayBuffer()),
   ]);
   fontesCache = [
-    { name: "Inter", data: reg, weight: 400, style: "normal" },
-    { name: "Inter", data: bold, weight: 700, style: "normal" },
+    { name: FONT_NAME, data: reg, weight: 400, style: "normal" },
+    { name: FONT_NAME, data: bold, weight: 700, style: "normal" },
   ];
   return fontesCache;
 }
@@ -48,15 +53,19 @@ async function garanteWasm() {
 // ─── paleta do card ─────────────────────────────────────────────────────────
 // Fixa de propósito: o card vira PNG e é visto dentro do WhatsApp, então não
 // acompanha tema claro/escuro de ninguém — tem que se sustentar sozinho nos dois.
+//
+// Mesmos tokens do Aurora (app/globals.css) — o card precisa parecer que saiu
+// do mesmo produto que o site, não de uma paleta à parte. `crit` usa
+// --aurora-crit, criado junto com este reskin (antes só existiam ok/info/warn).
 export const CARD = {
-  ink: "#10201f",
-  ink2: "#17302e",
-  line: "#24423f",
-  fg: "#eef5f3",
-  mut: "#8fa9a5",
-  accent: "#4ecdc0",
-  warn: "#e8a13a",
-  crit: "#e5695c",
+  ink: "#120c1e",
+  ink2: "rgba(255,255,255,0.06)",
+  line: "rgba(255,255,255,0.09)",
+  fg: "#f1eef8",
+  mut: "#a79fc2",
+  accent: "#8b5cf6",
+  warn: "#f0b45c",
+  crit: "#f2707a",
 } as const;
 
 export const LARGURA_CARD = 800;
@@ -107,7 +116,7 @@ export function cardShell(
       width: LARGURA_CARD,
       background: CARD.ink,
       color: CARD.fg,
-      fontFamily: "Inter",
+      fontFamily: FONT_NAME,
     },
     el(
       "div",
@@ -180,7 +189,7 @@ export function linhaConflito(hora: string, titulo: string, sub: string): El {
       alignItems: "flex-start",
       padding: "13px 16px",
       marginBottom: 8,
-      background: "rgba(229,105,92,0.13)",
+      background: "rgba(242,112,122,0.13)", // CARD.crit (#f2707a) em rgba, pro tint de fundo
       borderLeft: `4px solid ${CARD.crit}`,
       borderRadius: 6,
     },
@@ -279,7 +288,14 @@ export function barrasAtraso(itens: Array<{ titulo: string; dias: number }>): El
   );
 }
 
-/** Caixa de destaque com as propostas da secretária ("→ posso fazer X?"). */
+/**
+ * Caixa de destaque com as propostas da secretária ("» posso fazer X?").
+ *
+ * Usa "»" (guillemet), não "→": o subset "latin" das fontes via fontsource
+ * (Inter antes, Instrument Sans agora) não inclui o bloco Unicode de setas —
+ * "→" virava um retângulo vazio (tofu) no PNG renderizado. Achado testando
+ * este reskin — bug preexistente, não introduzido por ele.
+ */
 export function caixaAcoes(linhas: string[]): El {
   return el(
     "div",
@@ -292,6 +308,6 @@ export function caixaAcoes(linhas: string[]): El {
       background: CARD.ink2,
       borderRadius: 10,
     },
-    ...linhas.map((l) => el("div", { display: "flex", fontSize: 20, color: CARD.fg }, `→  ${l}`)),
+    ...linhas.map((l) => el("div", { display: "flex", fontSize: 20, color: CARD.fg }, `»  ${l}`)),
   );
 }
