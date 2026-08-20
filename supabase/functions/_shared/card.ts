@@ -20,26 +20,39 @@ import { Resvg, initWasm } from "npm:@resvg/resvg-wasm@2.6.2";
 // wasm precisa ser inicializado uma vez. Ambos ficam em cache de módulo — a
 // edge function reaproveita entre invocações no mesmo isolate.
 //
-// Instrument Sans — mesma fonte de corpo do site (ver app/layout.tsx) — pra
-// manter o card visualmente do mesmo produto que o WhatsApp mostra em texto.
-const FONT_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-400-normal.woff";
-const FONT_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-700-normal.woff";
+// Rebrand 20/08/2026: Instrument Sans → Hanken Grotesk (corpo/rótulo) + Eb
+// Garamond (só o título do card, papel de "headline") — mesmas duas fontes
+// que o site passou a usar (ver app/layout.tsx), pra manter o card do mesmo
+// produto que o WhatsApp mostra em texto. Título ganha fonte própria porque
+// é o único elemento do card com papel de "manchete"; o resto (kicker,
+// linhas, ações, rodapé) é sempre corpo/rótulo.
+const FONT_BODY_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/hanken-grotesk@5.2.5/files/hanken-grotesk-latin-400-normal.woff";
+const FONT_BODY_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/hanken-grotesk@5.2.5/files/hanken-grotesk-latin-700-normal.woff";
+const FONT_DISPLAY_URL = "https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.2.5/files/eb-garamond-latin-500-normal.woff";
+const FONT_DISPLAY_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.2.5/files/eb-garamond-latin-700-normal.woff";
 const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
 
-const FONT_NAME = "Instrument Sans";
+const FONT_BODY = "Hanken Grotesk";
+const FONT_DISPLAY = "Eb Garamond";
 
-let fontesCache: Array<{ name: string; data: ArrayBuffer; weight: 400 | 700; style: "normal" }> | null = null;
+let fontesCache:
+  | Array<{ name: string; data: ArrayBuffer; weight: 400 | 500 | 700; style: "normal" }>
+  | null = null;
 let wasmPronto = false;
 
 async function carregaFontes() {
   if (fontesCache) return fontesCache;
-  const [reg, bold] = await Promise.all([
-    fetch(FONT_REGULAR_URL).then((r) => r.arrayBuffer()),
-    fetch(FONT_BOLD_URL).then((r) => r.arrayBuffer()),
+  const [bodyReg, bodyBold, display, displayBold] = await Promise.all([
+    fetch(FONT_BODY_REGULAR_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_BODY_BOLD_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_DISPLAY_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_DISPLAY_BOLD_URL).then((r) => r.arrayBuffer()),
   ]);
   fontesCache = [
-    { name: FONT_NAME, data: reg, weight: 400, style: "normal" },
-    { name: FONT_NAME, data: bold, weight: 700, style: "normal" },
+    { name: FONT_BODY, data: bodyReg, weight: 400, style: "normal" },
+    { name: FONT_BODY, data: bodyBold, weight: 700, style: "normal" },
+    { name: FONT_DISPLAY, data: display, weight: 500, style: "normal" },
+    { name: FONT_DISPLAY, data: displayBold, weight: 700, style: "normal" },
   ];
   return fontesCache;
 }
@@ -54,18 +67,22 @@ async function garanteWasm() {
 // Fixa de propósito: o card vira PNG e é visto dentro do WhatsApp, então não
 // acompanha tema claro/escuro de ninguém — tem que se sustentar sozinho nos dois.
 //
-// Mesmos tokens do Aurora (app/globals.css) — o card precisa parecer que saiu
-// do mesmo produto que o site, não de uma paleta à parte. `crit` usa
-// --aurora-crit, criado junto com este reskin (antes só existiam ok/info/warn).
+// Mesmos tokens do Aurora (app/globals.css). Rebrand 20/08/2026: violeta
+// escuro → slate claro + ouro clássico, tokens tirados ao pé da letra de um
+// board de referência (Primary #0F172A / Secondary #334155 / Tertiary
+// #D4AF37 / Neutral #F8FAFC — a rampa Slate do Tailwind + um dourado). Fundo
+// virou claro — `ink`/`ink2`/`line` inverteram de branco-transparente pra
+// preto-transparente. `warn`/`crit` aprofundados: os valores antigos foram
+// calibrados pra contraste em fundo ESCURO e ficavam ilegíveis no claro.
 export const CARD = {
-  ink: "#120c1e",
-  ink2: "rgba(255,255,255,0.06)",
-  line: "rgba(255,255,255,0.09)",
-  fg: "#f1eef8",
-  mut: "#a79fc2",
-  accent: "#8b5cf6",
-  warn: "#f0b45c",
-  crit: "#f2707a",
+  ink: "#f8fafc",
+  ink2: "rgba(15,23,42,0.045)",
+  line: "rgba(15,23,42,0.1)",
+  fg: "#0f172a",
+  mut: "#64748b",
+  accent: "#d4af37",
+  warn: "#b8752e",
+  crit: "#b33939",
 } as const;
 
 export const LARGURA_CARD = 800;
@@ -116,7 +133,7 @@ export function cardShell(
       width: LARGURA_CARD,
       background: CARD.ink,
       color: CARD.fg,
-      fontFamily: FONT_NAME,
+      fontFamily: FONT_BODY,
     },
     el(
       "div",
@@ -135,8 +152,12 @@ export function cardShell(
       el(
         "div",
         { display: "flex", flexDirection: "column", flex: 1, minWidth: 0 },
-        el("div", { display: "flex", fontSize: 16, letterSpacing: 2, color: CARD.accent, fontWeight: 700 }, kicker),
-        el("div", { display: "flex", fontSize: 34, fontWeight: 700, marginTop: 6 }, titulo),
+        el("div", { display: "flex", fontSize: 15, letterSpacing: 2, color: CARD.accent, fontWeight: 700 }, kicker),
+        el(
+          "div",
+          { display: "flex", fontSize: 36, fontWeight: 500, marginTop: 7, fontFamily: FONT_DISPLAY },
+          titulo,
+        ),
       ),
       el("div", { display: "flex", flexShrink: 0, marginLeft: 16, fontSize: 20, color: CARD.mut, paddingTop: 8 }, canto),
     ),
@@ -194,7 +215,7 @@ export function linhaConflito(hora: string, titulo: string, sub: string): El {
       alignItems: "flex-start",
       padding: "13px 16px",
       marginBottom: 8,
-      background: "rgba(242,112,122,0.13)", // CARD.crit (#f2707a) em rgba, pro tint de fundo
+      background: "rgba(179,57,57,0.1)", // CARD.crit (#b33939) em rgba, pro tint de fundo
       borderLeft: `4px solid ${CARD.crit}`,
       borderRadius: 6,
     },
@@ -313,7 +334,7 @@ export function barrasComparacao(
       el("div", { display: "flex", width: 96, fontSize: 15, color: CARD.mut }, item.rotulo),
       el(
         "div",
-        { display: "flex", width: larguraMax, height: 10, background: "rgba(255,255,255,0.06)", borderRadius: 5 },
+        { display: "flex", width: larguraMax, height: 10, background: CARD.ink2, borderRadius: 5 },
         el("div", {
           display: "flex",
           width: Math.max(6, Math.round((item.valor / pico) * larguraMax)),

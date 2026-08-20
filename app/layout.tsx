@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
-import { Instrument_Sans, Fraunces } from "next/font/google";
+import { EB_Garamond, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
-const bodyFont = Instrument_Sans({
+// Rebrand 20/08/2026: Instrument Sans + Fraunces → Hanken Grotesk + Eb
+// Garamond, junto da troca de paleta pra slate+ouro (ver globals.css) — as
+// duas fontes vêm do mesmo board de referência da paleta nova.
+const bodyFont = Hanken_Grotesk({
   variable: "--font-body",
   weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
 });
 
 // Fonte de apoio, usada só como contraste editorial pontual (ex.: a manchete
-// da /app) — nunca substitui a Instrument Sans como corpo de texto.
-const displayFont = Fraunces({
+// da /app) — nunca substitui a Hanken Grotesk como corpo de texto.
+const displayFont = EB_Garamond({
   variable: "--font-display",
-  weight: ["500", "600"],
+  weight: ["500", "600", "700"],
   style: ["normal", "italic"],
   subsets: ["latin"],
 });

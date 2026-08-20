@@ -12,31 +12,43 @@
   --cyan: #0e7a82;
   --violet: #6e58a8;
 
-  /* Aurora — identidade fixa das páginas públicas (/, /login, /novidades).
-     NÃO é dark mode alternável: é a pele definitiva dessas três rotas, por
-     escolha de marca, independente do tema do sistema operacional de quem
-     olha. Os tokens acima (--background, --foreground etc.) continuam
-     servindo /onboarding e /admin, que ainda não passaram pela mesma
-     reestilização — por isso Aurora vive num namespace próprio em vez de
-     sobrescrever os tokens compartilhados. */
-  --aurora-bg: #120c1e;
-  --aurora-surface: rgba(255, 255, 255, 0.035);
-  --aurora-surface-2: rgba(255, 255, 255, 0.06);
-  --aurora-line: rgba(255, 255, 255, 0.09);
-  --aurora-line-soft: rgba(255, 255, 255, 0.06);
-  --aurora-fg: #f1eef8;
-  --aurora-muted: #a79fc2;
-  --aurora-muted-2: #847c9e;
-  --aurora-accent: #8b5cf6;
-  --aurora-accent-text: #c3aeff;
-  --aurora-accent-ink: #0f0a1a;
-  --aurora-glow: rgba(139, 92, 246, 0.3);
+  /* Aurora — identidade de marca de praticamente todo o site (não só as 3
+     rotas públicas originais — o nome ficou, o alcance cresceu). Rebrand
+     20/08/2026: slate escuro + ouro clássico no lugar do violeta, tokens
+     tirados ao pé da letra de um board de referência (Primary #0F172A /
+     Secondary #334155 / Tertiary #D4AF37 / Neutral #F8FAFC — é a rampa Slate
+     + um dourado). Fundo virou CLARO — inverte a relação inteira: borda e
+     superfície eram branco-transparente sobre fundo escuro, agora são
+     preto-transparente sobre fundo claro. Continua NÃO sendo dark mode
+     alternável: é a pele definitiva, só que agora clara em vez de escura.
+     Os tokens compartilhados (--background, --foreground etc.) continuam
+     servindo /onboarding e /admin nos estados de fallback. */
+  --aurora-bg: #f8fafc;
+  --aurora-surface: #ffffff;
+  --aurora-surface-2: #f1f5f9;
+  --aurora-line: rgba(15, 23, 42, 0.1);
+  --aurora-line-soft: rgba(15, 23, 42, 0.06);
+  --aurora-fg: #0f172a;
+  --aurora-muted: #64748b;
+  --aurora-muted-2: #334155;
+  --aurora-accent: #d4af37;
+  /* Ouro mais escuro — o acento real é claro-médio, ilegível como TEXTO sobre
+     o fundo claro; esta variante existe só pra texto/ícone que precisa ler
+     como "cor de marca" sem virar acento de botão sólido. */
+  --aurora-accent-text: #8a6428;
+  /* Antes era texto claro sobre um accent escuro (violeta); agora o accent é
+     claro-médio, então o texto sobre ele precisa ser escuro — papel invertido
+     de propósito, mesmo nome de token. */
+  --aurora-accent-ink: #2b2005;
+  --aurora-glow: rgba(15, 23, 42, 0.14);
   /* Semânticas de /novidades — deliberadamente NÃO usam --aurora-accent, pra
-     "isso é novo" nunca se confundir com "isso é a marca Mia". */
-  --aurora-ok: #57d9a3;
-  --aurora-info: #6db8f2;
-  --aurora-warn: #f0b45c;
-  --aurora-crit: #f2707a;
+     "isso é novo" nunca se confundir com "isso é a marca Mia". Aprofundadas
+     em relação à versão escura: a mesma cor clara que lia bem sobre fundo
+     quase-preto (#120c1e) perde contraste sobre fundo quase-branco. */
+  --aurora-ok: #2f9d6f;
+  --aurora-info: #3f7fc4;
+  --aurora-warn: #b8752e;
+  --aurora-crit: #b33939;
 }
 
 @theme inline {
@@ -77,17 +89,17 @@ body {
   font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* O gradiente radial de Aurora não é expressável como token de cor simples —
-   fica de fora do @theme inline, como classe utilitária própria. */
 .aurora-bg {
   background-color: var(--aurora-bg);
-  background-image: radial-gradient(circle at 15% -10%, #241242 0%, transparent 45%);
 }
 
+/* Antes era glow de neon violeta sobre fundo escuro — não faz sentido no
+   fundo claro novo. Vira sombra suave de elevação; nomes de classe mantidos
+   de propósito pra não precisar tocar em todo call site. */
 .aurora-glow {
-  box-shadow: 0 0 14px var(--aurora-glow);
+  box-shadow: 0 2px 10px var(--aurora-glow);
 }
 
 .aurora-glow-btn {
-  box-shadow: 0 0 22px var(--aurora-glow);
+  box-shadow: 0 6px 18px var(--aurora-glow);
 }
