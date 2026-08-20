@@ -13,6 +13,11 @@ import { synthesizeSpeech } from "../_shared/google-tts.ts";
 import { transcribeAudio } from "../_shared/transcribe.ts";
 import { describeImage, imageMediaType } from "../_shared/vision.ts";
 import { describePdf, PdfInvalidoError, PdfLimiteExcedidoError, verificaTamanhoDeclarado } from "../_shared/pdf.ts";
+import {
+  ImportLimiteExcedidoError,
+  registrarImportacao,
+  verificaTamanhoDeclaradoImportacao,
+} from "../fast/tools/importacao.ts";
 import type { Decision } from "../_shared/types.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
@@ -53,6 +58,12 @@ function isPdfDocument(doc?: TgDocument): boolean {
   if (!doc) return false;
   if (doc.mime_type === "application/pdf") return true;
   return (doc.file_name ?? "").toLowerCase().endsWith(".pdf");
+}
+
+function isCsvDocument(doc?: TgDocument): boolean {
+  if (!doc) return false;
+  if (doc.mime_type === "text/csv") return true;
+  return (doc.file_name ?? "").toLowerCase().endsWith(".csv");
 }
 
 /**
@@ -155,6 +166,24 @@ async function deriveInput(
       : `(PDF que enviei - ${resumo})`;
   }
 
+  if (message.document && isCsvDocument(message.document)) {
+    if (!tenantId) throw new Error("importação de CSV indisponível: tenant não resolvido");
+    verificaTamanhoDeclaradoImportacao(message.document.file_size);
+    const { bytes, fileName } = await getTelegramFileBytes(message.document.file_id, telegramDeps);
+    const nomeArquivo = message.document.file_name || fileName || "importacao.csv";
+    const csvTexto = new TextDecoder("utf-8").decode(bytes);
+    const resultado = await registrarImportacao(tenantId, nomeArquivo, csvTexto);
+    const aviso = resultado.truncado
+      ? ` (o arquivo tinha mais linhas — guardei só as primeiras ${resultado.total_linhas})`
+      : "";
+    const resumo =
+      `importei "${resultado.nome_arquivo}" como "${resultado.origem}": ${resultado.total_linhas} linha(s), ` +
+      `colunas: ${resultado.colunas.join(", ")}${aviso}`;
+    return message.caption
+      ? `${message.caption}\n\n(CSV que enviei - ${resumo})`
+      : `(CSV que enviei - ${resumo})`;
+  }
+
   return null;
 }
 
@@ -179,7 +208,7 @@ Deno.serve(async (req: Request) => {
     ? "voice"
     : message.photo
     ? "photo"
-    : isPdfDocument(message.document)
+    : isPdfDocument(message.document) || isCsvDocument(message.document)
     ? "document"
     : "other";
 
@@ -234,7 +263,8 @@ Deno.serve(async (req: Request) => {
         input = await deriveInput(message, telegramDeps, tenant.id);
       } catch (err) {
         await dbg.from("async_debug").insert({ step: "tg_media_err", detail: semDadoPessoal(err) });
-        const msg = err instanceof PdfLimiteExcedidoError || err instanceof PdfInvalidoError
+        const msg = err instanceof PdfLimiteExcedidoError || err instanceof PdfInvalidoError ||
+            err instanceof ImportLimiteExcedidoError
           ? err.message
           : semDadoPessoal(err).includes("GROQ_API_KEY")
           ? "Chefe, ainda nao consigo ouvir audio por aqui - me manda por texto que eu resolvo? 🙏"

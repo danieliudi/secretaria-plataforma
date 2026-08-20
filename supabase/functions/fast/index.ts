@@ -128,6 +128,12 @@ import {
   type RegistrarDespesaResult,
   registrarDespesa as defaultRegistrarDespesa,
 } from "./tools/despesas.ts";
+import {
+  consultarImportacao as defaultConsultarImportacao,
+  type ConsultarImportacaoInput,
+  type ConsultarImportacaoResult,
+  defaultConsultarImportacaoDeps,
+} from "./tools/importacao.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
@@ -729,6 +735,21 @@ const TOOLS = [
       required: ["nome", "texto"],
     },
   },
+  {
+    name: "consultar_importacao",
+    description:
+      "Lê um CSV que o chefe mandou de outra ferramenta (CRM, ERP, planilha) e que já foi importado. Use quando ele perguntar algo que só existe numa ferramenta externa que ele usa — ex: 'quantos negócios tem no funil', 'quais clientes venceram esse mês', 'soma o valor da coluna X'. Retorna as colunas e as linhas cruas: cruze/some/filtre você mesmo, não existe cálculo pronto. Sem 'origem', pega a importação mais recente.",
+    input_schema: {
+      type: "object",
+      properties: {
+        origem: {
+          type: "string",
+          description: "(opcional) Trecho do nome da ferramenta/arquivo, ex: 'pipedrive'. Ausente = importação mais recente.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ─── System prompt builder ───────────────────────────────────────────────────
@@ -754,6 +775,13 @@ ACESSO AO EMAIL (Gmail, somente leitura)
 {{ga4_block}}
 
 {{crm_block}}
+
+DADOS IMPORTADOS (CSV que o chefe manda de outra ferramenta)
+- 1 tool: consultar_importacao(origem?). Use quando o chefe perguntar algo que só existe numa ferramenta externa que ele usa (CRM, ERP, planilha) e ele já tiver mandado um CSV de lá.
+- Sem 'origem', pega a importação mais recente. Com 'origem' (um trecho do nome do arquivo, ex: "pipedrive"), busca por aquela.
+- Retorna colunas + até 2000 linhas cruas, como vieram do CSV — cruze/some/filtre você mesmo a partir dos dados, não existe cálculo pronto. Se vier 'truncado: true', avise que analisou só uma parte.
+- Se a tool disser que não achou nenhuma importação, OU se o chefe perguntar algo que só existe numa ferramenta que a Mia não tem acesso nenhum (nem CRM configurado, nem CSV importado) — SUGIRA que ele exporte um CSV de lá (a maioria das ferramentas tem um botão "exportar") e mande aqui pelo Telegram. Depois disso você já consegue responder sobre aquele dado. Não peça API, chave nem integração — é sempre exportar e mandar o arquivo.
+- Mandar de novo o mesmo arquivo/ferramenta SUBSTITUI a importação anterior inteira (não soma) — é assim que ele atualiza o dado.
 
 LEMBRETES AGENDADOS (proativo no horário marcado)
 - 1 tool: schedule_reminder(fire_at, text, recurrence?, confirm_duplicate?). Use quando o chefe pedir "me lembra X amanhã às 14h", "me cutuca em 1h pra Y", "me avisa antes de Z começar", "todo mês/toda semana/todo dia me lembra de W".
@@ -938,6 +966,7 @@ export interface FastWithToolsDeps {
       input: MontarLinkInput,
       userId?: string,
     ) => Promise<MontarLinkResult>;
+    consultarImportacao: (input: ConsultarImportacaoInput) => Promise<ConsultarImportacaoResult>;
   };
   /** Memória de conversa (2E). Default usa a tabela conversation_history. */
   loadHistory: (userId: string) => Promise<ConversationMessage[]>;
@@ -984,6 +1013,14 @@ export function defaultFastWithToolsDeps(
       );
     }
     return defaultDespesasDeps(tenantId, userId);
+  };
+  const importacaoDeps = () => {
+    if (!tenantId) {
+      throw new Error(
+        "importação não disponível: não foi possível identificar de quem é esta conversa",
+      );
+    }
+    return defaultConsultarImportacaoDeps(tenantId);
   };
   return {
     now: () => new Date(),
@@ -1089,6 +1126,7 @@ export function defaultFastWithToolsDeps(
         }
         return montarLinkParaContato(tenantId, userId ?? null, input, supabaseRedigirDeps());
       },
+      consultarImportacao: (input) => defaultConsultarImportacao(input, importacaoDeps()),
     },
     loadHistory: (userId) => loadConversationHistory(userId),
     saveTurn: (userId, userText, assistantText) =>
@@ -1325,6 +1363,12 @@ async function executeTool(
         telefone: input.telefone ? String(input.telefone) : undefined,
         email: input.email ? String(input.email) : undefined,
       }, userId);
+      return result;
+    }
+    if (name === "consultar_importacao") {
+      const result = await deps.tools.consultarImportacao({
+        origem: input.origem ? String(input.origem) : undefined,
+      });
       return result;
     }
     return { error: `Unknown tool: ${name}` };
