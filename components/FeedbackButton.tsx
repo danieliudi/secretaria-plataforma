@@ -57,8 +57,14 @@ function FeedbackModal({ onFechar }: { onFechar: () => void }) {
         body: JSON.stringify({ tipo, texto }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setErro(body.error ?? "Não conseguimos enviar. Tenta de novo?");
+        // 401 = sessão expirou enquanto a pessoa escrevia. A mensagem da API
+        // ("não autenticado") é diagnóstico, não frase pra ler na tela.
+        if (res.status === 401) {
+          setErro("Sua sessão expirou. Recarrega a página e tenta de novo?");
+        } else {
+          const body = await res.json().catch(() => ({}));
+          setErro(typeof body.error === "string" ? body.error : "Não conseguimos enviar. Tenta de novo?");
+        }
         setEstado("escrevendo");
         return;
       }
