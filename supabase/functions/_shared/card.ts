@@ -294,6 +294,45 @@ export function barrasAtraso(itens: Array<{ titulo: string; dias: number }>): El
 }
 
 /**
+ * Duas barras horizontais comparando um valor observado com uma referência
+ * (ex: despesa vs média da categoria) — mesmo padrão visual de `barrasAtraso`,
+ * adaptado pra comparar 2 grandezas em vez de listar N itens. A primeira barra
+ * (`a`) é sempre a cor crítica — é o valor que disparou o alerta; a segunda
+ * (`b`) é a referência, em tom neutro.
+ */
+export function barrasComparacao(
+  a: { rotulo: string; valor: number; texto: string },
+  b: { rotulo: string; valor: number; texto: string },
+): El {
+  const pico = Math.max(1, a.valor, b.valor);
+  const larguraMax = 320;
+  const linha = (item: typeof a, cor: string) =>
+    el(
+      "div",
+      { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 },
+      el("div", { display: "flex", width: 96, fontSize: 15, color: CARD.mut }, item.rotulo),
+      el(
+        "div",
+        { display: "flex", width: larguraMax, height: 10, background: "rgba(255,255,255,0.06)", borderRadius: 5 },
+        el("div", {
+          display: "flex",
+          width: Math.max(6, Math.round((item.valor / pico) * larguraMax)),
+          height: 10,
+          background: cor,
+          borderRadius: 5,
+        }),
+      ),
+      el("div", { display: "flex", width: 88, fontSize: 15, color: CARD.fg, justifyContent: "flex-end" }, item.texto),
+    );
+  return el(
+    "div",
+    { display: "flex", flexDirection: "column" },
+    linha(a, CARD.crit),
+    linha(b, CARD.mut),
+  );
+}
+
+/**
  * Caixa de destaque com as propostas da secretária ("» posso fazer X?").
  *
  * Usa "»" (guillemet), não "→": o subset "latin" das fontes via fontsource

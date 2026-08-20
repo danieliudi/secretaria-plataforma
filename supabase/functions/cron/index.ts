@@ -77,6 +77,14 @@ const ALERT_AHEAD_MS = 24 * 60 * 60_000; // alerta tasks vencendo nas próx. 24h
 const PREP_LEAD_MIN = 30;
 const PREP_SCAN_AHEAD_MIN = 40;
 const DESPESAS_JANELA_DIAS = 30;
+// Despesa fora do padrão: varre despesas CRIADAS na última hora (não pela
+// data do recibo — created_at), pra pegar o lançamento logo depois que o
+// chefe confirma o registro (mockup aprovado 20/08/2026).
+const DESPESA_ANOMALA_SCAN_MIN = 60;
+const DESPESA_ANOMALA_MULTIPLICADOR = 2.5;
+const DESPESA_ANOMALA_VALOR_MINIMO_CENTAVOS = 5000; // R$ 50 — piso pra não alertar gasto pequeno
+const DESPESA_ANOMALA_AMOSTRA_MINIMA = 3; // categoria nova (menos que isso) nunca dispara
+const DESPESA_ANOMALA_BASELINE_LIMITE = 30; // teto de linhas buscadas pra calcular a média
 const TZ = "America/Sao_Paulo";
 
 const CALENDAR_BASE =
@@ -363,6 +371,166 @@ async function runPrepReuniao(
   }
 
   return { sent, scanned: events.length };
+}
+
+// ─── despesa fora do padrão ─────────────────────────────────────────────────
+
+interface DespesaRecente {
+  id: string;
+  valor_centavos: number;
+  data_despesa: string;
+  estabelecimento: string;
+  categoria: string;
+  frente: string | null;
+  created_at: string;
+}
+
+/**
+ * Despesa lançada muito acima da média da própria categoria+frente — "a Mia
+ * discordando ativamente, não só informando" (mockup aprovado 20/08/2026,
+ * card nº 2 da lista de proativos retomada). Compara SÓ dentro da mesma
+ * categoria+frente: categoria nova (menos de `DESPESA_ANOMALA_AMOSTRA_MINIMA`
+ * despesas anteriores) nunca dispara — primeira vez não é "fora do padrão", é
+ * "sem histórico ainda" pra comparar.
+ */
+async function runDespesaAnomala(
+  env: EnvFn,
+  tenantId: string,
+  dryRun = false,
+): Promise<{ sent: number; scanned: number; motivo?: string; card_kb?: number }> {
+  const sb = getSupabaseClient();
+  const desde = new Date(Date.now() - DESPESA_ANOMALA_SCAN_MIN * 60_000).toISOString();
+
+  const { data: recentesData } = await sb
+    .from("despesas")
+    .select("id, valor_centavos, data_despesa, estabelecimento, categoria, frente, created_at")
+    .eq("tenant_id", tenantId)
+    .not("categoria", "is", null)
+    .gte("created_at", desde)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const recentes = (recentesData ?? []) as DespesaRecente[];
+
+  const { barrasComparacao, CARD, caixaAcoes, cardShell, el, renderCardPngBase64 } = await import(
+    "../_shared/card.ts"
+  );
+
+  function montaCard(
+    d: DespesaRecente,
+    mediaCentavos: number,
+    amostra: number,
+    multiplicador: number,
+  ): ReturnType<typeof cardShell> {
+    const dataCurta = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "short" })
+      .format(new Date(`${d.data_despesa}T12:00:00`)).replace(".", "");
+    const rotuloMedia = d.frente ? `${d.categoria} · ${d.frente}` : d.categoria;
+    return cardShell(
+      "FORA DO PADRÃO",
+      d.estabelecimento,
+      dataCurta,
+      [
+        el(
+          "div",
+          { display: "flex", justifyContent: "space-between", marginBottom: 14 },
+          el(
+            "div",
+            { display: "flex", flexDirection: "column" },
+            el("div", { display: "flex", fontSize: 13, color: CARD.mut }, "REGISTRADO"),
+            el("div", { display: "flex", fontSize: 25, fontWeight: 700, color: CARD.crit, marginTop: 3 }, formatBRL(d.valor_centavos)),
+          ),
+          el(
+            "div",
+            { display: "flex", flexDirection: "column", alignItems: "flex-end" },
+            el("div", { display: "flex", fontSize: 13, color: CARD.mut }, `MÉDIA · ${rotuloMedia}`),
+            el("div", { display: "flex", fontSize: 22, fontWeight: 600, color: CARD.mut, marginTop: 3 }, formatBRL(mediaCentavos)),
+          ),
+        ),
+        barrasComparacao(
+          { rotulo: "Este gasto", valor: d.valor_centavos, texto: formatBRL(d.valor_centavos) },
+          { rotulo: `Média (${amostra})`, valor: mediaCentavos, texto: formatBRL(mediaCentavos) },
+        ),
+        el(
+          "div",
+          { display: "flex", fontSize: 16, fontWeight: 600, color: CARD.warn, marginTop: 4 },
+          `${multiplicador.toFixed(1)}x acima da média das últimas ${amostra} despesas dessa categoria`,
+        ),
+        caixaAcoes([
+          "Confere se o valor tá certo — não foi erro de leitura?",
+          "Se for legítimo, quer que eu registre uma nota pra não alertar de novo nessa faixa?",
+        ]),
+      ],
+      "sinal · despesas",
+    );
+  }
+
+  let sent = 0;
+  for (const d of recentes) {
+    if (!d.categoria) continue;
+
+    const { data: jaAvisado } = await sb
+      .from("avisos_enviados")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("tipo", "despesa_anomala")
+      .eq("chave", d.id)
+      .limit(1);
+    if (jaAvisado && jaAvisado.length > 0) continue;
+
+    let baselineQuery = sb
+      .from("despesas")
+      .select("valor_centavos")
+      .eq("tenant_id", tenantId)
+      .eq("categoria", d.categoria)
+      .neq("id", d.id)
+      .order("data_despesa", { ascending: false })
+      .limit(DESPESA_ANOMALA_BASELINE_LIMITE);
+    baselineQuery = d.frente ? baselineQuery.eq("frente", d.frente) : baselineQuery.is("frente", null);
+    const { data: baselineData } = await baselineQuery;
+    const baseline = (baselineData ?? []) as Array<{ valor_centavos: number }>;
+    if (baseline.length < DESPESA_ANOMALA_AMOSTRA_MINIMA) continue;
+    if (d.valor_centavos < DESPESA_ANOMALA_VALOR_MINIMO_CENTAVOS) continue;
+
+    const mediaCentavos = Math.round(baseline.reduce((s, b) => s + b.valor_centavos, 0) / baseline.length);
+    const multiplicador = d.valor_centavos / mediaCentavos;
+    if (multiplicador < DESPESA_ANOMALA_MULTIPLICADOR) continue;
+
+    const png = await renderCardPngBase64(montaCard(d, mediaCentavos, baseline.length, multiplicador));
+    const jid = ownerJid(env);
+    const rotuloFrente = d.frente ? ` (frente ${d.frente})` : "";
+    const dataFmt = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" })
+      .format(new Date(`${d.data_despesa}T12:00:00`));
+    const texto = `${d.estabelecimento}, ${formatBRL(d.valor_centavos)}, ${dataFmt}, categoria ${d.categoria}${rotuloFrente} — ` +
+      `${multiplicador.toFixed(1)}x acima da média (${formatBRL(mediaCentavos)}). Confere se tá certo?`;
+    await sendWhatsAppImage(jid, { base64: png, fileName: "despesa-anomala.png" }, { fetch, env });
+    await sendWhatsAppText(jid, texto, { fetch, env });
+    await appendAssistantMessage(jid, texto, tenantId);
+    await sb.from("avisos_enviados").insert({ tenant_id: tenantId, tipo: "despesa_anomala", chave: d.id });
+    sent++;
+  }
+
+  if (sent === 0 && dryRun) {
+    // Sem despesa real batendo o limiar agora — renderiza um exemplo só pra
+    // exercer o pipeline satori/resvg (mesmo motivo dos outros dry runs).
+    const exemplo: DespesaRecente = {
+      id: "exemplo",
+      valor_centavos: 85000,
+      data_despesa: diasAtras(0),
+      estabelecimento: "Posto Ipiranga — viagem SP",
+      categoria: "combustível",
+      frente: "resibag",
+      created_at: new Date().toISOString(),
+    };
+    const mediaExemplo = 18000;
+    const png = await renderCardPngBase64(montaCard(exemplo, mediaExemplo, 5, exemplo.valor_centavos / mediaExemplo));
+    return {
+      sent: 0,
+      scanned: recentes.length,
+      motivo: "dry run — card renderizado, nada enviado",
+      card_kb: Math.round(png.length * 0.75 / 1024),
+    };
+  }
+
+  return { sent, scanned: recentes.length };
 }
 
 // Alertas de prazo: tasks Beehave vencidas ou vencendo nas próximas 24h.
@@ -1392,6 +1560,8 @@ Deno.serve(async (req: Request) => {
     if (task === "reminders") return json({ ok: true, ...(await runReminders(env, tenant.id)) });
     if (task === "prep_reuniao") return json({ ok: true, ...(await runPrepReuniao(env, tenant.id, tenant.frentes)) });
     if (task === "prep_reuniao_dry") return json({ ok: true, ...(await runPrepReuniao(env, tenant.id, tenant.frentes, true)) });
+    if (task === "despesa_anomala") return json({ ok: true, ...(await runDespesaAnomala(env, tenant.id)) });
+    if (task === "despesa_anomala_dry") return json({ ok: true, ...(await runDespesaAnomala(env, tenant.id, true)) });
     if (task === "alerts") return json({ ok: true, ...(await runAlerts(env, tenant.id)) });
     if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant.id)) });
     if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
@@ -1408,7 +1578,7 @@ Deno.serve(async (req: Request) => {
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id, true)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     return json({
-      error: "task: reminders | prep_reuniao | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
+      error: "task: reminders | prep_reuniao | despesa_anomala | alerts | brief | weekly | scheduled | marketing | evening_recap | " +
         "agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
     }, 400);
   } catch (err) {
