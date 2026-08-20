@@ -36,15 +36,52 @@ function FeedbackModal({ onFechar }: { onFechar: () => void }) {
   const [estado, setEstado] = useState<Estado>("escrevendo");
   const [erro, setErro] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Onde o mousedown começou. Sem isso, selecionar texto dentro do modal e
+  // soltar o botão fora fecha a caixa e joga fora o relato já escrito — o
+  // clique conta como sendo no backdrop porque é lá que o mouseup terminou.
+  const inicioDoClique = useRef<EventTarget | null>(null);
+  // Enquanto envia, fechar não cancela nada (a requisição já saiu e a linha vai
+  // ser gravada). Prometer cancelamento que não existe é pior que não oferecer.
+  const enviando = estado === "enviando";
 
   useEffect(() => {
+    // Devolve o foco pra onde ele estava (o botão "Feedback") quando fechar —
+    // senão quem navega por teclado é jogado pro começo da página.
+    const gatilho = document.activeElement as HTMLElement | null;
     textareaRef.current?.focus();
+
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onFechar();
+      if (e.key === "Escape") {
+        if (enviando) return;
+        onFechar();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      // Prende o foco dentro da caixa: aria-modal sozinho não impede tabular
+      // pro conteúdo atrás, que continua clicável e confunde leitor de tela.
+      const foco = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), textarea, [href], input, select, [tabindex]:not([tabindex="-1"])',
+      );
+      if (!foco || foco.length === 0) return;
+      const primeiro = foco[0];
+      const ultimo = foco[foco.length - 1];
+      if (e.shiftKey && document.activeElement === primeiro) {
+        e.preventDefault();
+        ultimo.focus();
+      } else if (!e.shiftKey && document.activeElement === ultimo) {
+        e.preventDefault();
+        primeiro.focus();
+      }
     }
+
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onFechar]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      gatilho?.focus?.();
+    };
+  }, [onFechar, enviando]);
 
   async function enviar() {
     if (!texto.trim() || estado === "enviando") return;
@@ -78,13 +115,19 @@ function FeedbackModal({ onFechar }: { onFechar: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-aurora-fg/25 px-6 backdrop-blur-[2px]"
-      onClick={onFechar}
+      onMouseDown={(e) => { inicioDoClique.current = e.target; }}
+      onClick={(e) => {
+        // Só fecha quando o clique COMEÇOU e TERMINOU no fundo. Arrastar de
+        // dentro pra fora (seleção de texto) não conta.
+        if (enviando) return;
+        if (e.target === e.currentTarget && inicioDoClique.current === e.currentTarget) onFechar();
+      }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Enviar feedback"
-        onClick={(e) => e.stopPropagation()}
         className="w-full max-w-[420px] overflow-hidden rounded-[14px] border border-aurora-line bg-aurora-surface shadow-[0_20px_50px_rgba(15,23,42,0.12)]"
       >
         {estado === "enviado" ? (
@@ -160,14 +203,15 @@ function FeedbackModal({ onFechar }: { onFechar: () => void }) {
                 <button
                   type="button"
                   onClick={onFechar}
-                  className="rounded-[9px] border border-aurora-line px-[18px] py-2.5 text-[13px] font-semibold text-aurora-muted-2 transition hover:text-aurora-fg"
+                  disabled={enviando}
+                  className="rounded-[9px] border border-aurora-line px-[18px] py-2.5 text-[13px] font-semibold text-aurora-muted-2 transition hover:text-aurora-fg disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="button"
                   onClick={enviar}
-                  disabled={!texto.trim() || estado === "enviando"}
+                  disabled={!texto.trim() || enviando}
                   className="aurora-glow-btn rounded-[9px] bg-aurora-accent px-[18px] py-2.5 text-[13px] font-semibold text-aurora-accent-ink transition active:scale-[0.98] disabled:opacity-50"
                 >
                   {estado === "enviando" ? "Enviando…" : "Enviar"}

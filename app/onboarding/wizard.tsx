@@ -4,7 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 import { PRESETS, type Personalidade } from "@/lib/personalidade";
-import { siteOrigin } from "@/lib/site-url";
+import { garanteOrigemCanonica } from "@/lib/site-url";
 import { AppHeader } from "@/components/AppHeader";
 
 type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo";
@@ -282,10 +282,15 @@ export default function OnboardingWizard(props: {
   // callback grava no Vault. Reautenticar entrega isso; vincular de novo, não.
   async function handleConnectProvider(provider: OAuthProviderId) {
     setConnectingProvider(provider);
+    // Mesmo motivo do /login: o cookie do code verifier do PKCE é host-only, e
+    // precisa nascer no mesmo host que vai receber o `code` de volta. Ver
+    // lib/site-url.ts.
+    if (garanteOrigemCanonica("/onboarding")) return;
+
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
     const opcoes = {
-      redirectTo: `${siteOrigin()}/auth/callback?provider=${provider}&intent=link`,
+      redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
       scopes: cfg.scopes,
       queryParams: cfg.queryParams,
     };

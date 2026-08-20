@@ -1583,9 +1583,22 @@ async function runAtrasadasCheck(env: EnvFn, tenantId: string, dryRun = false): 
 // como conteúdo hostil vale tanto quanto tratar e-mail de terceiro como tal.
 // Sem isso, "nome" vira o lugar onde alguém tenta forjar uma linha de sistema
 // dentro da notificação que o dono lê pra decidir se aprova.
+//
+// `[\r\n]` sozinho NÃO basta: U+2028 (line separator), U+2029 (paragraph
+// separator), U+000B, U+000C e U+0085 também quebram linha em praticamente todo
+// renderizador, inclusive no WhatsApp — dá pra forjar uma linha de sistema
+// inteira sem usar \n. E controles bidi (U+202A-U+202E, U+2066-U+2069) e
+// caracteres de largura zero (U+200B-U+200D, U+FEFF) permitem inverter a ordem
+// visível do texto ou esconder pedaço dele. Nenhum dos dois grupos tem uso
+// legítimo aqui.
+const QUEBRA_DE_LINHA = /[\r\n\u000B\u000C\u0085\u2028\u2029]+/g;
+// C0/C1 de controle, largura zero e controles bidi (LRE..RLO, LRI..PDI).
+const CONTROLE_INVISIVEL = /[\u0000-\u0008\u000E-\u001F\u007F-\u0084\u0086-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
 function linhaSegura(texto: string, max = 80): string {
   return texto
-    .replace(/[\r\n]+/g, " ")
+    .replace(QUEBRA_DE_LINHA, " ")
+    .replace(CONTROLE_INVISIVEL, "")
     .replace(/[*_~`]/g, "")
     .trim()
     .slice(0, max);
@@ -1713,20 +1726,36 @@ async function runFeedbackNovo(env: EnvFn): Promise<{ avisados: number }> {
   }>;
   if (pendentes.length === 0) return { avisados: 0 };
 
-  // Nome de quem reportou, pra você saber de quem veio sem ter que consultar o
-  // banco. Uma consulta só pros tenants envolvidos, não uma por linha.
+  // Nome de quem reportou + estado da conta. Uma consulta só pros tenants
+  // envolvidos, não uma por linha.
+  //
+  // SEGUNDA BARREIRA (a primeira é a rota/tool que grava): relato de conta
+  // RECUSADA ou DESATIVADA não vira mensagem. Sem isto, recusar alguém em
+  // /admin não fechava este caminho — a linha continuava sendo entregue no
+  // WhatsApp do dono, que é o número COMPARTILHADO da plataforma; abuso ali
+  // arrisca o bloqueio do número e derruba o canal de todos os tenants.
+  // Pendente de aprovação CONTINUA passando de propósito: "travei no
+  // onboarding" é exatamente o relato mais valioso que existe.
   const nomePorTenant = new Map<string, string>();
+  const bloqueados = new Set<string>();
   const { data: tenantsData } = await sb
     .from("tenants")
-    .select("id, nome")
+    .select("id, nome, recusado_em, active")
     .in("id", [...new Set(pendentes.map((p) => p.tenant_id))]);
-  for (const t of (tenantsData ?? []) as Array<{ id: string; nome: string | null }>) {
+  for (const t of (tenantsData ?? []) as Array<{ id: string; nome: string | null; recusado_em: string | null; active: boolean | null }>) {
     if (t.nome?.trim()) nomePorTenant.set(t.id, t.nome);
+    if (t.recusado_em || t.active === false) bloqueados.add(t.id);
   }
 
   const jid = ownerJid(env);
   let avisados = 0;
   for (const f of pendentes) {
+    if (bloqueados.has(f.tenant_id)) {
+      // Marca como avisado pra não ficar sendo relido em toda varredura. O
+      // relato continua na tabela — só não vira mensagem.
+      await sb.from("feedback").update({ avisado_em: new Date().toISOString() }).eq("id", f.id);
+      continue;
+    }
     const { data: reivindicado, error: claimErr } = await sb
       .from("feedback")
       .update({ avisado_em: new Date().toISOString() })
@@ -1754,10 +1783,22 @@ async function runFeedbackNovo(env: EnvFn): Promise<{ avisados: number }> {
       await sendWhatsAppText(jid, linhas.join("\n"), { fetch, env });
       avisados++;
     } catch (err) {
+      console.error(`[cron] aviso de feedback ${f.id} falhou: ${semDadoPessoal(err)}`);
       // Envio falhou depois de reivindicado: libera de novo pra próxima
       // varredura tentar, em vez de perder o relato em silêncio pra sempre.
-      await sb.from("feedback").update({ avisado_em: null }).eq("id", f.id);
-      console.error(`[cron] aviso de feedback ${f.id} falhou: ${semDadoPessoal(err)}`);
+      // Se ESTE update também falhar, o relato fica marcado como avisado sem
+      // nunca ter sido entregue — some pra sempre e ninguém fica sabendo. Por
+      // isso o erro do rollback é gritado, não engolido.
+      const { error: rollbackErr } = await sb
+        .from("feedback")
+        .update({ avisado_em: null })
+        .eq("id", f.id);
+      if (rollbackErr) {
+        console.error(
+          `[cron] FEEDBACK ${f.id} PERDIDO: envio falhou e o rollback do claim também — ` +
+            `a linha segue marcada como avisada sem ter sido entregue: ${semDadoPessoal(rollbackErr.message)}`,
+        );
+      }
     }
   }
   return { avisados };

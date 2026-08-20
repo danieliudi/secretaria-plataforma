@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
-import { siteOrigin } from "@/lib/site-url";
+import { garanteOrigemCanonica } from "@/lib/site-url";
 
 const providers = enabledOAuthProviders();
 
@@ -81,9 +81,15 @@ export default function LoginPage({
 
   async function handleLogin(provider: OAuthProviderId) {
     setLoadingProvider(provider);
+    // Host errado (permalink de deploy da Netlify, por exemplo): move o
+    // navegador pro host canônico ANTES de começar o fluxo, senão o cookie do
+    // code verifier do PKCE nasce aqui e o `code` volta lá — ver lib/site-url.ts.
+    // A navegação já começou; sair daqui sem tocar em mais nada.
+    if (garanteOrigemCanonica("/login")) return;
+
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
-    const redirectTo = `${siteOrigin()}/auth/callback?provider=${provider}&intent=login`;
+    const redirectTo = `${window.location.origin}/auth/callback?provider=${provider}&intent=login`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
