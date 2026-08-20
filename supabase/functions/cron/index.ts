@@ -1677,6 +1677,92 @@ async function runNovosCadastros(env: EnvFn): Promise<{ avisados: number }> {
   return { avisados };
 }
 
+// ─── feedback do usuário (bug reportado / melhoria sugerida) ────────────────
+//
+// Entram por dois caminhos (tool reportar_feedback no /fast, e o formulário do
+// site) e os dois só GRAVAM a linha — o aviso sai daqui porque quem grava roda
+// no env do tenant que reportou, que não tem a credencial de WhatsApp do dono
+// da plataforma, e não deve ter.
+//
+// Mesmo padrão de runNovosCadastros: reivindica a linha com UPDATE condicional
+// ANTES de enviar, pra duas execuções concorrentes (o site dispara na hora, o
+// pg_cron varre de tempos em tempos) não mandarem o mesmo relato duas vezes.
+const FEEDBACK_MAX_POR_EXECUCAO = 20;
+
+const FEEDBACK_ROTULO: Record<string, string> = {
+  bug: "🐞 *Problema reportado*",
+  sugestao: "💡 *Sugestão*",
+};
+
+async function runFeedbackNovo(env: EnvFn): Promise<{ avisados: number }> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("feedback")
+    .select("id, tenant_id, tipo, canal, texto")
+    .is("avisado_em", null)
+    .order("criado_em", { ascending: true })
+    .limit(FEEDBACK_MAX_POR_EXECUCAO);
+  if (error) throw new Error(`varredura de feedback falhou: ${error.message}`);
+
+  const pendentes = (data ?? []) as Array<{
+    id: string;
+    tenant_id: string;
+    tipo: string;
+    canal: string;
+    texto: string;
+  }>;
+  if (pendentes.length === 0) return { avisados: 0 };
+
+  // Nome de quem reportou, pra você saber de quem veio sem ter que consultar o
+  // banco. Uma consulta só pros tenants envolvidos, não uma por linha.
+  const nomePorTenant = new Map<string, string>();
+  const { data: tenantsData } = await sb
+    .from("tenants")
+    .select("id, nome")
+    .in("id", [...new Set(pendentes.map((p) => p.tenant_id))]);
+  for (const t of (tenantsData ?? []) as Array<{ id: string; nome: string | null }>) {
+    if (t.nome?.trim()) nomePorTenant.set(t.id, t.nome);
+  }
+
+  const jid = ownerJid(env);
+  let avisados = 0;
+  for (const f of pendentes) {
+    const { data: reivindicado, error: claimErr } = await sb
+      .from("feedback")
+      .update({ avisado_em: new Date().toISOString() })
+      .eq("id", f.id)
+      .is("avisado_em", null)
+      .select("id")
+      .maybeSingle();
+    if (claimErr) {
+      console.error(`[cron] feedback ${f.id} não reivindicado: ${semDadoPessoal(claimErr.message)}`);
+      continue;
+    }
+    if (!reivindicado) continue; // outra execução já pegou esta linha
+
+    // linhaSegura corta e neutraliza — o texto é entrada não confiável do
+    // usuário e vai pro WhatsApp do dono da plataforma.
+    const quem = linhaSegura(nomePorTenant.get(f.tenant_id) ?? "(sem nome)", 80);
+    const linhas = [
+      FEEDBACK_ROTULO[f.tipo] ?? "*Feedback*",
+      "",
+      `De ${quem} · ${f.canal}`,
+      "",
+      linhaSegura(f.texto, 2000),
+    ];
+    try {
+      await sendWhatsAppText(jid, linhas.join("\n"), { fetch, env });
+      avisados++;
+    } catch (err) {
+      // Envio falhou depois de reivindicado: libera de novo pra próxima
+      // varredura tentar, em vez de perder o relato em silêncio pra sempre.
+      await sb.from("feedback").update({ avisado_em: null }).eq("id", f.id);
+      console.error(`[cron] aviso de feedback ${f.id} falhou: ${semDadoPessoal(err)}`);
+    }
+  }
+  return { avisados };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json("Method Not Allowed", 405);
 
@@ -1724,9 +1810,11 @@ Deno.serve(async (req: Request) => {
     if (task === "atrasadas_check") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id)) });
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant.id, true)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
+    if (task === "feedback_novo") return json({ ok: true, ...(await runFeedbackNovo(env)) });
     return json({
       error: "task: reminders | prep_reuniao | despesa_anomala | relacionamento_esfriando | alerts | brief | weekly | " +
-        "scheduled | marketing | evening_recap | agenda_check | conflito_check | semana_check | atrasadas_check | novos_cadastros",
+        "scheduled | marketing | evening_recap | agenda_check | conflito_check | semana_check | atrasadas_check | " +
+        "novos_cadastros | feedback_novo",
     }, 400);
   } catch (err) {
     console.error(`[cron] task='${task}' erro:`, semDadoPessoal(err));

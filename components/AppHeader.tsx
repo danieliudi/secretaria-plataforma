@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { FeedbackButton } from "@/components/FeedbackButton";
 
 // Cabeçalho compartilhado por /app e /admin — mesma marca, mesmo trocador de
 // papel. Só quem é `is_platform_owner` vê a aba Administração; pra todo mundo
@@ -52,7 +53,10 @@ export function AppHeader({
         </nav>
       )}
 
-      <span className="ml-auto text-[12.5px] font-semibold text-aurora-muted-2">{userLabel}</span>
+      <div className="ml-auto flex items-center gap-4">
+        <FeedbackButton />
+        <span className="text-[12.5px] font-semibold text-aurora-muted-2">{userLabel}</span>
+      </div>
     </header>
   );
 }

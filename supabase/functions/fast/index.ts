@@ -139,6 +139,11 @@ import {
   type IgnorarRelacionamentoInput,
   type IgnorarRelacionamentoResult,
 } from "./tools/relacionamento.ts";
+import {
+  reportarFeedback as defaultReportarFeedback,
+  type ReportarFeedbackInput,
+  type ReportarFeedbackResult,
+} from "./tools/feedback.ts";
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
@@ -774,6 +779,26 @@ const TOOLS = [
       required: ["email"],
     },
   },
+  {
+    name: "reportar_feedback",
+    description:
+      "Registra um problema que o chefe encontrou na Mia, ou uma melhoria que ele sugeriu, pra equipe que constrói a plataforma ver. Use quando ele reclamar de algo que a Mia fez errado (resposta errada, lentidão, mensagem que não chegou, tool que falhou) ou disser que gostaria que ela fizesse algo que ela não faz. NÃO use pra pedido normal de trabalho ('marca reunião', 'me lembra de X') — isso são as outras tools. Confirme com ele antes de chamar.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tipo: {
+          type: "string",
+          enum: ["bug", "sugestao"],
+          description: "'bug' quando algo funcionou errado; 'sugestao' quando é algo que ele gostaria que existisse.",
+        },
+        texto: {
+          type: "string",
+          description: "O relato, com as palavras dele — o que aconteceu, ou o que ele gostaria. Inclua o detalhe concreto que ele deu (o que tentou fazer, quantas vezes aconteceu).",
+        },
+      },
+      required: ["tipo", "texto"],
+    },
+  },
 ];
 
 // ─── System prompt builder ───────────────────────────────────────────────────
@@ -811,6 +836,13 @@ RELAÇÃO ESFRIANDO (parar de rastrear alguém)
 - 1 tool: ignorar_relacionamento(email, nome?). Use quando o chefe pedir pra parar de ser avisado sobre "sumiu da agenda"/"esfriando" com uma pessoa específica — geralmente porque é família, cônjuge, amigo, ou qualquer relação que não é profissional.
 - O e-mail SEMPRE vem de uma mensagem sua anterior nesta conversa (o card "ESFRIANDO" e o resumo em texto sempre mostram o e-mail) — nunca invente ou adivinhe o e-mail só pelo nome/apelido que ele usou. Se não tiver o e-mail visível na conversa, pergunte a pessoa de quem ele está falando antes de chamar a tool.
 - Depois de chamar, confirme em uma bolha curta (ex: "Combinado, não vou mais te lembrar de reunião com ela 👍") — sem repetir o e-mail de volta.
+
+REPORTAR PROBLEMA / SUGERIR MELHORIA (feedback sobre a própria Mia)
+- 1 tool: reportar_feedback(tipo, texto). Use quando o chefe reclamar de algo que VOCÊ fez errado (resposta errada, demora, mensagem que não chegou, tool que falhou) ou disser que gostaria que você fizesse algo que você não faz.
+- Distingue do resto: isto é feedback sobre a PLATAFORMA, não um pedido de trabalho. "marca reunião amanhã" é create_event; "você marcou no dia errado de novo" é reportar_feedback(tipo='bug').
+- CONFIRME ANTES de chamar, em uma bolha curta: "Quer que eu registre isso como um problema pro time dar uma olhada?". Só chame depois do sim dele. Reclamação no meio de uma conversa nem sempre é pedido de abrir chamado.
+- Não prometa prazo nem correção ("vou consertar", "amanhã tá resolvido") — você não controla isso. Depois de registrar, agradeça e siga: "Registrado, obrigada por avisar 🙏".
+- Não invente detalhe técnico que ele não deu. O 'texto' são as palavras dele, mais o contexto concreto que ele mencionou.
 
 LEMBRETES AGENDADOS (proativo no horário marcado)
 - 1 tool: schedule_reminder(fire_at, text, recurrence?, confirm_duplicate?). Use quando o chefe pedir "me lembra X amanhã às 14h", "me cutuca em 1h pra Y", "me avisa antes de Z começar", "todo mês/toda semana/todo dia me lembra de W".
@@ -997,6 +1029,9 @@ export interface FastWithToolsDeps {
     ) => Promise<MontarLinkResult>;
     consultarImportacao: (input: ConsultarImportacaoInput) => Promise<ConsultarImportacaoResult>;
     ignorarRelacionamento: (input: IgnorarRelacionamentoInput) => Promise<IgnorarRelacionamentoResult>;
+    /** `userId` chega na chamada (igual registrarDespesa): as deps pertencem ao
+     *  tenant, o user_id só diz por qual canal o relato entrou. */
+    reportarFeedback: (input: ReportarFeedbackInput, userId?: string) => Promise<ReportarFeedbackResult>;
   };
   /** Memória de conversa (2E). Default usa a tabela conversation_history. */
   loadHistory: (userId: string) => Promise<ConversationMessage[]>;
@@ -1164,6 +1199,14 @@ export function defaultFastWithToolsDeps(
           );
         }
         return defaultIgnorarRelacionamento(tenantId, input);
+      },
+      reportarFeedback: (input, userId) => {
+        if (!tenantId) {
+          throw new Error(
+            "não foi possível identificar de quem é esta conversa pra registrar o relato",
+          );
+        }
+        return defaultReportarFeedback(tenantId, userId, input);
       },
     },
     loadHistory: (userId) => loadConversationHistory(userId),
@@ -1414,6 +1457,13 @@ async function executeTool(
         email: String(input.email),
         nome: input.nome ? String(input.nome) : undefined,
       });
+      return result;
+    }
+    if (name === "reportar_feedback") {
+      const result = await deps.tools.reportarFeedback({
+        tipo: String(input.tipo ?? ""),
+        texto: String(input.texto ?? ""),
+      }, userId);
       return result;
     }
     return { error: `Unknown tool: ${name}` };
