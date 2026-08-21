@@ -27,6 +27,7 @@ import type {
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
+import { frentesDoEnv } from "../tenant.ts";
 
 const TRELLO_BASE = "https://api.trello.com/1";
 
@@ -279,8 +280,6 @@ export async function listAllOpenTasksWithDue(
 
 // ─── System prompt block builder ─────────────────────────────────────────────
 
-const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
-
 /**
  * Gera o bloco do system prompt do Sonnet com base no map carregado.
  * - Sem map ou vazio: bloco curto "não configurado".
@@ -288,10 +287,10 @@ const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "
  *   pra Sonnet saber o que dizer quando Daniel pedir tasks de uma frente
  *   que não tem Trello.
  */
-export function buildTrelloSystemBlock(map: TrelloListMap | null): string {
+export function buildTrelloSystemBlock(map: TrelloListMap | null, frentes: string[] = []): string {
   if (!map || Object.keys(map).length === 0) {
     return `ACESSO AO TRELLO (tarefas)
-- Não configurado. Se Daniel pedir tasks (listar ou criar), diga que Trello ainda não está integrado.`;
+- Não configurado. Se pedirem tasks (listar ou criar), diga que Trello ainda não está integrado.`;
   }
 
   const frentesList = Object.entries(map)
@@ -302,11 +301,11 @@ export function buildTrelloSystemBlock(map: TrelloListMap | null): string {
     .join("\n");
 
   const knownFrentes = Object.keys(map).map((f) => f.toLowerCase());
-  const missingFrentes = ALL_FRENTES.filter((f) => !knownFrentes.includes(f));
+  const missingFrentes = frentes.filter((f) => !knownFrentes.includes(f));
 
   const missingNote = missingFrentes.length === 0
     ? ""
-    : `\n- Frentes SEM Trello configurado: ${missingFrentes.join(", ")}. Se Daniel pedir tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
+    : `\n- Frentes SEM Trello configurado: ${missingFrentes.join(", ")}. Se pedirem tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
 
   return `ACESSO AO TRELLO (tarefas)
 - 3 tools: list_tasks(frente, list?, limit?), create_task(frente, list, title, ...), complete_task(frente, query, list?).
@@ -345,7 +344,7 @@ export function createTrelloProvider(env?: (key: string) => string | undefined):
 
     buildSystemBlock: (): string => {
       const map = tryLoadTrelloMap(deps.env);
-      return buildTrelloSystemBlock(map);
+      return buildTrelloSystemBlock(map, frentesDoEnv(deps.env));
     },
   };
 }

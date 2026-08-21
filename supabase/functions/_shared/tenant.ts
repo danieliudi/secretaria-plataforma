@@ -189,6 +189,18 @@ export function jidFromE164(e164: string): string {
   return `${e164.replace(/\D/g, "")}@s.whatsapp.net`;
 }
 
+/** Lê `TENANT_FRENTES` do env (setado por buildTenantEnv) — lista vazia se ausente/inválido, nunca lança. */
+export function frentesDoEnv(env: (key: string) => string | undefined): string[] {
+  try {
+    const raw = env("TENANT_FRENTES");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((f): f is string => typeof f === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 // `aprovado_em` NÃO é filtro cosmético: sem ele, qualquer pessoa que
 // descobrisse a URL do site criava conta, vinculava o número e passava a
 // consumir API paga no número compartilhado da plataforma. Enquanto não há
@@ -536,6 +548,11 @@ export async function buildTenantEnv(
     ]);
 
   const overrides = new Map<string, string>();
+  // Frentes REAIS do tenant — nunca uma lista fixa. Achado da auditoria de
+  // "prompt mestre" (21/08/2026): 6 módulos (providers de tarefas + GA4)
+  // tinham a lista de frentes do Daniel hardcoded, usada pra montar o bloco
+  // "frentes sem X configurado" do system prompt de QUALQUER tenant.
+  overrides.set("TENANT_FRENTES", JSON.stringify(tenant.frentes ?? []));
   if (tenant.google_client_id) overrides.set("GOOGLE_CLIENT_ID", tenant.google_client_id);
   if (googleClientSecret) overrides.set("GOOGLE_CLIENT_SECRET", googleClientSecret);
   if (googleRefreshToken) overrides.set("GOOGLE_REFRESH_TOKEN", googleRefreshToken);

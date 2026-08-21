@@ -18,11 +18,29 @@ export const REFLEX_REGEX: RegExp[] = [
 
 export const CONFIDENCE_THRESHOLD = 0.7;
 
-export const CLASSIFIER_PROMPT = `Você é o roteador de um sistema agentic pessoal. Classifique a mensagem.
+/**
+ * Monta o enum de `frente` do prompt A PARTIR do tenant — nunca uma lista
+ * fixa. Até 20/08/2026 essa lista era hardcoded com as frentes do Daniel
+ * (achado da auditoria de "prompt mestre"): qualquer tenant com frentes
+ * diferentes das dele caía sempre em "ambiguo", porque a frente real dele
+ * nunca existia no enum.
+ *
+ * "pessoal" sempre entra, mesmo se o tenant não cadastrou essa frente — é o
+ * balde universal pra assunto que não é de negócio nenhum específico. Pro
+ * Daniel isso é zero regressão: "pessoal" já é uma das frentes dele, então o
+ * enum final fica byte a byte igual ao de antes.
+ */
+function frenteEnum(frentes: string[]): string {
+  const opcoes = [...new Set([...frentes, "pessoal"])];
+  return [...opcoes.map((f) => `"${f}"`), '"ambiguo"'].join("|");
+}
+
+function buildClassifierPrompt(input: string, frentes: string[]): string {
+  return `Você é o roteador de um sistema agentic pessoal. Classifique a mensagem.
 Responda APENAS com JSON, sem texto adicional.
 CAMPOS:
 - tier: "reflex"|"fast"|"deep"
-- frente: "resibag"|"sanwey"|"athleisure"|"bootcamp"|"pessoal"|"side_ai"|"ambiguo"
+- frente: ${frenteEnum(frentes)}
 - domain: "agenda"|"inbox"|"tarefas"|"saude"|"conteudo"|"proposta"|"analise"|"outro"
 - action_required: boolean
 - irreversible: boolean
@@ -32,7 +50,8 @@ REGRAS DE TIER:
 - fast: resolve numa passada. Resposta ou ação simples.
 - deep: conteúdo externo, análise multi-fonte, output sustenta decisão de board/cliente.
 REGRA DE FRENTE: não explícita e não inferrível → "ambiguo". Nunca chute.
-MENSAGEM: {{input}}`;
+MENSAGEM: ${input}`;
+}
 
 export function checkRegexReflex(input: string): boolean { return REFLEX_REGEX.some((p) => p.test(input.trim())); }
 
@@ -48,22 +67,25 @@ export function applyRules(decision: Decision): RouterResult {
   return { route: decision.tier, decision };
 }
 
-export async function classifyWithHaiku(input: string): Promise<Decision> {
+/**
+ * `frentes` vem do tenant (`tenant.frentes`) — quem chama já resolveu o
+ * tenant antes de classificar (ver reflex/index.ts). Lista vazia é um tenant
+ * válido que ainda não configurou frente nenhuma, não um erro.
+ */
+export async function classifyWithHaiku(input: string, frentes: string[]): Promise<Decision> {
   const client = getAnthropicClient();
-  const prompt = CLASSIFIER_PROMPT.replace("{{input}}", input);
+  const prompt = buildClassifierPrompt(input, frentes);
   const response = await client.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 256, messages: [{ role: "user", content: prompt }] });
-  // Sem tenant: o classificador roda ANTES de saber de quem é a mensagem.
-  // A linha fica órfã de propósito — o gasto existe e tem que aparecer no total.
   await registraUso("claude-haiku-4-5-20251001", "classificador", response.usage);
   const raw = (response.content[0] as { type: "text"; text: string }).text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   return JSON.parse(raw) as Decision;
 }
 
-export async function route(input: string): Promise<RouterResult> {
+export async function route(input: string, frentes: string[]): Promise<RouterResult> {
   if (checkRegexReflex(input)) {
     const decision: Decision = { tier: "reflex", frente: "pessoal", domain: "saude", action_required: true, irreversible: false, confidence: 1.0 };
     return { route: "reflex", decision };
   }
-  const decision = await classifyWithHaiku(input);
+  const decision = await classifyWithHaiku(input, frentes);
   return applyRules(decision);
 }

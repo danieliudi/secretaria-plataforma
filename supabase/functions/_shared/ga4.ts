@@ -9,6 +9,7 @@
 // Property ID está em GA4 → Admin → Configurações da propriedade.
 
 import { getGoogleAccessToken } from "./google-oauth.ts";
+import { frentesDoEnv } from "./tenant.ts";
 
 const GA4_BASE = "https://analyticsdata.googleapis.com/v1beta";
 
@@ -195,19 +196,17 @@ export async function getGa4Snapshot(
 
 // ─── System prompt block ───────────────────────────────────────────────────────
 
-const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
-
-export function buildGa4SystemBlock(map: Ga4PropertyMap | null): string {
+export function buildGa4SystemBlock(map: Ga4PropertyMap | null, env: (k: string) => string | undefined): string {
   if (!map || Object.keys(map).length === 0) {
     return `ACESSO AO GA4 (analytics de site)
-- Não configurado. Se Daniel pedir métricas de site/tráfego, diga que o Google Analytics ainda não está integrado.`;
+- Não configurado. Se pedirem métricas de site/tráfego, diga que o Google Analytics ainda não está integrado.`;
   }
   const frentes = Object.keys(map).join(", ");
   const known = Object.keys(map).map((f) => f.toLowerCase());
-  const missing = ALL_FRENTES.filter((f) => !known.includes(f));
+  const missing = frentesDoEnv(env).filter((f) => !known.includes(f));
   const missingNote = missing.length === 0
     ? ""
-    : `\n- Frentes SEM GA4: ${missing.join(", ")}. Se Daniel pedir métricas de uma dessas, diga que não está integrada.`;
+    : `\n- Frentes SEM GA4: ${missing.join(", ")}. Se pedirem métricas de uma dessas, diga que não está integrada.`;
   return `ACESSO AO GA4 (analytics de site)
 - 1 tool: get_ga4_metrics(frente, days?). Retorna sessões, usuários ativos, conversões (se disponível), variação vs período anterior e top canais.
 - Frentes com GA4: ${frentes}.
