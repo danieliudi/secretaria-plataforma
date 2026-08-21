@@ -953,7 +953,10 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
       const quando = overdue ? `venceu ${fmtDateTime(t.dueMs)}` : `vence ${fmtDateTime(t.dueMs)}`;
       const icon = overdue ? "🔴" : "🟡";
       const label = t.list ? `${t.frente}/${t.list}` : t.frente;
-      const text = `${icon} Prazo Beehave — ${label}: "${t.name}" ${quando}`;
+      // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
+      // que hoje já roda multi-tenant — `label` já carrega a frente/lista
+      // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
+      const text = `${icon} Prazo — ${label}: "${t.name}" ${quando}`;
       await enviarTextoTenant(entrega, text, tenant.id);
     } catch (err) {
       await desfazAlerta(tenant.id, t.id, t.dueMs);
