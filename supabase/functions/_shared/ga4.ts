@@ -68,6 +68,13 @@ interface RunReportResponse {
   }>;
 }
 
+/** Erro da Data API com o status HTTP preservado, pra distinguir "métrica incompatível" (400) de auth/permissão/quota. */
+export class Ga4ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function runReport(
   property: string,
   body: Record<string, unknown>,
@@ -83,7 +90,7 @@ async function runReport(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`GA4 runReport ${res.status}: ${(await res.text()).slice(0, 250)}`);
+    throw new Ga4ApiError(res.status, `GA4 runReport ${res.status}: ${(await res.text()).slice(0, 250)}`);
   }
   return (await res.json()) as RunReportResponse;
 }
@@ -111,7 +118,13 @@ async function totalsReport(
       activeUsers: Number(v[1]?.value ?? 0),
       conversions: Number(v[2]?.value ?? 0),
     };
-  } catch (_e) {
+  } catch (e) {
+    // Só refaz sem "conversions" quando o erro é mesmo de métrica incompatível
+    // (400). Auth/permissão/quota (401/403/429/5xx) tem que estourar de
+    // verdade — senão o segundo runReport tenta de novo com as MESMAS
+    // credenciais e falha igual, e o retorno acaba fingindo "sem conversões"
+    // (conversions: null) em vez de reportar o erro real.
+    if (!(e instanceof Ga4ApiError) || e.status !== 400) throw e;
     const r = await runReport(property, {
       ...base,
       metrics: [{ name: "sessions" }, { name: "activeUsers" }],

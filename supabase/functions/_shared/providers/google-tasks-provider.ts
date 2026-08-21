@@ -153,12 +153,27 @@ interface GTaskListResponse {
   items?: GTaskItem[];
 }
 
+// Google Tasks normaliza `due` pra meia-noite UTC do dia escolhido (só a parte
+// de DATA é honrada pela API, nunca hora). Comparar esse valor cru como epoch
+// (`new Date(due).getTime() < Date.now()`, como faz o cron em runAlerts/
+// what-now) marca a task como vencida às 21h da véspera no horário de
+// Brasília — antes do dia realmente acabar pro tenant. Reinterpreta como fim
+// do dia (23:59:59.999) em America/Sao_Paulo pra alinhar com o calendário do
+// tenant, não o de UTC.
+const TZ_OFFSET_SAO_PAULO_MIN = 180; // UTC-3 fixo (Brasil aboliu o horário de verão em 2019)
+
+function fimDoDiaSaoPaulo(dueUtcMeiaNoite: string): string {
+  const [y, m, d] = dueUtcMeiaNoite.slice(0, 10).split("-").map(Number);
+  const fimDoDiaUtcMs = Date.UTC(y, m - 1, d, 23, 59, 59, 999) + TZ_OFFSET_SAO_PAULO_MIN * 60_000;
+  return new Date(fimDoDiaUtcMs).toISOString();
+}
+
 function mapTask(t: GTaskItem): GoogleTaskItem {
   return {
     id: t.id,
     name: t.title,
     status: t.status ?? "needsAction",
-    due_date: t.due ?? null,
+    due_date: t.due ? fimDoDiaSaoPaulo(t.due) : null,
     // Google Tasks API não expõe uma URL web addressable pra uma task
     // específica (diferente do ClickUp, que retorna `url` por task) — não
     // há como linkar direto pra uma task individual, então fica vazio.
