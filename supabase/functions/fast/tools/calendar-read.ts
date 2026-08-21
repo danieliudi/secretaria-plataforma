@@ -1,5 +1,6 @@
 // Google Calendar — leitura de eventos. Chamada direta na API v3, fetch nativo.
-// Token é trocado por chamada (sem cache, sub-objetivo futuro).
+// Token vem de getGoogleAccessToken(), que já cacheia em memória (ver
+// _shared/google-oauth.ts).
 //
 // API ref: https://developers.google.com/calendar/api/v3/reference/events/list
 
@@ -87,6 +88,7 @@ interface GCalEvent {
 
 interface GCalListResponse {
   items?: GCalEvent[];
+  nextPageToken?: string;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -148,20 +150,35 @@ async function listEvents(
   deps: CalendarReadDeps,
 ): Promise<CalendarEvent[]> {
   const token = await deps.getAccessToken();
-  const url = new URL(CALENDAR_BASE);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const eventos: CalendarEvent[] = [];
+  let pageToken: string | undefined;
 
-  const res = await deps.fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  do {
+    const url = new URL(CALENDAR_BASE);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Calendar list failed: ${res.status} ${body}`);
-  }
+    const res = await deps.fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-  const data = (await res.json()) as GCalListResponse;
-  return (data.items ?? []).map(mapEvent);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Calendar list failed: ${res.status} ${body}`);
+    }
+
+    const data = (await res.json()) as GCalListResponse;
+    eventos.push(...(data.items ?? []).map(mapEvent));
+
+    // `maxResults` explícito (getNextEvents) significa "só quero N no total"
+    // — não seguir paginação nesse caso, uma página já basta. Sem
+    // `maxResults` (getEventsBetween/getEventsByDate), a página default do
+    // Google é 250 itens — sem seguir `nextPageToken`, uma janela com mais de
+    // 250 eventos perderia o excedente em silêncio.
+    pageToken = params.maxResults ? undefined : data.nextPageToken;
+  } while (pageToken);
+
+  return eventos;
 }
 
 // ─── API pública ─────────────────────────────────────────────────────────────

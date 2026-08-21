@@ -1,6 +1,6 @@
 // Google Calendar — criação, edição e remoção de eventos. Chamadas diretas na
-// API v3 com fetch nativo. Token trocado por chamada (sem cache, igual
-// calendar-read.ts).
+// API v3 com fetch nativo. Token vem de getGoogleAccessToken(), que já
+// cacheia em memória (ver _shared/google-oauth.ts).
 //
 // API ref: https://developers.google.com/calendar/api/v3/reference/events
 

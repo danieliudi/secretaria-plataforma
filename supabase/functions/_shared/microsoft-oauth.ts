@@ -1,5 +1,6 @@
-// Microsoft OAuth (Graph) — troca refresh_token por access_token a cada
-// chamada, mesmo espírito de google-oauth.ts. Usado por qualquer integração
+// Microsoft OAuth (Graph) — troca refresh_token por access_token, com cache
+// em memória pela validade real do token (mesmo espírito de google-oauth.ts,
+// inclusive o cache). Usado por qualquer integração
 // Graph (Calendar/Mail — Fase 2 futura — e Microsoft To Do, primeiro a
 // existir de fato).
 //
@@ -40,6 +41,12 @@ interface TokenResponse {
   scope?: string;
 }
 
+// Mesmo cache de google-oauth.ts: por refresh_token (== por tenant), sobrevive
+// enquanto o isolate segue quente entre ticks do cron. Cold start = mesmo
+// comportamento de antes.
+const TOKEN_SAFETY_MARGIN_MS = 60_000;
+const tokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
+
 export async function getMicrosoftAccessToken(
   deps: MicrosoftOAuthDeps = defaultMicrosoftOAuthDeps(),
 ): Promise<string> {
@@ -51,6 +58,11 @@ export async function getMicrosoftAccessToken(
     throw new Error(
       "Missing Microsoft OAuth env vars: MICROSOFT_REFRESH_TOKEN, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET",
     );
+  }
+
+  const cached = tokenCache.get(refreshToken);
+  if (cached && cached.expiresAt - TOKEN_SAFETY_MARGIN_MS > Date.now()) {
+    return cached.accessToken;
   }
 
   const res = await deps.fetch(MICROSOFT_TOKEN_URL, {
