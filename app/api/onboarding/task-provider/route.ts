@@ -7,11 +7,10 @@ import {
   createGoogleTasksList,
   createMicrosoftTodoList,
   createNotionDatabase,
-  createSanweyTasksList,
   createTrelloList,
 } from "@/lib/task-list-create";
 
-const VALID_PROVIDERS = new Set(["clickup", "notion", "trello", "google_tasks", "microsoft_todo", "sanwey_tasks"]);
+const VALID_PROVIDERS = new Set(["clickup", "notion", "trello", "google_tasks", "microsoft_todo"]);
 const DEFAULT_FRENTE = "geral";
 
 export async function POST(request: Request) {
@@ -113,7 +112,6 @@ export async function POST(request: Request) {
     if (provider === "microsoft_todo") return createMicrosoftTodoList(outlookRefreshToken, frente);
     if (provider === "clickup") return createClickUpList(token, frente);
     if (provider === "notion") return createNotionDatabase(token, frente);
-    if (provider === "sanwey_tasks") return createSanweyTasksList(token, frente);
     // trello
     const apiKey = trelloApiKey || process.env.TRELLO_API_KEY;
     if (!apiKey) {

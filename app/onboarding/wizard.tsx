@@ -7,7 +7,7 @@ import { PRESETS, type Personalidade } from "@/lib/personalidade";
 import { garanteOrigemCanonica } from "@/lib/site-url";
 import { AppHeader } from "@/components/AppHeader";
 
-type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks";
+type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo";
 type Channel = "whatsapp" | "telegram" | "teams";
 
 const PROVIDER_OPTIONS: Array<{
@@ -81,16 +81,6 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
       label: "Guia oficial do Trello (com imagens)",
     },
-  },
-  {
-    value: "sanwey_tasks",
-    label: "Sanwey Tasks (Meu To-Do do Daniel)",
-    hint: "Só pra quem administra a plataforma — conecta com o \"Meu To-Do\" pessoal dentro do sanwey-crm (Gestão Sanwey), usando a frente como tag. Não é uma opção pra uso geral.",
-    tokenSteps: [
-      "Esse token não é gerado por você aqui — é o mesmo valor de PERSONAL_TASKS_AGENT_KEY configurado nos secrets da function personal-tasks-agent, no projeto Supabase do sanwey-crm.",
-      "Se você não configurou isso pessoalmente, essa opção não é pra sua conta — fale com quem administra a plataforma.",
-    ],
-    helpLink: null,
   },
 ];
 
