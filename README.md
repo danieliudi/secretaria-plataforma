@@ -58,10 +58,6 @@ pra quem pede.
      ela escolher pelo nome — Trello usa a API key própria da pessoa se ela
      colar uma, senão a `TRELLO_API_KEY` global (ver "Setup local"); sem
      nenhuma das duas, cai num textarea de fallback pra colar o mapa em JSON.
-     Nesse mesmo recolhido também mora "Sanwey Tasks" — opção interna, só
-     pra quem administra a plataforma, que conecta com o "Meu To-Do" pessoal
-     do sanwey-crm (ver `personal-tasks-agent-api.md` naquele repo); mapa
-     manual frente → tag, sem busca automática.
    * **Passo 3 (canal)** — WhatsApp (marcado como recomendado — é o canal
      mais natural pro público-alvo), Telegram ou ambos. Escolhendo Telegram,
      o próprio onboarding chama o `setWebhook` da API do Telegram
