@@ -47,6 +47,16 @@ export interface Tenant {
   teams_link_code_expires_at: string | null;
   /** Toggle do wizard: sempre responder em áudio, além do espelhamento por formato recebido. */
   resposta_audio_sempre: boolean;
+  recusado_em: string | null;
+  created_at: string;
+  /**
+   * Marcado quando o refresh do Google falhou com `invalid_grant` (token
+   * revogado/expirado) — ver `marcaGoogleRevogado` em cron/index.ts. Enquanto
+   * setado, as tasks que dependem de Calendar pulam o tenant em vez de bater
+   * na mesma falha centenas de vezes por dia. Limpo quando o Google é
+   * reconectado (novo refresh token gravado no wizard).
+   */
+  google_erro_em: string | null;
 }
 
 const TENANT_COLUMNS = `
@@ -61,7 +71,7 @@ const TENANT_COLUMNS = `
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at,
   teams_authorized_user_id, teams_link_code, teams_link_code_expires_at,
-  personalidade, resposta_audio_sempre
+  personalidade, resposta_audio_sempre, recusado_em, created_at, google_erro_em
 `;
 
 // ATENÇÃO: comparação EXATA (`eq`), nunca `ilike`. Com `ilike`, o `%` do
@@ -98,6 +108,62 @@ export async function getDefaultTenant(): Promise<Tenant | null> {
   return getTenantBySlug(DEFAULT_TENANT_SLUG);
 }
 
+// ─── Multi-tenant (proativos do cron) ───────────────────────────────────────
+
+/** Único tenant com is_platform_owner — nunca por slug (slug é mutável, is_platform_owner é regra). */
+export async function getPlatformOwnerTenant(): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("is_platform_owner", true)
+    .eq("active", true)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (platform owner) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/** Carrega um tenant pelo id, sem filtro de elegibilidade — quem chama decide via `tenantElegivel`. */
+export async function getTenantById(id: string): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("id", id)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (id) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/**
+ * Portão de acesso pago do CLAUDE.md §3 aplicado no backend: elegível pra
+ * proativo/multi-tenant é ativo, aprovado e não recusado. Usado tanto pra
+ * filtrar a lista do coordenador quanto pra REVALIDAR no executor (nunca
+ * confiar só no tenant_id que chegou no corpo).
+ */
+export function tenantElegivel(tenant: Pick<Tenant, "active" | "aprovado_em" | "recusado_em">): boolean {
+  return tenant.active === true && tenant.aprovado_em !== null && tenant.recusado_em === null;
+}
+
+/**
+ * Todo tenant elegível pra tasks proativas multi-tenant, dono primeiro (se
+ * algum teto for atingido, ele é o último a sofrer). `limit` é teto de
+ * segurança, não expectativa de escala.
+ */
+export async function listTenantsElegiveis(limit = 200): Promise<Tenant[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .is("recusado_em", null)
+    .order("is_platform_owner", { ascending: false })
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`tenants lookup (elegíveis) falhou: ${error.message}`);
+  return (data ?? []) as Tenant[];
+}
+
 // ─── Número compartilhado (autorização por telefone) ────────────────────────
 //
 // Resolve pelo REMETENTE (`from`), não pela instância que recebeu — o
@@ -116,6 +182,11 @@ export function normalizeWhatsAppJidToE164(jid: string): string | null {
   if (jid.includes("@g.us")) return null;
   const digits = jid.split("@")[0].replace(/\D/g, "");
   return digits ? `+${digits}` : null;
+}
+
+/** Inverso de normalizeWhatsAppJidToE164: E.164 ("+5511999999999") pro JID que a Evolution espera. */
+export function jidFromE164(e164: string): string {
+  return `${e164.replace(/\D/g, "")}@s.whatsapp.net`;
 }
 
 // `aprovado_em` NÃO é filtro cosmético: sem ele, qualquer pessoa que
@@ -345,6 +416,16 @@ export async function getTelegramWebhookSecret(tenant: Tenant): Promise<string |
  * secret_token vira o dono; chat_id diferente depois disso é recusado.
  * UPDATE condicional (`is(...,null)`) evita corrida entre duas primeiras
  * mensagens simultâneas roubando o vínculo uma da outra.
+ *
+ * O mesmo chat_id (é o id da CONTA de Telegram da pessoa, não do bot) pode
+ * tentar se vincular a DOIS tenants diferentes — cada tenant tem seu próprio
+ * bot. Sem uma trava de unicidade, isso misturava histórico/memória de dois
+ * clientes na mesma chave `tg:<chatId>` (achado real: um único JID de
+ * WhatsApp já apareceu em conversation_history sob dois tenants diferentes,
+ * mesmo padrão de bug). O índice único parcial (migration
+ * 20260821_telegram_chat_id_unico.sql) faz este UPDATE falhar com 23505
+ * quando o chat_id já pertence a OUTRO tenant — trata como recusa silenciosa
+ * (mesmo formato de retorno de "perdeu a corrida"), não como erro.
  */
 export async function authorizeTelegramChatId(tenant: Tenant, chatId: number): Promise<boolean> {
   if (tenant.telegram_authorized_chat_id !== null) {
@@ -357,7 +438,10 @@ export async function authorizeTelegramChatId(tenant: Tenant, chatId: number): P
     .is("telegram_authorized_chat_id", null)
     .select("id")
     .maybeSingle();
-  if (error) throw new Error(`telegram_authorized_chat_id update falhou: ${error.message}`);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return false; // chat_id já é de outro tenant
+    throw new Error(`telegram_authorized_chat_id update falhou: ${error.message}`);
+  }
   if (data) return true;
 
   // Perdeu a corrida pro vínculo — confere quem ganhou antes de recusar.
