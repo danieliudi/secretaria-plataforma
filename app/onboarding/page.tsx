@@ -117,7 +117,7 @@ export default async function OnboardingPage({
       // verificação na Meta passa a ser mudar a variável no Netlify, sem
       // precisar de build novo (NEXT_PUBLIC_* é resolvida em tempo de build).
       envioOficialDisponivel={Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL)}
-      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo"}
+      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}
       linkError={linkError ?? null}
