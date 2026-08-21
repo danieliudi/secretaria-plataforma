@@ -122,7 +122,7 @@ export default async function Home() {
             Criar a minha
           </Link>
           <span className="text-[13px] text-aurora-muted-2">
-            Leva menos de 3 minutos. Você conecta sua conta Google e escolhe o canal.
+            Leva menos de 3 minutos. Você conecta sua conta Google ou Outlook e escolhe o canal.
           </span>
         </div>
 
@@ -252,7 +252,7 @@ export default async function Home() {
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
             {[
               {
-                t: "Uma conta Google",
+                t: "Uma conta Google ou Outlook",
                 d: "É por onde ela enxerga sua agenda, seu e-mail e suas tarefas. Você autoriza no login, e revoga quando quiser.",
               },
               {
