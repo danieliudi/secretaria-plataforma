@@ -33,6 +33,7 @@ import type {
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
+import { frentesDoEnv } from "../tenant.ts";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const DUE_TIME_ZONE = "UTC";
@@ -296,17 +297,15 @@ export async function listAllOpenTasksWithDue(
 
 // ─── System prompt block builder ─────────────────────────────────────────────
 
-const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
-
 /**
  * Gera o bloco do system prompt do Sonnet com base no map carregado.
  * Mesma estrutura de buildGoogleTasksSystemBlock — mantém o modelo agindo
  * igual entre os dois provedores "sem lista dentro da frente".
  */
-export function buildMicrosoftTodoSystemBlock(map: MicrosoftTodoListMap | null): string {
+export function buildMicrosoftTodoSystemBlock(map: MicrosoftTodoListMap | null, frentes: string[] = []): string {
   if (!map || Object.keys(map).length === 0) {
     return `ACESSO AO MICROSOFT TO DO (tarefas)
-- Não configurado. Se Daniel pedir tasks (listar ou criar), diga que Microsoft To Do ainda não está integrado.`;
+- Não configurado. Se pedirem tasks (listar ou criar), diga que Microsoft To Do ainda não está integrado.`;
   }
 
   const frentesList = Object.keys(map)
@@ -314,11 +313,11 @@ export function buildMicrosoftTodoSystemBlock(map: MicrosoftTodoListMap | null):
     .join("\n");
 
   const knownFrentes = Object.keys(map).map((f) => f.toLowerCase());
-  const missingFrentes = ALL_FRENTES.filter((f) => !knownFrentes.includes(f));
+  const missingFrentes = frentes.filter((f) => !knownFrentes.includes(f));
 
   const missingNote = missingFrentes.length === 0
     ? ""
-    : `\n- Frentes SEM Microsoft To Do configurado: ${missingFrentes.join(", ")}. Se Daniel pedir tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
+    : `\n- Frentes SEM Microsoft To Do configurado: ${missingFrentes.join(", ")}. Se pedirem tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
 
   return `ACESSO AO MICROSOFT TO DO (tarefas)
 - 3 tools: list_tasks(frente, limit?), create_task(frente, title, ...), complete_task(frente, query).
@@ -359,7 +358,7 @@ export function createMicrosoftTodoProvider(env?: (key: string) => string | unde
 
     buildSystemBlock: (): string => {
       const map = tryLoadMicrosoftTodoMap(deps.env);
-      return buildMicrosoftTodoSystemBlock(map);
+      return buildMicrosoftTodoSystemBlock(map, frentesDoEnv(deps.env));
     },
   };
 }

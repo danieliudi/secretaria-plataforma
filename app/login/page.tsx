@@ -3,6 +3,7 @@
 import { use, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
+import { garanteOrigemCanonica } from "@/lib/site-url";
 
 const providers = enabledOAuthProviders();
 
@@ -35,7 +36,7 @@ const CHECKLIST: ChecklistGroup[] = [
       },
       {
         title: "Notion",
-        desc: "Token de uma integração interna (notion.so/my-integrations) com os databases já compartilhados com ela.",
+        desc: "Token de uma integração do Notion (notion.so/my-integrations), com as páginas já conectadas a ela em \"Connections\".",
       },
       {
         title: "Trello",
@@ -80,6 +81,12 @@ export default function LoginPage({
 
   async function handleLogin(provider: OAuthProviderId) {
     setLoadingProvider(provider);
+    // Host errado (permalink de deploy da Netlify, por exemplo): move o
+    // navegador pro host canônico ANTES de começar o fluxo, senão o cookie do
+    // code verifier do PKCE nasce aqui e o `code` volta lá — ver lib/site-url.ts.
+    // A navegação já começou; sair daqui sem tocar em mais nada.
+    if (garanteOrigemCanonica("/login")) return;
+
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
     const redirectTo = `${window.location.origin}/auth/callback?provider=${provider}&intent=login`;

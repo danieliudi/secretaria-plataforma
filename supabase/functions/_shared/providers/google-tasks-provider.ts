@@ -32,6 +32,7 @@ import type {
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
+import { frentesDoEnv } from "../tenant.ts";
 
 const GOOGLE_TASKS_BASE = "https://tasks.googleapis.com/tasks/v1";
 
@@ -152,12 +153,27 @@ interface GTaskListResponse {
   items?: GTaskItem[];
 }
 
+// Google Tasks normaliza `due` pra meia-noite UTC do dia escolhido (só a parte
+// de DATA é honrada pela API, nunca hora). Comparar esse valor cru como epoch
+// (`new Date(due).getTime() < Date.now()`, como faz o cron em runAlerts/
+// what-now) marca a task como vencida às 21h da véspera no horário de
+// Brasília — antes do dia realmente acabar pro tenant. Reinterpreta como fim
+// do dia (23:59:59.999) em America/Sao_Paulo pra alinhar com o calendário do
+// tenant, não o de UTC.
+const TZ_OFFSET_SAO_PAULO_MIN = 180; // UTC-3 fixo (Brasil aboliu o horário de verão em 2019)
+
+function fimDoDiaSaoPaulo(dueUtcMeiaNoite: string): string {
+  const [y, m, d] = dueUtcMeiaNoite.slice(0, 10).split("-").map(Number);
+  const fimDoDiaUtcMs = Date.UTC(y, m - 1, d, 23, 59, 59, 999) + TZ_OFFSET_SAO_PAULO_MIN * 60_000;
+  return new Date(fimDoDiaUtcMs).toISOString();
+}
+
 function mapTask(t: GTaskItem): GoogleTaskItem {
   return {
     id: t.id,
     name: t.title,
     status: t.status ?? "needsAction",
-    due_date: t.due ?? null,
+    due_date: t.due ? fimDoDiaSaoPaulo(t.due) : null,
     // Google Tasks API não expõe uma URL web addressable pra uma task
     // específica (diferente do ClickUp, que retorna `url` por task) — não
     // há como linkar direto pra uma task individual, então fica vazio.
@@ -306,8 +322,6 @@ export async function listAllOpenTasksWithDue(
 
 // ─── System prompt block builder ─────────────────────────────────────────────
 
-const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
-
 /**
  * Gera o bloco do system prompt do Sonnet com base no map carregado.
  * - Sem map ou vazio: bloco curto "não configurado".
@@ -315,10 +329,10 @@ const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "
  *   explícito que essa plataforma NÃO tem sub-listas dentro da frente
  *   (diferente do ClickUp) — o modelo não deve tentar usar `list`.
  */
-export function buildGoogleTasksSystemBlock(map: GoogleTasksListMap | null): string {
+export function buildGoogleTasksSystemBlock(map: GoogleTasksListMap | null, frentes: string[] = []): string {
   if (!map || Object.keys(map).length === 0) {
     return `ACESSO AO GOOGLE TASKS (tarefas)
-- Não configurado. Se Daniel pedir tasks (listar ou criar), diga que Google Tasks ainda não está integrado.`;
+- Não configurado. Se pedirem tasks (listar ou criar), diga que Google Tasks ainda não está integrado.`;
   }
 
   const frentesList = Object.keys(map)
@@ -326,11 +340,11 @@ export function buildGoogleTasksSystemBlock(map: GoogleTasksListMap | null): str
     .join("\n");
 
   const knownFrentes = Object.keys(map).map((f) => f.toLowerCase());
-  const missingFrentes = ALL_FRENTES.filter((f) => !knownFrentes.includes(f));
+  const missingFrentes = frentes.filter((f) => !knownFrentes.includes(f));
 
   const missingNote = missingFrentes.length === 0
     ? ""
-    : `\n- Frentes SEM Google Tasks configurado: ${missingFrentes.join(", ")}. Se Daniel pedir tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
+    : `\n- Frentes SEM Google Tasks configurado: ${missingFrentes.join(", ")}. Se pedirem tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
 
   return `ACESSO AO GOOGLE TASKS (tarefas)
 - 3 tools: list_tasks(frente, limit?), create_task(frente, title, ...), complete_task(frente, query).
@@ -371,7 +385,7 @@ export function createGoogleTasksProvider(env?: (key: string) => string | undefi
 
     buildSystemBlock: (): string => {
       const map = tryLoadGoogleTasksMap(deps.env);
-      return buildGoogleTasksSystemBlock(map);
+      return buildGoogleTasksSystemBlock(map, frentesDoEnv(deps.env));
     },
   };
 }

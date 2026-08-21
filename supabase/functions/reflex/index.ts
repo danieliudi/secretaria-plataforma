@@ -104,7 +104,11 @@ function buildDeps(tenantId: string): OrchestratorDeps {
   };
 }
 
-async function classify(text: string): Promise<Decision> {
+// `frentes` é do tenant já resolvido por quem chama — o classificador precisa
+// saber as frentes REAIS de quem está falando, não uma lista fixa (achado da
+// auditoria de "prompt mestre", 21/08/2026: a lista fixa fazia qualquer
+// tenant com frentes diferentes das do Daniel cair sempre em "ambiguo").
+async function classify(text: string, frentes: string[]): Promise<Decision> {
   if (checkRegexReflex(text)) {
     return {
       tier: "reflex",
@@ -115,7 +119,7 @@ async function classify(text: string): Promise<Decision> {
       confidence: 1.0,
     };
   }
-  const decision = await classifyWithHaiku(text);
+  const decision = await classifyWithHaiku(text, frentes);
   // Safety net: Haiku às vezes classifica saudações/conversas como reflex.
   // Se não há padrão parseável, foi misclassificação — escala pra fast.
   if (decision.tier === "reflex" && parseReflexIntent(text).type === "unknown") {
@@ -314,7 +318,7 @@ async function handleSharedNumberMessage(
   // compartilhada em vez do EVOLUTION_* global.
   let decision: Decision;
   try {
-    decision = await classify(text);
+    decision = await classify(text, tenant.frentes);
     if (decision.tier === "deep") decision = { ...decision, tier: "fast" };
   } catch (err) {
     console.error(`[reflex] classify falhou (número compartilhado): ${semDadoPessoal(err)}`);
@@ -422,12 +426,18 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Resolve o tenant UMA vez, ANTES de classificar — o classificador
+    // precisa das frentes REAIS de quem está falando (achado da auditoria de
+    // "prompt mestre", 21/08/2026), e os 3 usos abaixo (reflex, fast síncrono,
+    // fast assíncrono) reconsultavam o mesmo tenant cada um por conta própria.
+    const tenant = await resolveTenant(instance);
+
     // Sempre classifica no servidor — nunca aceita `decision` do corpo. O
     // campo existia pra permitir pular a chamada do classificador, mas isso
     // também deixava QUALQUER chamador escolher o tier (e portanto o
     // orçamento/tools liberados) da própria mensagem sem passar pelo Haiku.
     // Nenhum caller legítimo do repositório manda esse campo hoje.
-    let decision = await classify(text);
+    let decision = await classify(text, tenant?.frentes ?? []);
     // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
     // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
     // A classificação sozinha já basta pra diagnóstico.
@@ -449,12 +459,11 @@ Deno.serve(async (req: Request) => {
       // prioridade do dia). Sem saber DE QUEM é a mensagem não há resposta
       // segura possível: responder assumindo um tenant padrão foi exatamente o
       // que fazia um usuário receber a prioridade de outro. Recusa é o certo.
-      const tenantReflex = await resolveTenant(instance);
-      if (!tenantReflex) {
+      if (!tenant) {
         console.error("[reflex] tier reflex sem tenant resolvido — recusando em vez de assumir um padrão");
         return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
       }
-      const result = await orchestrateReflex(text, decision, buildDeps(tenantReflex.id));
+      const result = await orchestrateReflex(text, decision, buildDeps(tenant.id));
       return resp(result, 200);
     }
 
@@ -473,10 +482,9 @@ Deno.serve(async (req: Request) => {
         const deliver = (async () => {
           try {
             await dbg.from("async_debug").insert({ step: "bg_start", detail: "" });
-            // Resolve o tenant UMA vez: /fast usa pras tools (calendar/tarefas/
-            // GA4), o envio abaixo usa pra credenciais do WhatsApp — mesma
-            // fonte de verdade, sem consultar o DB duas vezes.
-            const tenant = await resolveTenant(instance);
+            // `tenant` já foi resolvido acima (antes de classificar) — /fast
+            // usa pras tools (calendar/tarefas/GA4), o envio abaixo usa pra
+            // credenciais do WhatsApp — mesma fonte de verdade, uma consulta só.
             const result = await callFastEndpoint({
               text,
               decision,
@@ -523,8 +531,7 @@ Deno.serve(async (req: Request) => {
       // Passa o tenant também aqui — sem ele, o /fast montava o prompt com a
       // persona default e as tools caíam no ambiente global. Era um caminho de
       // PRODUÇÃO, não só de teste.
-      const tenantSync = await resolveTenant(instance);
-      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenantSync?.slug });
+      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenant?.slug });
       return resp(result, 200);
     }
 

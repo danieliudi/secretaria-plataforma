@@ -36,6 +36,7 @@ import type {
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
+import { frentesDoEnv } from "../tenant.ts";
 
 const NOTION_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
@@ -392,19 +393,18 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
 
     buildSystemBlock(): string {
       const map = tryLoadNotionMap(deps.env);
-      const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
 
       if (!map || Object.keys(map).length === 0) {
         return `ACESSO AO NOTION (tarefas)
-- Não configurado. Se Daniel pedir tasks (listar ou criar), diga que Notion ainda não está integrado.`;
+- Não configurado. Se pedirem tasks (listar ou criar), diga que Notion ainda não está integrado.`;
       }
 
       const frentesList = Object.keys(map).map((f) => `  - ${f}`).join("\n");
       const known = Object.keys(map).map((f) => f.toLowerCase());
-      const missing = ALL_FRENTES.filter((f) => !known.includes(f));
+      const missing = frentesDoEnv(deps.env).filter((f) => !known.includes(f));
       const missingNote = missing.length === 0
         ? ""
-        : `\n- Frentes SEM Notion configurado: ${missing.join(", ")}. Se Daniel pedir tasks de uma dessas, diga que essa frente ainda não está integrada.`;
+        : `\n- Frentes SEM Notion configurado: ${missing.join(", ")}. Se pedirem tasks de uma dessas, diga que essa frente ainda não está integrada.`;
 
       return `ACESSO AO NOTION (tarefas)
 - 3 tools: list_tasks(frente, limit?), create_task(frente, title, ...), complete_task(frente, query).
