@@ -36,7 +36,7 @@ const CHECKLIST: ChecklistGroup[] = [
       },
       {
         title: "Notion",
-        desc: "Token de uma integração interna (notion.so/my-integrations) com os databases já compartilhados com ela.",
+        desc: "Token de uma integração do Notion (notion.so/my-integrations), com as páginas já conectadas a ela em \"Connections\".",
       },
       {
         title: "Trello",

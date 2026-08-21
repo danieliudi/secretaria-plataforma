@@ -50,13 +50,18 @@ const PROVIDER_OPTIONS: Array<{
   {
     value: "notion",
     label: "Notion",
-    hint: "Token de uma integração interna (notion.so/my-integrations) — compartilhe pelo menos 1 página com ela antes.",
+    hint: "Token de uma integração do Notion (notion.so/my-integrations) — depois é preciso conectar pelo menos 1 página a ela.",
+    // Passos revisados 21/08/2026 depois de alguém tentar seguir e travar: o
+    // Notion tirou a escolha de tipo "Internal" na criação (agora toda
+    // integração nova já nasce interna) e chama o vínculo com a página de
+    // "Connection". Os textos abaixo descrevem o RESULTADO esperado em vez de
+    // depender do rótulo exato do botão — o Notion mexe nisso com frequência.
     tokenSteps: [
       "Acessa notion.so/my-integrations (logado com a conta certa).",
-      "Clica em \"+ New integration\".",
-      "Dá um nome, escolhe o workspace e o tipo \"Internal\".",
-      "Depois de criada, clica em \"Show\" no token e copia (começa com \"secret_\" ou \"ntn_\").",
-      "Importante: compartilha pelo menos 1 página com a integração (\"...\" no canto superior direito → \"Connections\" → \"Connect to\") — é onde a Mia vai criar as listas de cada área.",
+      "Clica em \"New integration\", dá um nome e escolhe o workspace.",
+      "Copia o token que aparece (começa com \"secret_\" ou \"ntn_\") — pode ser preciso clicar em \"Show\" antes.",
+      "Importante: abre a página do Notion onde a Mia vai trabalhar, clica nos \"...\" do canto superior direito e procura \"Connections\" (ou \"Conexões\"). Escolhe ali a integração que você acabou de criar.",
+      "Sem esse último passo o token não enxerga nada — é a conexão com a página que dá acesso, não o token sozinho.",
     ],
     helpLink: {
       href: "https://www.notion.com/help/create-integrations-with-the-notion-api",
