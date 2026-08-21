@@ -51,16 +51,27 @@ const PROVIDER_OPTIONS: Array<{
     value: "notion",
     label: "Notion",
     hint: "Token de uma integração do Notion (notion.so/my-integrations) — depois é preciso conectar pelo menos 1 página a ela.",
-    // Passos revisados 21/08/2026 depois de alguém tentar seguir e travar: o
-    // Notion tirou a escolha de tipo "Internal" na criação (agora toda
-    // integração nova já nasce interna) e chama o vínculo com a página de
-    // "Connection". Os textos abaixo descrevem o RESULTADO esperado em vez de
-    // depender do rótulo exato do botão — o Notion mexe nisso com frequência.
+    // Passos revisados 21/08/2026, 2ª rodada (auditoria dedicada + verificação
+    // adversarial contra a documentação oficial atual do Notion):
+    // - Mantida a estratégia de descrever RESULTADO em vez de nome exato de
+    //   botão (o Notion mexe nisso com frequência — trocou "New integration"
+    //   por "New connection" em mai/2026 e pode trocar de novo).
+    // - Corrigido "Connections" → "Add connections": numa página que NUNCA
+    //   foi conectada a nada (o caso de 100% de quem faz esse onboarding pela
+    //   primeira vez), o rótulo que aparece é "Add connections", não
+    //   "Connections" sozinho — esse era o passo que já tinha travado alguém.
+    // - Acrescentado aviso de que só o dono (owner) do workspace cria a
+    //   conexão — o vínculo com a página (passo de baixo) qualquer um com
+    //   acesso à página já consegue fazer sozinho.
+    // - Mencionado o atalho que o Notion abriu em 19/ago/2026 (Configurações
+    //   → Developer → "Enable developer features"), alternativa a sair pro
+    //   site separado notion.so/my-integrations.
     tokenSteps: [
-      "Acessa notion.so/my-integrations (logado com a conta certa).",
-      "Clica em \"New integration\", dá um nome e escolhe o workspace.",
+      "Só quem é dono (owner) do workspace no Notion consegue criar essa conexão — se não for você, peça pra essa pessoa criar (o vínculo com a página, no passo de baixo, qualquer um com acesso à página já consegue fazer sozinho).",
+      "Acessa notion.so/my-integrations (logado com a conta certa) — ou, sem sair do Notion, vai em Configurações → Developer e ativa \"Enable developer features\" pra ver o mesmo painel na barra lateral do workspace.",
+      "Clica no botão de criar uma conexão nova (pode aparecer como \"New integration\" ou \"New connection\", dependendo da versão), dá um nome e escolhe o workspace.",
       "Copia o token que aparece (começa com \"secret_\" ou \"ntn_\") — pode ser preciso clicar em \"Show\" antes.",
-      "Importante: abre a página do Notion onde a Mia vai trabalhar, clica nos \"...\" do canto superior direito e procura \"Connections\" (ou \"Conexões\"). Escolhe ali a integração que você acabou de criar.",
+      "Importante: abre a página do Notion onde a Mia vai trabalhar e clica nos \"...\" do canto superior direito. Se essa página nunca foi conectada a nada, o botão aparece como \"Add connections\" (não só \"Connections\") — clica nele e escolhe a conexão que você acabou de criar. (Se a página já tiver alguma conexão, o menu já mostra \"Connections\" direto.)",
       "Sem esse último passo o token não enxerga nada — é a conexão com a página que dá acesso, não o token sozinho.",
     ],
     helpLink: {
