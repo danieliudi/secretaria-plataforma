@@ -19,22 +19,40 @@ import { Resvg, initWasm } from "npm:@resvg/resvg-wasm@2.6.2";
 // A fonte precisa vir como bytes (satori não usa fonte do sistema) e o resvg
 // wasm precisa ser inicializado uma vez. Ambos ficam em cache de módulo — a
 // edge function reaproveita entre invocações no mesmo isolate.
-const FONT_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/files/inter-latin-400-normal.woff";
-const FONT_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/files/inter-latin-700-normal.woff";
+//
+// Rebrand 20/08/2026: Instrument Sans → Hanken Grotesk (corpo/rótulo) + Eb
+// Garamond (só o título do card, papel de "headline") — mesmas duas fontes
+// que o site passou a usar (ver app/layout.tsx), pra manter o card do mesmo
+// produto que o WhatsApp mostra em texto. Título ganha fonte própria porque
+// é o único elemento do card com papel de "manchete"; o resto (kicker,
+// linhas, ações, rodapé) é sempre corpo/rótulo.
+const FONT_BODY_REGULAR_URL = "https://cdn.jsdelivr.net/npm/@fontsource/hanken-grotesk@5.2.5/files/hanken-grotesk-latin-400-normal.woff";
+const FONT_BODY_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/hanken-grotesk@5.2.5/files/hanken-grotesk-latin-700-normal.woff";
+const FONT_DISPLAY_URL = "https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.2.5/files/eb-garamond-latin-500-normal.woff";
+const FONT_DISPLAY_BOLD_URL = "https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.2.5/files/eb-garamond-latin-700-normal.woff";
 const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
 
-let fontesCache: Array<{ name: string; data: ArrayBuffer; weight: 400 | 700; style: "normal" }> | null = null;
+const FONT_BODY = "Hanken Grotesk";
+const FONT_DISPLAY = "Eb Garamond";
+
+let fontesCache:
+  | Array<{ name: string; data: ArrayBuffer; weight: 400 | 500 | 700; style: "normal" }>
+  | null = null;
 let wasmPronto = false;
 
 async function carregaFontes() {
   if (fontesCache) return fontesCache;
-  const [reg, bold] = await Promise.all([
-    fetch(FONT_REGULAR_URL).then((r) => r.arrayBuffer()),
-    fetch(FONT_BOLD_URL).then((r) => r.arrayBuffer()),
+  const [bodyReg, bodyBold, display, displayBold] = await Promise.all([
+    fetch(FONT_BODY_REGULAR_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_BODY_BOLD_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_DISPLAY_URL).then((r) => r.arrayBuffer()),
+    fetch(FONT_DISPLAY_BOLD_URL).then((r) => r.arrayBuffer()),
   ]);
   fontesCache = [
-    { name: "Inter", data: reg, weight: 400, style: "normal" },
-    { name: "Inter", data: bold, weight: 700, style: "normal" },
+    { name: FONT_BODY, data: bodyReg, weight: 400, style: "normal" },
+    { name: FONT_BODY, data: bodyBold, weight: 700, style: "normal" },
+    { name: FONT_DISPLAY, data: display, weight: 500, style: "normal" },
+    { name: FONT_DISPLAY, data: displayBold, weight: 700, style: "normal" },
   ];
   return fontesCache;
 }
@@ -48,15 +66,23 @@ async function garanteWasm() {
 // ─── paleta do card ─────────────────────────────────────────────────────────
 // Fixa de propósito: o card vira PNG e é visto dentro do WhatsApp, então não
 // acompanha tema claro/escuro de ninguém — tem que se sustentar sozinho nos dois.
+//
+// Mesmos tokens do Aurora (app/globals.css). Rebrand 20/08/2026: violeta
+// escuro → slate claro + ouro clássico, tokens tirados ao pé da letra de um
+// board de referência (Primary #0F172A / Secondary #334155 / Tertiary
+// #D4AF37 / Neutral #F8FAFC — a rampa Slate do Tailwind + um dourado). Fundo
+// virou claro — `ink`/`ink2`/`line` inverteram de branco-transparente pra
+// preto-transparente. `warn`/`crit` aprofundados: os valores antigos foram
+// calibrados pra contraste em fundo ESCURO e ficavam ilegíveis no claro.
 export const CARD = {
-  ink: "#10201f",
-  ink2: "#17302e",
-  line: "#24423f",
-  fg: "#eef5f3",
-  mut: "#8fa9a5",
-  accent: "#4ecdc0",
-  warn: "#e8a13a",
-  crit: "#e5695c",
+  ink: "#f8fafc",
+  ink2: "rgba(15,23,42,0.045)",
+  line: "rgba(15,23,42,0.1)",
+  fg: "#0f172a",
+  mut: "#64748b",
+  accent: "#d4af37",
+  warn: "#b8752e",
+  crit: "#b33939",
 } as const;
 
 export const LARGURA_CARD = 800;
@@ -107,7 +133,7 @@ export function cardShell(
       width: LARGURA_CARD,
       background: CARD.ink,
       color: CARD.fg,
-      fontFamily: "Inter",
+      fontFamily: FONT_BODY,
     },
     el(
       "div",
@@ -118,13 +144,22 @@ export function cardShell(
         padding: "30px 34px 24px",
         borderBottom: `1px solid ${CARD.line}`,
       },
+      // `flex: 1` + `minWidth: 0` no bloco do título: sem isso, um título
+      // longo o bastante pra quebrar linha empurra o `canto` pra fora da
+      // largura do card em vez de quebrar dentro do próprio espaço — achado
+      // testando o card de prep de reunião (20/08/2026), mas é bug do shell,
+      // vale pra qualquer card com título comprido.
       el(
         "div",
-        { display: "flex", flexDirection: "column" },
-        el("div", { display: "flex", fontSize: 16, letterSpacing: 2, color: CARD.accent, fontWeight: 700 }, kicker),
-        el("div", { display: "flex", fontSize: 34, fontWeight: 700, marginTop: 6 }, titulo),
+        { display: "flex", flexDirection: "column", flex: 1, minWidth: 0 },
+        el("div", { display: "flex", fontSize: 15, letterSpacing: 2, color: CARD.accent, fontWeight: 700 }, kicker),
+        el(
+          "div",
+          { display: "flex", fontSize: 36, fontWeight: 500, marginTop: 7, fontFamily: FONT_DISPLAY },
+          titulo,
+        ),
       ),
-      el("div", { display: "flex", fontSize: 20, color: CARD.mut, paddingTop: 8 }, canto),
+      el("div", { display: "flex", flexShrink: 0, marginLeft: 16, fontSize: 20, color: CARD.mut, paddingTop: 8 }, canto),
     ),
     el("div", { display: "flex", flexDirection: "column", padding: "22px 34px 26px" }, ...corpo),
     el(
@@ -180,7 +215,7 @@ export function linhaConflito(hora: string, titulo: string, sub: string): El {
       alignItems: "flex-start",
       padding: "13px 16px",
       marginBottom: 8,
-      background: "rgba(229,105,92,0.13)",
+      background: "rgba(179,57,57,0.1)", // CARD.crit (#b33939) em rgba, pro tint de fundo
       borderLeft: `4px solid ${CARD.crit}`,
       borderRadius: 6,
     },
@@ -279,7 +314,53 @@ export function barrasAtraso(itens: Array<{ titulo: string; dias: number }>): El
   );
 }
 
-/** Caixa de destaque com as propostas da secretária ("→ posso fazer X?"). */
+/**
+ * Duas barras horizontais comparando um valor observado com uma referência
+ * (ex: despesa vs média da categoria) — mesmo padrão visual de `barrasAtraso`,
+ * adaptado pra comparar 2 grandezas em vez de listar N itens. A primeira barra
+ * (`a`) é sempre a cor crítica — é o valor que disparou o alerta; a segunda
+ * (`b`) é a referência, em tom neutro.
+ */
+export function barrasComparacao(
+  a: { rotulo: string; valor: number; texto: string },
+  b: { rotulo: string; valor: number; texto: string },
+): El {
+  const pico = Math.max(1, a.valor, b.valor);
+  const larguraMax = 320;
+  const linha = (item: typeof a, cor: string) =>
+    el(
+      "div",
+      { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 },
+      el("div", { display: "flex", width: 96, fontSize: 15, color: CARD.mut }, item.rotulo),
+      el(
+        "div",
+        { display: "flex", width: larguraMax, height: 10, background: CARD.ink2, borderRadius: 5 },
+        el("div", {
+          display: "flex",
+          width: Math.max(6, Math.round((item.valor / pico) * larguraMax)),
+          height: 10,
+          background: cor,
+          borderRadius: 5,
+        }),
+      ),
+      el("div", { display: "flex", width: 88, fontSize: 15, color: CARD.fg, justifyContent: "flex-end" }, item.texto),
+    );
+  return el(
+    "div",
+    { display: "flex", flexDirection: "column" },
+    linha(a, CARD.crit),
+    linha(b, CARD.mut),
+  );
+}
+
+/**
+ * Caixa de destaque com as propostas da secretária ("» posso fazer X?").
+ *
+ * Usa "»" (guillemet), não "→": o subset "latin" das fontes via fontsource
+ * (Inter antes, Instrument Sans agora) não inclui o bloco Unicode de setas —
+ * "→" virava um retângulo vazio (tofu) no PNG renderizado. Achado testando
+ * este reskin — bug preexistente, não introduzido por ele.
+ */
 export function caixaAcoes(linhas: string[]): El {
   return el(
     "div",
@@ -292,6 +373,6 @@ export function caixaAcoes(linhas: string[]): El {
       background: CARD.ink2,
       borderRadius: 10,
     },
-    ...linhas.map((l) => el("div", { display: "flex", fontSize: 20, color: CARD.fg }, `→  ${l}`)),
+    ...linhas.map((l) => el("div", { display: "flex", fontSize: 20, color: CARD.fg }, `»  ${l}`)),
   );
 }

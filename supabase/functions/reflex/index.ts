@@ -6,11 +6,14 @@ import { classifyWithHaiku, checkRegexReflex } from "../_shared/router.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
 import {
   hasEvolutionConfig,
+  sendWhatsAppAudio,
   sendWhatsAppMessages,
   sendWhatsAppText,
   splitMessages,
   type WhatsAppDeps,
 } from "../_shared/whatsapp.ts";
+import { deveResponderEmAudio } from "../_shared/audio-reply.ts";
+import { synthesizeSpeech } from "../_shared/google-tts.ts";
 import { orchestrateReflex, type OrchestratorDeps, parseReflexIntent } from "./orchestrator.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
@@ -101,7 +104,11 @@ function buildDeps(tenantId: string): OrchestratorDeps {
   };
 }
 
-async function classify(text: string): Promise<Decision> {
+// `frentes` é do tenant já resolvido por quem chama — o classificador precisa
+// saber as frentes REAIS de quem está falando, não uma lista fixa (achado da
+// auditoria de "prompt mestre", 21/08/2026: a lista fixa fazia qualquer
+// tenant com frentes diferentes das do Daniel cair sempre em "ambiguo").
+async function classify(text: string, frentes: string[]): Promise<Decision> {
   if (checkRegexReflex(text)) {
     return {
       tier: "reflex",
@@ -112,7 +119,7 @@ async function classify(text: string): Promise<Decision> {
       confidence: 1.0,
     };
   }
-  const decision = await classifyWithHaiku(text);
+  const decision = await classifyWithHaiku(text, frentes);
   // Safety net: Haiku às vezes classifica saudações/conversas como reflex.
   // Se não há padrão parseável, foi misclassificação — escala pra fast.
   if (decision.tier === "reflex" && parseReflexIntent(text).type === "unknown") {
@@ -228,7 +235,34 @@ async function replyOnSharedNumber(to: string, text: string): Promise<void> {
 }
 
 /** Processa uma mensagem chegada pela instância compartilhada. Sempre resolve com 200 — quem chama (n8n) não trata erro; falhas de envio só logam. */
-async function handleSharedNumberMessage(text: string, fromRaw: string | undefined): Promise<Response> {
+/**
+ * Manda a resposta em áudio (se decidido) ou texto (padrão) — nunca perde a
+ * resposta: se a síntese ou o envio de áudio falhar por qualquer motivo, cai
+ * pra texto em vez de deixar a pessoa sem resposta nenhuma.
+ */
+async function entregarRespostaWhatsApp(
+  to: string,
+  mensagem: string,
+  emAudio: boolean,
+  deps: WhatsAppDeps,
+): Promise<void> {
+  if (emAudio) {
+    try {
+      const audio = await synthesizeSpeech(mensagem, deps);
+      await sendWhatsAppAudio(to, audio, deps);
+      return;
+    } catch (err) {
+      console.error(`[reflex] resposta em áudio falhou, caindo pra texto: ${semDadoPessoal(err)}`);
+    }
+  }
+  await sendWhatsAppMessages(to, splitMessages(mensagem), deps);
+}
+
+async function handleSharedNumberMessage(
+  text: string,
+  fromRaw: string | undefined,
+  entradaEraAudio: boolean,
+): Promise<Response> {
   if (!fromRaw) return resp({ ok: true }, 200);
   const fromE164 = normalizeWhatsAppJidToE164(fromRaw);
   if (!fromE164) return resp({ ok: true }, 200); // grupo ou remetente não-parseável — ignora, sem gerar dado nenhum
@@ -284,7 +318,7 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
   // compartilhada em vez do EVOLUTION_* global.
   let decision: Decision;
   try {
-    decision = await classify(text);
+    decision = await classify(text, tenant.frentes);
     if (decision.tier === "deep") decision = { ...decision, tier: "fast" };
   } catch (err) {
     console.error(`[reflex] classify falhou (número compartilhado): ${semDadoPessoal(err)}`);
@@ -306,9 +340,13 @@ async function handleSharedNumberMessage(text: string, fromRaw: string | undefin
         timeoutMs: FAST_BG_TIMEOUT_MS,
         tenantSlug: tenant.slug,
       });
-      const bubbles = splitMessages(result.message);
       const whatsappDeps: WhatsAppDeps = { fetch, env: await buildSharedNumberEnv(tenant) };
-      await sendWhatsAppMessages(fromRaw, bubbles, whatsappDeps);
+      await entregarRespostaWhatsApp(
+        fromRaw,
+        result.message,
+        deveResponderEmAudio(entradaEraAudio, tenant.resposta_audio_sempre),
+        whatsappDeps,
+      );
     } catch (err) {
       console.error(`[reflex] entrega (número compartilhado) falhou: ${semDadoPessoal(err)}`);
     }
@@ -339,7 +377,7 @@ Deno.serve(async (req: Request) => {
     } catch { /* observabilidade não pode derrubar o request */ }
   }
 
-  let body: { text?: unknown; from?: unknown; instance?: unknown };
+  let body: { text?: unknown; from?: unknown; instance?: unknown; kind?: unknown };
   try { body = await req.json(); } catch { return resp({ error: "Invalid JSON" }, 400); }
 
   if (!body.text || typeof body.text !== "string") {
@@ -366,6 +404,13 @@ Deno.serve(async (req: Request) => {
   const instanceRaw = typeof body.instance === "string" ? body.instance.trim() : "";
   const instance = instanceRaw.length > 0 ? instanceRaw : undefined;
 
+  // `kind` ("text"|"audio"|"image") vem do node "Extract Message" do workflow
+  // do n8n, repassado pelo node "Call Edge Function" — decide se a resposta
+  // espelha em áudio (ver _shared/audio-reply.ts). Sem o campo (n8n mais
+  // antigo, ou outro chamador), cai em "não sei" — nunca assume áudio por
+  // falta de informação.
+  const entradaEraAudio = body.kind === "audio";
+
   // Número compartilhado: roteamento por quem mandou, não por instância. Ver
   // comentário grande acima de handleSharedNumberMessage — só ativa quando
   // PLATFORM_EVOLUTION_INSTANCE estiver setado E bater com o `instance` do
@@ -373,7 +418,7 @@ Deno.serve(async (req: Request) => {
   const platformInstance = platformEvolutionInstance();
   if (platformInstance && instance === platformInstance) {
     try {
-      return await handleSharedNumberMessage(text, from);
+      return await handleSharedNumberMessage(text, from, entradaEraAudio);
     } catch (err) {
       console.error(`[reflex] handleSharedNumberMessage falhou: ${semDadoPessoal(err)}`);
       return resp({ ok: true }, 200);
@@ -381,12 +426,18 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Resolve o tenant UMA vez, ANTES de classificar — o classificador
+    // precisa das frentes REAIS de quem está falando (achado da auditoria de
+    // "prompt mestre", 21/08/2026), e os 3 usos abaixo (reflex, fast síncrono,
+    // fast assíncrono) reconsultavam o mesmo tenant cada um por conta própria.
+    const tenant = await resolveTenant(instance);
+
     // Sempre classifica no servidor — nunca aceita `decision` do corpo. O
     // campo existia pra permitir pular a chamada do classificador, mas isso
     // também deixava QUALQUER chamador escolher o tier (e portanto o
     // orçamento/tools liberados) da própria mensagem sem passar pelo Haiku.
     // Nenhum caller legítimo do repositório manda esse campo hoje.
-    let decision = await classify(text);
+    let decision = await classify(text, tenant?.frentes ?? []);
     // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
     // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
     // A classificação sozinha já basta pra diagnóstico.
@@ -408,12 +459,11 @@ Deno.serve(async (req: Request) => {
       // prioridade do dia). Sem saber DE QUEM é a mensagem não há resposta
       // segura possível: responder assumindo um tenant padrão foi exatamente o
       // que fazia um usuário receber a prioridade de outro. Recusa é o certo.
-      const tenantReflex = await resolveTenant(instance);
-      if (!tenantReflex) {
+      if (!tenant) {
         console.error("[reflex] tier reflex sem tenant resolvido — recusando em vez de assumir um padrão");
         return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
       }
-      const result = await orchestrateReflex(text, decision, buildDeps(tenantReflex.id));
+      const result = await orchestrateReflex(text, decision, buildDeps(tenant.id));
       return resp(result, 200);
     }
 
@@ -432,10 +482,9 @@ Deno.serve(async (req: Request) => {
         const deliver = (async () => {
           try {
             await dbg.from("async_debug").insert({ step: "bg_start", detail: "" });
-            // Resolve o tenant UMA vez: /fast usa pras tools (calendar/tarefas/
-            // GA4), o envio abaixo usa pra credenciais do WhatsApp — mesma
-            // fonte de verdade, sem consultar o DB duas vezes.
-            const tenant = await resolveTenant(instance);
+            // `tenant` já foi resolvido acima (antes de classificar) — /fast
+            // usa pras tools (calendar/tarefas/GA4), o envio abaixo usa pra
+            // credenciais do WhatsApp — mesma fonte de verdade, uma consulta só.
             const result = await callFastEndpoint({
               text,
               decision,
@@ -449,10 +498,19 @@ Deno.serve(async (req: Request) => {
               detail: `ok=${result.ok} len=${result.message.length} bubbles=${bubbles.length}`,
             });
             try {
-              const whatsappDeps: WhatsAppDeps | undefined = tenant
-                ? { fetch, env: await buildTenantEnv(tenant) }
-                : undefined;
-              await sendWhatsAppMessages(from, bubbles, whatsappDeps);
+              if (tenant) {
+                const whatsappDeps: WhatsAppDeps = { fetch, env: await buildTenantEnv(tenant) };
+                await entregarRespostaWhatsApp(
+                  from,
+                  result.message,
+                  deveResponderEmAudio(entradaEraAudio, tenant.resposta_audio_sempre),
+                  whatsappDeps,
+                );
+              } else {
+                // Sem tenant resolvido não dá pra saber a preferência de áudio
+                // — mesmo comportamento de sempre (texto, env global).
+                await sendWhatsAppMessages(from, bubbles, undefined);
+              }
               await dbg.from("async_debug").insert({ step: "sent_ok", detail: "" });
             } catch (err) {
               await dbg.from("async_debug").insert({ step: "send_err", detail: semDadoPessoal(err) });
@@ -473,8 +531,7 @@ Deno.serve(async (req: Request) => {
       // Passa o tenant também aqui — sem ele, o /fast montava o prompt com a
       // persona default e as tools caíam no ambiente global. Era um caminho de
       // PRODUÇÃO, não só de teste.
-      const tenantSync = await resolveTenant(instance);
-      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenantSync?.slug });
+      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenant?.slug });
       return resp(result, 200);
     }
 

@@ -11,6 +11,44 @@
   --muted-2: #7a8089;
   --cyan: #0e7a82;
   --violet: #6e58a8;
+
+  /* Aurora — identidade de marca de praticamente todo o site (não só as 3
+     rotas públicas originais — o nome ficou, o alcance cresceu). Rebrand
+     20/08/2026: slate escuro + ouro clássico no lugar do violeta, tokens
+     tirados ao pé da letra de um board de referência (Primary #0F172A /
+     Secondary #334155 / Tertiary #D4AF37 / Neutral #F8FAFC — é a rampa Slate
+     + um dourado). Fundo virou CLARO — inverte a relação inteira: borda e
+     superfície eram branco-transparente sobre fundo escuro, agora são
+     preto-transparente sobre fundo claro. Continua NÃO sendo dark mode
+     alternável: é a pele definitiva, só que agora clara em vez de escura.
+     Os tokens compartilhados (--background, --foreground etc.) continuam
+     servindo /onboarding e /admin nos estados de fallback. */
+  --aurora-bg: #f8fafc;
+  --aurora-surface: #ffffff;
+  --aurora-surface-2: #f1f5f9;
+  --aurora-line: rgba(15, 23, 42, 0.1);
+  --aurora-line-soft: rgba(15, 23, 42, 0.06);
+  --aurora-fg: #0f172a;
+  --aurora-muted: #64748b;
+  --aurora-muted-2: #334155;
+  --aurora-accent: #d4af37;
+  /* Ouro mais escuro — o acento real é claro-médio, ilegível como TEXTO sobre
+     o fundo claro; esta variante existe só pra texto/ícone que precisa ler
+     como "cor de marca" sem virar acento de botão sólido. */
+  --aurora-accent-text: #8a6428;
+  /* Antes era texto claro sobre um accent escuro (violeta); agora o accent é
+     claro-médio, então o texto sobre ele precisa ser escuro — papel invertido
+     de propósito, mesmo nome de token. */
+  --aurora-accent-ink: #2b2005;
+  --aurora-glow: rgba(15, 23, 42, 0.14);
+  /* Semânticas de /novidades — deliberadamente NÃO usam --aurora-accent, pra
+     "isso é novo" nunca se confundir com "isso é a marca Mia". Aprofundadas
+     em relação à versão escura: a mesma cor clara que lia bem sobre fundo
+     quase-preto (#120c1e) perde contraste sobre fundo quase-branco. */
+  --aurora-ok: #2f9d6f;
+  --aurora-info: #3f7fc4;
+  --aurora-warn: #b8752e;
+  --aurora-crit: #b33939;
 }
 
 @theme inline {
@@ -24,11 +62,44 @@
   --color-muted-2: var(--muted-2);
   --color-cyan: var(--cyan);
   --color-violet: var(--violet);
+
+  --color-aurora-bg: var(--aurora-bg);
+  --color-aurora-surface: var(--aurora-surface);
+  --color-aurora-surface-2: var(--aurora-surface-2);
+  --color-aurora-line: var(--aurora-line);
+  --color-aurora-line-soft: var(--aurora-line-soft);
+  --color-aurora-fg: var(--aurora-fg);
+  --color-aurora-muted: var(--aurora-muted);
+  --color-aurora-muted-2: var(--aurora-muted-2);
+  --color-aurora-accent: var(--aurora-accent);
+  --color-aurora-accent-text: var(--aurora-accent-text);
+  --color-aurora-accent-ink: var(--aurora-accent-ink);
+  --color-aurora-ok: var(--aurora-ok);
+  --color-aurora-info: var(--aurora-info);
+  --color-aurora-warn: var(--aurora-warn);
+  --color-aurora-crit: var(--aurora-crit);
+
   --font-sans: var(--font-body);
+  --font-serif: var(--font-display);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+}
+
+.aurora-bg {
+  background-color: var(--aurora-bg);
+}
+
+/* Antes era glow de neon violeta sobre fundo escuro — não faz sentido no
+   fundo claro novo. Vira sombra suave de elevação; nomes de classe mantidos
+   de propósito pra não precisar tocar em todo call site. */
+.aurora-glow {
+  box-shadow: 0 2px 10px var(--aurora-glow);
+}
+
+.aurora-glow-btn {
+  box-shadow: 0 6px 18px var(--aurora-glow);
 }

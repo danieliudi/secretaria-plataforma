@@ -9,6 +9,7 @@
 // Property ID está em GA4 → Admin → Configurações da propriedade.
 
 import { getGoogleAccessToken } from "./google-oauth.ts";
+import { frentesDoEnv } from "./tenant.ts";
 
 const GA4_BASE = "https://analyticsdata.googleapis.com/v1beta";
 
@@ -67,6 +68,13 @@ interface RunReportResponse {
   }>;
 }
 
+/** Erro da Data API com o status HTTP preservado, pra distinguir "métrica incompatível" (400) de auth/permissão/quota. */
+export class Ga4ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function runReport(
   property: string,
   body: Record<string, unknown>,
@@ -82,7 +90,7 @@ async function runReport(
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`GA4 runReport ${res.status}: ${(await res.text()).slice(0, 250)}`);
+    throw new Ga4ApiError(res.status, `GA4 runReport ${res.status}: ${(await res.text()).slice(0, 250)}`);
   }
   return (await res.json()) as RunReportResponse;
 }
@@ -110,7 +118,13 @@ async function totalsReport(
       activeUsers: Number(v[1]?.value ?? 0),
       conversions: Number(v[2]?.value ?? 0),
     };
-  } catch (_e) {
+  } catch (e) {
+    // Só refaz sem "conversions" quando o erro é mesmo de métrica incompatível
+    // (400). Auth/permissão/quota (401/403/429/5xx) tem que estourar de
+    // verdade — senão o segundo runReport tenta de novo com as MESMAS
+    // credenciais e falha igual, e o retorno acaba fingindo "sem conversões"
+    // (conversions: null) em vez de reportar o erro real.
+    if (!(e instanceof Ga4ApiError) || e.status !== 400) throw e;
     const r = await runReport(property, {
       ...base,
       metrics: [{ name: "sessions" }, { name: "activeUsers" }],
@@ -195,19 +209,17 @@ export async function getGa4Snapshot(
 
 // ─── System prompt block ───────────────────────────────────────────────────────
 
-const ALL_FRENTES = ["resibag", "sanwey", "athleisure", "bootcamp", "pessoal", "side_ai"];
-
-export function buildGa4SystemBlock(map: Ga4PropertyMap | null): string {
+export function buildGa4SystemBlock(map: Ga4PropertyMap | null, env: (k: string) => string | undefined): string {
   if (!map || Object.keys(map).length === 0) {
     return `ACESSO AO GA4 (analytics de site)
-- Não configurado. Se Daniel pedir métricas de site/tráfego, diga que o Google Analytics ainda não está integrado.`;
+- Não configurado. Se pedirem métricas de site/tráfego, diga que o Google Analytics ainda não está integrado.`;
   }
   const frentes = Object.keys(map).join(", ");
   const known = Object.keys(map).map((f) => f.toLowerCase());
-  const missing = ALL_FRENTES.filter((f) => !known.includes(f));
+  const missing = frentesDoEnv(env).filter((f) => !known.includes(f));
   const missingNote = missing.length === 0
     ? ""
-    : `\n- Frentes SEM GA4: ${missing.join(", ")}. Se Daniel pedir métricas de uma dessas, diga que não está integrada.`;
+    : `\n- Frentes SEM GA4: ${missing.join(", ")}. Se pedirem métricas de uma dessas, diga que não está integrada.`;
   return `ACESSO AO GA4 (analytics de site)
 - 1 tool: get_ga4_metrics(frente, days?). Retorna sessões, usuários ativos, conversões (se disponível), variação vs período anterior e top canais.
 - Frentes com GA4: ${frentes}.

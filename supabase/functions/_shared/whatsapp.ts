@@ -173,6 +173,40 @@ export async function sendWhatsAppImage(
   }
 }
 
+/**
+ * Envia uma NOTA DE VOZ nativa (bubble com waveform, "ouvir") via Evolution
+ * `sendWhatsAppAudio` — endpoint dedicado, diferente de sendMedia: o servidor
+ * força `ptt:true` incondicionalmente pra toda chamada aqui.
+ *
+ * `encoding` fica no default (Evolution reconverte via ffmpeg pra OGG/Opus
+ * antes de enviar) mesmo já mandando OGG/Opus — mais seguro que declarar
+ * `encoding: false`, que pula a conversão e assume, sem checar, que o buffer
+ * já é OGG/Opus válido.
+ */
+export async function sendWhatsAppAudio(
+  to: string,
+  audioBytes: Uint8Array,
+  deps: WhatsAppDeps = defaultWhatsAppDeps(),
+): Promise<void> {
+  const { base, instance, apikey } = evolutionConfig(deps.env);
+  const url = `${base}/message/sendWhatsAppAudio/${instance}`;
+  const res = await deps.fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "apikey": apikey },
+    body: JSON.stringify({ number: to, audio: bytesToBase64(audioBytes) }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Evolution sendWhatsAppAudio ${res.status}: ${body.slice(0, 200)}`);
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
 // Separador que o fast injeta entre bolhas. Triplo-traço numa linha sozinha é
 // raro em texto natural BR e markdown horizontal-rule — improvável colidir.
 export const MESSAGE_BREAK = "\n---\n";

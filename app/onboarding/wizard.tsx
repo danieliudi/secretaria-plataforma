@@ -1,40 +1,40 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 import { PRESETS, type Personalidade } from "@/lib/personalidade";
+import { garanteOrigemCanonica } from "@/lib/site-url";
+import { AppHeader } from "@/components/AppHeader";
 
-type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "sanwey_tasks";
-type Channel = "whatsapp" | "telegram" | "both";
-type RemoteList = { id: string; name: string; path: string };
+type Provider = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks";
+type Channel = "whatsapp" | "telegram" | "teams";
 
 const PROVIDER_OPTIONS: Array<{
   value: Provider;
   label: string;
   hint: string;
-  placeholder: string;
   tokenSteps: string[] | null;
   helpLink: { href: string; label: string } | null;
-  mapHint: string;
-  /** Como buscar as listas reais: "flat" (frente → id), "nested" (frente → {nome: id}), ou "manual" (sem busca, cola o JSON). */
-  pickerKind: "flat" | "nested" | "manual";
 }> = [
   {
     value: "google_tasks",
     label: "Google Tasks",
-    hint: "Grátis e já pronto — reusa o login que você acabou de fazer, sem token extra. Recomendado se você não usa nenhuma das outras plataformas ainda.",
-    placeholder: '{"pessoal": "IDdaSuaListaAqui"}',
+    hint: "Grátis e já pronto — reusa o login que você acabou de fazer, sem token extra.",
     tokenSteps: null,
     helpLink: null,
-    mapHint: "Escolha pra cada frente qual lista do Google Tasks ela usa.",
-    pickerKind: "flat",
+  },
+  {
+    value: "microsoft_todo",
+    label: "Microsoft To Do",
+    hint: "Também grátis e sem token extra — reusa o login do Outlook.",
+    tokenSteps: null,
+    helpLink: null,
   },
   {
     value: "clickup",
     label: "ClickUp",
-    hint: "Cole seu token pessoal (app.clickup.com/settings/apps) e o mapa de frente → lists.",
-    placeholder: '{"resibag": {"Pauta & Reuniões": "901700000000"}}',
+    hint: "Cole seu token pessoal (app.clickup.com/settings/apps).",
     tokenSteps: [
       "Entra na sua conta do ClickUp pelo navegador.",
       "Clica no seu avatar (canto superior direito) → Settings.",
@@ -46,33 +46,32 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://help.clickup.com/hc/en-us/articles/6303422883095-Create-your-own-app-with-the-ClickUp-API",
       label: "Guia oficial do ClickUp (com imagens)",
     },
-    mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
-    pickerKind: "nested",
   },
   {
     value: "notion",
     label: "Notion",
-    hint: "Token de uma integração interna (notion.so/my-integrations) — compartilhe cada database com ela antes.",
-    placeholder: '{"resibag": "databaseIdAqui"}',
+    hint: "Token de uma integração do Notion (notion.so/my-integrations) — depois é preciso conectar pelo menos 1 página a ela.",
+    // Passos revisados 21/08/2026 depois de alguém tentar seguir e travar: o
+    // Notion tirou a escolha de tipo "Internal" na criação (agora toda
+    // integração nova já nasce interna) e chama o vínculo com a página de
+    // "Connection". Os textos abaixo descrevem o RESULTADO esperado em vez de
+    // depender do rótulo exato do botão — o Notion mexe nisso com frequência.
     tokenSteps: [
       "Acessa notion.so/my-integrations (logado com a conta certa).",
-      "Clica em \"+ New integration\".",
-      "Dá um nome, escolhe o workspace e o tipo \"Internal\".",
-      "Depois de criada, clica em \"Show\" no token e copia (começa com \"secret_\" ou \"ntn_\").",
-      "Importante: isso sozinho não dá acesso a nada — abre cada database que a secretária vai usar, clica nos \"...\" no canto superior direito → \"Connections\" → \"Connect to\" → escolhe a integração que você acabou de criar.",
+      "Clica em \"New integration\", dá um nome e escolhe o workspace.",
+      "Copia o token que aparece (começa com \"secret_\" ou \"ntn_\") — pode ser preciso clicar em \"Show\" antes.",
+      "Importante: abre a página do Notion onde a Mia vai trabalhar, clica nos \"...\" do canto superior direito e procura \"Connections\" (ou \"Conexões\"). Escolhe ali a integração que você acabou de criar.",
+      "Sem esse último passo o token não enxerga nada — é a conexão com a página que dá acesso, não o token sozinho.",
     ],
     helpLink: {
       href: "https://www.notion.com/help/create-integrations-with-the-notion-api",
       label: "Guia oficial do Notion (com imagens)",
     },
-    mapHint: "Depois de colar o token e compartilhar os databases com a integração, clica em buscar.",
-    pickerKind: "flat",
   },
   {
     value: "trello",
     label: "Trello",
     hint: "Token de acesso pessoal. (A API key do app fica combinada por enquanto — se precisar, fale com quem administra a plataforma.)",
-    placeholder: '{"resibag": {"A Fazer": "60a1b2c3d4e5f6"}}',
     tokenSteps: [
       "Quem administra a plataforma já tem uma chave de API do Trello configurada — você não precisa criar uma.",
       "Peça pra essa pessoa o link de autorização pronto (usa a chave dela). Ao abrir e clicar em \"Allow\", o Trello mostra seu token pessoal.",
@@ -82,21 +81,16 @@ const PROVIDER_OPTIONS: Array<{
       href: "https://support.atlassian.com/trello/docs/getting-started-with-trello-rest-api/",
       label: "Guia oficial do Trello (com imagens)",
     },
-    mapHint: "Depois de colar o token, clica em buscar e escolhe a lista de cada frente pelo nome.",
-    pickerKind: "nested",
   },
   {
     value: "sanwey_tasks",
     label: "Sanwey Tasks (Meu To-Do do Daniel)",
-    hint: "Só pra quem administra a plataforma — conecta com o \"Meu To-Do\" pessoal dentro do sanwey-crm (Gestão Sanwey). Não é uma opção pra uso geral.",
-    placeholder: '{"resibag": "Resibag"}',
+    hint: "Só pra quem administra a plataforma — conecta com o \"Meu To-Do\" pessoal dentro do sanwey-crm (Gestão Sanwey), usando a frente como tag. Não é uma opção pra uso geral.",
     tokenSteps: [
       "Esse token não é gerado por você aqui — é o mesmo valor de PERSONAL_TASKS_AGENT_KEY configurado nos secrets da function personal-tasks-agent, no projeto Supabase do sanwey-crm.",
       "Se você não configurou isso pessoalmente, essa opção não é pra sua conta — fale com quem administra a plataforma.",
     ],
     helpLink: null,
-    mapHint: "Mapeie cada frente para a tag correspondente no seu \"Meu To-Do\" do sanwey-crm (ex: resibag → tag \"Resibag\").",
-    pickerKind: "manual",
   },
 ];
 
@@ -104,8 +98,7 @@ const CHANNEL_OPTIONS: Array<{
   value: Channel;
   label: string;
   hint: string;
-  info: string | null;
-  setup: string;
+  info: string;
   recommended?: boolean;
 }> = [
   {
@@ -113,22 +106,19 @@ const CHANNEL_OPTIONS: Array<{
     label: "WhatsApp",
     hint: "Você já usa no dia a dia — ninguém precisa aprender um app novo.",
     info: "Grátis pra você — todo mundo conversa pelo mesmo número da plataforma. Ao concluir esse passo você recebe um código: é só mandar ele numa mensagem pro número oficial pra vincular seu WhatsApp à sua secretária.",
-    setup: "Sem token nem configuração técnica nenhuma — o vínculo é feito só com esse código, direto no seu WhatsApp.",
     recommended: true,
   },
   {
     value: "telegram",
     label: "Telegram",
     hint: "Grátis, e você mesmo consegue criar o bot agora — sem esperar ninguém configurar nada.",
-    info: null,
-    setup: "Você cria seu próprio bot em poucos passos e cola o token abaixo.",
+    info: "Você cria seu próprio bot em poucos passos e cola o token abaixo.",
   },
   {
-    value: "both",
-    label: "Os dois",
-    hint: "WhatsApp pro dia a dia, Telegram como alternativa ou pra não misturar com o número pessoal.",
-    info: "Os dois são grátis pra você. O Telegram você configura agora (token abaixo); o WhatsApp você vincula com um código que aparece ao concluir esse passo.",
-    setup: "Telegram: token abaixo. WhatsApp: código de vínculo na tela seguinte.",
+    value: "teams",
+    label: "Microsoft Teams",
+    hint: "Se seu trabalho já vive no Teams — mesma ideia do WhatsApp, um código de 6 letras vincula sua conta.",
+    info: "Grátis pra você — todo mundo conversa pelo mesmo bot da plataforma. Ao concluir esse passo você recebe um código: é só mandar ele numa mensagem pro bot pra vincular sua conta do Teams.",
   },
 ];
 
@@ -169,6 +159,10 @@ function primeiroNome(nomeCompleto: string): string {
 export default function OnboardingWizard(props: {
   slug: string;
   email: string;
+  userLabel: string;
+  pendentes: number;
+  /** Vem de `?step=` — link de "editar" no /app pousando no passo certo. */
+  initialStep?: Step;
   initialNome: string;
   initialCargo: string;
   initialFrentes: string;
@@ -190,14 +184,18 @@ export default function OnboardingWizard(props: {
   googleConnected: boolean;
   outlookConnected: boolean;
   linkError: string | null;
-  initialChannelPreference: Channel | null;
+  initialChannels: Channel[];
   telegramConnected: boolean;
   trelloApiKeyConfigured: boolean;
   whatsappConnected: boolean;
   initialWhatsappLinkCode: string | null;
   initialWhatsappLinkCodeExpiresAt: string | null;
+  teamsConnected: boolean;
+  initialTeamsLinkCode: string | null;
+  initialTeamsLinkCodeExpiresAt: string | null;
+  initialRespostaAudioSempre: boolean;
 }) {
-  const [step, setStep] = useState<Step>(1);
+  const [step, setStep] = useState<Step>(props.initialStep ?? 1);
   const [nome, setNome] = useState(props.initialNome);
   const [cargo, setCargo] = useState(props.initialCargo);
   const [frentes, setFrentes] = useState(props.initialFrentes);
@@ -218,91 +216,38 @@ export default function OnboardingWizard(props: {
   const [provider, setProvider] = useState<Provider>(props.initialProvider);
   const [token, setToken] = useState("");
   const [trelloApiKey, setTrelloApiKey] = useState("");
-  const [listMap, setListMap] = useState("");
-  const [remoteLists, setRemoteLists] = useState<RemoteList[] | null>(null);
-  const [remoteListsLoading, setRemoteListsLoading] = useState(false);
-  const [remoteListsError, setRemoteListsError] = useState<string | null>(null);
-  const [frenteListMap, setFrenteListMap] = useState<Record<string, string>>({});
-  const [channel, setChannel] = useState<Channel | null>(props.initialChannelPreference);
+  const [showAdvancedProviders, setShowAdvancedProviders] = useState(
+    !["google_tasks", "microsoft_todo"].includes(props.initialProvider),
+  );
+  const [listasCriadas, setListasCriadas] = useState<string[] | null>(null);
+  const [listasFalhas, setListasFalhas] = useState<Array<{ frente: string; erro: string }>>([]);
+  const [channels, setChannels] = useState<Set<Channel>>(new Set(props.initialChannels));
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramWebhookStatus, setTelegramWebhookStatus] = useState<string | null>(null);
   const [telegramWebhookWarning, setTelegramWebhookWarning] = useState<string | null>(null);
   const [whatsappLinkCode, setWhatsappLinkCode] = useState<string | null>(props.initialWhatsappLinkCode);
   const [whatsappLinkCodeExpiresAt, setWhatsappLinkCodeExpiresAt] = useState<string | null>(props.initialWhatsappLinkCodeExpiresAt);
   const [whatsappConnected, setWhatsappConnected] = useState(props.whatsappConnected);
+  const [teamsLinkCode, setTeamsLinkCode] = useState<string | null>(props.initialTeamsLinkCode);
+  const [teamsLinkCodeExpiresAt, setTeamsLinkCodeExpiresAt] = useState<string | null>(props.initialTeamsLinkCodeExpiresAt);
+  const [teamsConnected, setTeamsConnected] = useState(props.teamsConnected);
+  const [respostaAudioSempre, setRespostaAudioSempre] = useState(props.initialRespostaAudioSempre);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [connectingProvider, setConnectingProvider] = useState<OAuthProviderId | null>(null);
-  const [showAdvancedProviders, setShowAdvancedProviders] = useState(props.initialProvider !== "google_tasks");
 
   const providerInfo = PROVIDER_OPTIONS.find((p) => p.value === provider)!;
-  const channelInfo = CHANNEL_OPTIONS.find((c) => c.value === channel) ?? null;
-  const wantsTelegram = channel === "telegram" || channel === "both";
-  const wantsWhatsapp = channel === "whatsapp" || channel === "both";
+  const wantsTelegram = channels.has("telegram");
+  const wantsWhatsapp = channels.has("whatsapp");
+  const wantsTeams = channels.has("teams");
   const telegramActive = telegramWebhookStatus === "registered";
   const telegramFailed = telegramWebhookStatus === "failed";
   const frentesArr = frentes.split(",").map((f) => f.trim()).filter(Boolean);
-
-  // Reseta a busca de listas sempre que troca de plataforma — a busca anterior
-  // não vale mais. Ajuste de estado durante o render (em vez de useEffect) é o
-  // padrão recomendado pra "resetar estado quando uma prop muda" — evita o
-  // reflow extra de resetar depois do commit.
-  const prevProviderRef = useRef(provider);
-  if (prevProviderRef.current !== provider) {
-    prevProviderRef.current = provider;
-    setRemoteLists(null);
-    setRemoteListsError(null);
-    setFrenteListMap({});
-  }
-
-  // Pro Google Tasks já busca na hora, porque não depende de token (reusa o
-  // login que já aconteceu) — isso é uma chamada de rede, então fica num efeito.
-  useEffect(() => {
-    if (provider === "google_tasks") {
-      loadRemoteLists();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
-
-  async function loadRemoteLists() {
-    setRemoteListsLoading(true);
-    setRemoteListsError(null);
-    try {
-      // Partial, não Record<Exclude<Provider, "google_tasks">, string>: nem
-      // todo provider fora do Google Tasks busca lista remota — sanwey_tasks
-      // é "manual" (frente → tag digitada, sem endpoint de busca).
-      const endpoints: Partial<Record<Provider, string>> = {
-        clickup: "clickup-lists",
-        notion: "notion-databases",
-        trello: "trello-lists",
-      };
-      const endpoint = endpoints[provider];
-      if (provider !== "google_tasks" && !endpoint) {
-        setRemoteListsError("Essa plataforma não busca listas automaticamente — preencha o mapa manualmente.");
-        return;
-      }
-      const res = provider === "google_tasks"
-        ? await fetch("/api/onboarding/google-tasks-lists")
-        : await fetch(`/api/onboarding/${endpoint}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(
-              provider === "trello" ? { token, apiKey: trelloApiKey } : { token },
-            ),
-          });
-      const data = await res.json();
-      if (!res.ok) {
-        setRemoteListsError(data.error ?? "Não conseguimos buscar suas listas.");
-        return;
-      }
-      setRemoteLists(data.lists);
-    } catch {
-      setRemoteListsError("Falha de conexão ao buscar listas.");
-    } finally {
-      setRemoteListsLoading(false);
-    }
-  }
+  // Google Tasks/Microsoft To Do reaproveitam o login — o selo de recomendado
+  // segue qual conta a pessoa já conectou, não uma escolha fixa.
+  const googleTasksRecommended = props.googleConnected;
+  const microsoftTodoRecommended = props.outlookConnected;
 
   async function submitJson(url: string, body: unknown): Promise<Record<string, unknown> | null> {
     setSaving(true);
@@ -352,6 +297,11 @@ export default function OnboardingWizard(props: {
   // callback grava no Vault. Reautenticar entrega isso; vincular de novo, não.
   async function handleConnectProvider(provider: OAuthProviderId) {
     setConnectingProvider(provider);
+    // Mesmo motivo do /login: o cookie do code verifier do PKCE é host-only, e
+    // precisa nascer no mesmo host que vai receber o `code` de volta. Ver
+    // lib/site-url.ts.
+    if (garanteOrigemCanonica("/onboarding")) return;
+
     const supabase = createClient();
     const cfg = OAUTH_PROVIDERS[provider];
     const opcoes = {
@@ -406,41 +356,35 @@ export default function OnboardingWizard(props: {
     if (result) setStep(2);
   }
 
-  function buildListMapPayload(): string {
-    if (providerInfo.pickerKind === "manual") return listMap;
-    // Busca automática falhou (ex: TRELLO_API_KEY não configurada) e a pessoa
-    // preencheu o textarea de fallback — usa isso em vez do picker.
-    if (remoteListsError && listMap.trim()) return listMap;
-
-    const chosen = Object.entries(frenteListMap).filter(([, listId]) => listId);
-    if (providerInfo.pickerKind === "flat") {
-      return JSON.stringify(Object.fromEntries(chosen));
-    }
-    // nested: frente → { nomeDaLista: id }
-    const nested: Record<string, Record<string, string>> = {};
-    for (const [frente, listId] of chosen) {
-      const list = remoteLists?.find((l) => l.id === listId);
-      if (list) nested[frente] = { [list.name]: list.id };
-    }
-    return JSON.stringify(nested);
-  }
-
   async function handleProviderSubmit() {
     const result = await submitJson("/api/onboarding/task-provider", {
       provider,
       token,
-      list_map: buildListMapPayload(),
       trello_api_key: provider === "trello" ? trelloApiKey : "",
     });
-    if (result) setStep(3);
+    if (result) {
+      setListasCriadas(Array.isArray(result.criadas) ? (result.criadas as string[]) : []);
+      setListasFalhas(Array.isArray(result.falhas) ? (result.falhas as Array<{ frente: string; erro: string }>) : []);
+      setStep(3);
+    }
+  }
+
+  function toggleChannel(value: Channel) {
+    setChannels((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
   }
 
   async function handleChannelSubmit() {
-    if (!channel) return;
+    if (channels.size === 0) return;
     const result = await submitJson("/api/onboarding/channel", {
-      channel_preference: channel,
+      channels: [...channels],
       telegram_bot_token: telegramToken,
       envio_oficial: envioOficial,
+      resposta_audio_sempre: respostaAudioSempre,
     });
     if (result) {
       setTelegramWebhookStatus(typeof result.telegram_webhook === "string" ? result.telegram_webhook : null);
@@ -448,27 +392,37 @@ export default function OnboardingWizard(props: {
       setWhatsappLinkCode(typeof result.whatsapp_link_code === "string" ? result.whatsapp_link_code : null);
       setWhatsappLinkCodeExpiresAt(typeof result.whatsapp_link_code_expires_at === "string" ? result.whatsapp_link_code_expires_at : null);
       if (result.whatsapp_already_linked === true) setWhatsappConnected(true);
+      setTeamsLinkCode(typeof result.teams_link_code === "string" ? result.teams_link_code : null);
+      setTeamsLinkCodeExpiresAt(typeof result.teams_link_code_expires_at === "string" ? result.teams_link_code_expires_at : null);
+      if (result.teams_already_linked === true) setTeamsConnected(true);
       setStep(4);
       setFinished(true);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-16">
-      <div className="flex w-full max-w-lg flex-col gap-6">
-        <div className="flex items-center justify-between gap-3">
-          <StepIndicator step={step} />
+    <main className="aurora-bg min-h-screen">
+      <AppHeader
+        active="app"
+        isPlatformOwner={props.isPlatformOwner}
+        pendentes={props.pendentes}
+        userLabel={props.userLabel}
+      />
+
+      <div className="mx-auto flex w-full max-w-[720px] flex-col px-8 py-9 sm:py-14">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <StepTabs step={step} onSelect={setStep} />
           <button
             type="button"
             onClick={handleSignOut}
-            className="shrink-0 text-[12.5px] font-medium text-muted-2 underline underline-offset-2 hover:text-muted"
+            className="shrink-0 text-[12.5px] font-medium text-aurora-muted-2 underline underline-offset-2 hover:text-aurora-muted"
           >
             Sair
           </button>
         </div>
 
         {error && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <p className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-[13.5px] text-red-300">
             {error}
           </p>
         )}
@@ -476,11 +430,11 @@ export default function OnboardingWizard(props: {
         {!props.aprovado && <AvisoAprovacao recusado={props.recusado} />}
 
         {step === 1 && (
-          <>
-            <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
-              <h2 className="text-[11px] font-bold uppercase tracking-wide text-muted-2">Contas conectadas</h2>
+          <div className="mt-4 flex flex-col gap-4">
+            <section className="flex flex-col gap-3 rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
+              <h2 className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">Contas conectadas</h2>
               {props.linkError && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
                   {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}
                 </p>
               )}
@@ -490,11 +444,11 @@ export default function OnboardingWizard(props: {
                   return (
                     <div
                       key={cfg.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-line-soft px-3 py-2 text-[13px]"
+                      className="flex items-center justify-between gap-3 rounded-lg border border-aurora-line-soft px-3 py-2 text-[13px]"
                     >
-                      <span className="text-foreground">{cfg.label}</span>
+                      <span className="text-aurora-fg">{cfg.label}</span>
                       {connected ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-cyan/10 px-2 py-0.5 text-[11.5px] font-bold text-cyan">
+                        <span className="inline-flex items-center gap-1 rounded-md bg-aurora-ok/15 px-2 py-0.5 text-[11.5px] font-bold text-aurora-ok">
                           <CheckIcon /> Conectado
                         </span>
                       ) : (
@@ -502,7 +456,7 @@ export default function OnboardingWizard(props: {
                           type="button"
                           onClick={() => handleConnectProvider(cfg.id)}
                           disabled={connectingProvider !== null}
-                          className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-surface-2 disabled:opacity-60"
+                          className="rounded-lg border border-aurora-line px-3 py-1.5 text-xs font-medium text-aurora-fg transition hover:bg-aurora-surface-2 disabled:opacity-60"
                         >
                           {connectingProvider === cfg.id ? "Redirecionando…" : "Conectar"}
                         </button>
@@ -513,48 +467,48 @@ export default function OnboardingWizard(props: {
               </div>
             </section>
 
-            <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-              <h1 className="text-xl font-semibold text-foreground">Quem é você?</h1>
-              <p className="text-[13px] leading-relaxed text-muted">
+            <section className="flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+              <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Quem é você?</h1>
+              <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
                 É o que a secretária usa pra falar com você. Só o nome é
                 obrigatório — o resto dá pra ajustar depois.
               </p>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Nome
                 <input
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
                   placeholder="Como quer ser chamado"
                 />
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Cargo (opcional)
                 <input
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={cargo}
                   onChange={(e) => setCargo(e.target.value)}
                   placeholder="Ex: sócio, gerente, freelancer…"
                 />
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Áreas da sua vida (opcional, separadas por vírgula)
                 <input
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={frentes}
                   onChange={(e) => setFrentes(e.target.value)}
                   placeholder="Ex: trabalho, casa"
                 />
-                <span className="text-xs font-normal text-muted-2">
+                <span className="text-[11.5px] font-normal text-aurora-muted-2">
                   Não sabe o que colocar? Pode deixar em branco e ajustar depois.
                 </span>
               </label>
 
               <fieldset className="flex flex-col gap-2 border-0 p-0">
-                <legend className="mb-1 text-sm font-medium text-foreground">
+                <legend className="mb-1 text-[13.5px] font-semibold text-aurora-fg">
                   Como ela deve te chamar?
                 </legend>
-                <span className="mb-1 text-xs font-normal text-muted-2">
+                <span className="mb-1 text-[11.5px] font-normal text-aurora-muted-2">
                   Ela usa com parcimônia — não em toda mensagem.
                 </span>
                 {([
@@ -571,27 +525,27 @@ export default function OnboardingWizard(props: {
                   return (
                     <label
                       key={opt.id}
-                      className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
-                        ativo ? "border-cyan bg-surface-2" : "border-line hover:border-muted-2"
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition ${
+                        ativo ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-muted-2"
                       }`}
                     >
                       <input
                         type="radio"
                         name="tratamento"
-                        className="mt-1 accent-cyan"
+                        className="mt-1 accent-aurora-accent"
                         checked={ativo}
                         onChange={() => setTratamentoOpcao(opt.id)}
                       />
                       <span className="flex flex-col">
-                        <span className="text-[13.5px] font-medium text-foreground">{opt.label}</span>
-                        <span className="text-xs font-normal text-muted">{opt.ex}</span>
+                        <span className="text-[13.5px] font-medium text-aurora-fg">{opt.label}</span>
+                        <span className="text-xs font-normal text-aurora-muted">{opt.ex}</span>
                       </span>
                     </label>
                   );
                 })}
                 {tratamentoOpcao === "outro" && (
                   <input
-                    className="mt-1 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                    className="mt-1 rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                     value={tratamentoLivre}
                     onChange={(e) => setTratamentoLivre(e.target.value)}
                     maxLength={24}
@@ -602,10 +556,10 @@ export default function OnboardingWizard(props: {
               </fieldset>
 
               <fieldset className="flex flex-col gap-2 border-0 p-0">
-                <legend className="mb-1 text-sm font-medium text-foreground">
+                <legend className="mb-1 text-[13.5px] font-semibold text-aurora-fg">
                   Como ela deve falar com você?
                 </legend>
-                <span className="mb-1 text-xs font-normal text-muted-2">
+                <span className="mb-1 text-[11.5px] font-normal text-aurora-muted-2">
                   Quando ela escrever uma mensagem pra você mandar a outra pessoa, o tom sobe
                   um degrau sozinho — ninguém fala com cliente igual fala com a própria
                   secretária.
@@ -615,26 +569,26 @@ export default function OnboardingWizard(props: {
                   return (
                     <label
                       key={preset.id}
-                      className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
-                        ativo ? "border-cyan bg-surface-2" : "border-line hover:border-muted-2"
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition ${
+                        ativo ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-muted-2"
                       }`}
                     >
                       <input
                         type="radio"
                         name="personalidade"
-                        className="mt-1 accent-cyan"
+                        className="mt-1 accent-aurora-accent"
                         checked={ativo}
                         onChange={() => setPersonalidade(preset.id)}
                       />
                       <span className="flex flex-col gap-0.5">
-                        <span className="text-[13.5px] font-medium text-foreground">
+                        <span className="text-[13.5px] font-medium text-aurora-fg">
                           {preset.label}
                         </span>
-                        <span className="text-xs font-normal text-muted-2">{preset.resumo}</span>
+                        <span className="text-xs font-normal text-aurora-muted-2">{preset.resumo}</span>
                         {/* Prévia só do selecionado: quatro exemplos abertos ao
                             mesmo tempo viram parede de texto e ninguém lê. */}
                         {ativo && (
-                          <span className="mt-1.5 rounded-md bg-surface px-2.5 py-2 text-xs font-normal italic text-muted">
+                          <span className="mt-1.5 rounded-md bg-aurora-surface px-2.5 py-2 text-xs font-normal italic text-aurora-muted">
                             “{preset.exemplo}”
                           </span>
                         )}
@@ -642,7 +596,7 @@ export default function OnboardingWizard(props: {
                     </label>
                   );
                 })}
-                <span className="text-xs font-normal text-muted-2">
+                <span className="text-[11.5px] font-normal text-aurora-muted-2">
                   Dá pra trocar depois a qualquer momento.
                 </span>
               </fieldset>
@@ -650,36 +604,45 @@ export default function OnboardingWizard(props: {
               <button
                 onClick={handlePersonaSubmit}
                 disabled={saving || !nome.trim()}
-                className="mt-2 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                className="mt-2 rounded-lg bg-aurora-fg px-6 py-3 font-semibold text-aurora-bg transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Continuar"}
               </button>
             </section>
-          </>
+          </div>
         )}
 
         {step === 2 && (
-          <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="text-xl font-semibold text-foreground">Onde ficam suas tarefas?</h1>
-            <p className="text-[13px] leading-relaxed text-muted">
+          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+            <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Onde ficam suas tarefas?</h1>
+            <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
               Escolha onde a secretária vai ler e criar tarefas pra você.
             </p>
             <div className="flex flex-col gap-2">
               <ProviderOption
                 opt={PROVIDER_OPTIONS.find((o) => o.value === "google_tasks")!}
                 selected={provider === "google_tasks"}
+                recommended={googleTasksRecommended}
+                recommendedLabel="Recomendado — você entrou com Google"
                 onSelect={() => setProvider("google_tasks")}
               />
+              <ProviderOption
+                opt={PROVIDER_OPTIONS.find((o) => o.value === "microsoft_todo")!}
+                selected={provider === "microsoft_todo"}
+                recommended={microsoftTodoRecommended}
+                recommendedLabel="Recomendado — você entrou com Outlook"
+                onSelect={() => setProvider("microsoft_todo")}
+              />
               <details
-                className="rounded-lg border border-line-soft"
+                className="rounded-lg border border-aurora-line-soft"
                 open={showAdvancedProviders}
                 onToggle={(e) => setShowAdvancedProviders(e.currentTarget.open)}
               >
-                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-muted">
+                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-aurora-muted">
                   Já usa ClickUp, Notion ou Trello? Clique aqui.
                 </summary>
-                <div className="flex flex-col gap-2 border-t border-line-soft p-3">
-                  {PROVIDER_OPTIONS.filter((o) => o.value !== "google_tasks").map((opt) => (
+                <div className="flex flex-col gap-2 border-t border-aurora-line-soft p-3">
+                  {PROVIDER_OPTIONS.filter((o) => o.value !== "google_tasks" && o.value !== "microsoft_todo").map((opt) => (
                     <ProviderOption
                       key={opt.value}
                       opt={opt}
@@ -690,19 +653,19 @@ export default function OnboardingWizard(props: {
                 </div>
               </details>
             </div>
-            {provider !== "google_tasks" && (
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+            {provider !== "google_tasks" && provider !== "microsoft_todo" && (
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Token de acesso
                 <input
                   type="password"
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder="Cole o token aqui"
                 />
                 {providerInfo.tokenSteps && (
-                  <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                    <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
+                  <details className="rounded-lg border border-aurora-line px-3 py-2 text-xs font-normal text-aurora-muted">
+                    <summary className="cursor-pointer text-[12.5px] font-semibold text-aurora-accent-text">
                       Como conseguir esse token?
                     </summary>
                     <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -715,7 +678,7 @@ export default function OnboardingWizard(props: {
                         href={providerInfo.helpLink.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-2 inline-block text-cyan underline"
+                        className="mt-2 inline-block text-aurora-accent-text underline"
                       >
                         {providerInfo.helpLink.label} ↗
                       </a>
@@ -725,17 +688,17 @@ export default function OnboardingWizard(props: {
               </label>
             )}
             {provider === "trello" && (
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Sua própria API key do Trello (opcional)
                 <input
                   type="password"
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={trelloApiKey}
                   onChange={(e) => setTrelloApiKey(e.target.value)}
                   placeholder={props.trelloApiKeyConfigured ? "Já recebemos uma key — cole outra pra trocar" : "Deixe em branco pra usar a key compartilhada da plataforma"}
                 />
-                <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                  <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
+                <details className="rounded-lg border border-aurora-line px-3 py-2 text-xs font-normal text-aurora-muted">
+                  <summary className="cursor-pointer text-[12.5px] font-semibold text-aurora-accent-text">
                     Quando eu preciso disso?
                   </summary>
                   <p className="mt-2">
@@ -752,93 +715,51 @@ export default function OnboardingWizard(props: {
               </label>
             )}
 
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-foreground">Mapa de frentes</span>
-              <span className="text-xs font-normal text-muted-2">{providerInfo.mapHint}</span>
-
-              {providerInfo.pickerKind === "manual" ? (
-                <textarea
-                  className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                  value={listMap}
-                  onChange={(e) => setListMap(e.target.value)}
-                  placeholder={providerInfo.placeholder}
-                />
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {(provider === "notion" || provider === "clickup" || provider === "trello") && (
-                    <button
-                      type="button"
-                      onClick={loadRemoteLists}
-                      disabled={remoteListsLoading || !token.trim()}
-                      className="self-start rounded-lg border border-line px-4 py-2 text-xs font-medium text-foreground transition hover:bg-surface-2 disabled:opacity-60"
-                    >
-                      {remoteListsLoading
-                        ? "Buscando…"
-                        : `Buscar minhas ${provider === "notion" ? "databases" : "listas"}`}
-                    </button>
-                  )}
-                  {provider === "google_tasks" && remoteListsLoading && (
-                    <p className="text-xs text-muted">Buscando suas listas…</p>
-                  )}
-                  {remoteListsError && (
-                    <div className="flex flex-col gap-1.5">
-                      <p className="text-xs text-red-600">{remoteListsError}</p>
-                      <span className="text-xs text-muted-2">Enquanto isso, pode colar o mapa manualmente:</span>
-                      <textarea
-                        className="min-h-24 rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-xs font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
-                        value={listMap}
-                        onChange={(e) => setListMap(e.target.value)}
-                        placeholder={providerInfo.placeholder}
-                      />
-                    </div>
-                  )}
-                  {remoteLists && remoteLists.length === 0 && (
-                    <p className="text-xs text-muted-2">
-                      {provider === "notion"
-                        ? "Nenhum database compartilhado com essa integração ainda — compartilha um (Connections → Connect to) e clica em buscar de novo."
-                        : "Nenhuma lista encontrada."}
-                    </p>
-                  )}
-                  {remoteLists && remoteLists.length > 0 && frentesArr.length === 0 && (
-                    <p className="text-xs text-muted-2">
-                      Você não cadastrou nenhuma frente no passo 1 — pode voltar lá se quiser mapear alguma, ou seguir sem mapear.
-                    </p>
-                  )}
-                  {remoteLists && remoteLists.length > 0 && frentesArr.map((frente) => (
-                    <label key={frente} className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
-                      {frente}
-                      <select
-                        className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground focus:border-cyan focus:outline-none"
-                        value={frenteListMap[frente] ?? ""}
-                        onChange={(e) =>
-                          setFrenteListMap((prev) => ({ ...prev, [frente]: e.target.value }))
-                        }
-                      >
-                        <option value="">— não mapear por enquanto —</option>
-                        {remoteLists.map((l) => (
-                          <option key={l.id} value={l.id}>{l.path}</option>
-                        ))}
-                      </select>
-                    </label>
+            <div className="rounded-lg border border-aurora-accent/35 bg-aurora-accent/[0.06] px-3.5 py-3 text-xs leading-relaxed text-aurora-muted">
+              <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">Listas das suas áreas</span>
+              <p className="mt-1">
+                Ao concluir, a Mia cria uma lista nova em {providerInfo.label} pra cada área que você
+                indicou no passo 1 — não precisa ir lá criar nada antes.
+              </p>
+              {frentesArr.length > 0 ? (
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {frentesArr.map((f) => (
+                    <span key={f} className="rounded-full border border-aurora-line bg-aurora-surface-2 px-2.5 py-1 text-[11.5px] font-semibold text-aurora-fg">
+                      {f}
+                    </span>
                   ))}
                 </div>
+              ) : (
+                <p className="mt-1.5">Sem áreas cadastradas ainda — ela cria uma lista única chamada &quot;Geral&quot;.</p>
               )}
-              <span className="text-xs font-normal text-muted-2">
-                Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
-              </span>
             </div>
+
+            {(listasCriadas !== null && (listasCriadas.length > 0 || listasFalhas.length > 0)) && (
+              <div className="rounded-lg border border-aurora-line-soft bg-aurora-surface-2 px-3.5 py-3 text-xs leading-relaxed">
+                {listasCriadas.length > 0 && (
+                  <p className="text-aurora-ok">✓ Criadas: {listasCriadas.join(", ")}</p>
+                )}
+                {listasFalhas.length > 0 && (
+                  <div className="mt-1.5 text-aurora-warn">
+                    {listasFalhas.map((f) => (
+                      <p key={f.frente}>⚠ {f.frente}: {f.erro}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(1)}
-                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:bg-surface-2"
+                className="rounded-lg border border-aurora-line px-6 py-3 font-medium text-aurora-fg transition hover:bg-aurora-surface-2"
               >
                 Voltar
               </button>
               <button
                 onClick={handleProviderSubmit}
-                disabled={saving || (provider !== "google_tasks" && !token.trim())}
-                className="flex-1 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                disabled={saving || (provider !== "google_tasks" && provider !== "microsoft_todo" && !token.trim())}
+                className="flex-1 rounded-lg bg-aurora-fg px-6 py-3 font-semibold text-aurora-bg transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Continuar"}
               </button>
@@ -847,61 +768,59 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 3 && (
-          <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-7">
-            <h1 className="text-xl font-semibold text-foreground">Como você quer conversar com ela?</h1>
-            <p className="text-[13px] leading-relaxed text-muted">
-              Escolha onde a secretária vai te mandar mensagens e receber as suas.
+          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+            <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Como você quer conversar com ela?</h1>
+            <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
+              Escolha um ou mais canais onde a secretária vai te mandar mensagens e receber as suas.
             </p>
             <div className="flex flex-col gap-2">
-              {CHANNEL_OPTIONS.map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
-                    channel === opt.value
-                      ? "border-cyan bg-cyan/5"
-                      : "border-line hover:border-line-soft"
-                  }`}
-                >
-                  <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
-                    <input
-                      type="radio"
-                      name="channel"
-                      checked={channel === opt.value}
-                      onChange={() => setChannel(opt.value)}
-                      className="accent-cyan"
-                    />
-                    {opt.label}
-                    {opt.recommended && (
-                      <span className="rounded-md bg-cyan/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan">
-                        Recomendado
-                      </span>
+              {CHANNEL_OPTIONS.map((opt) => {
+                const ativo = channels.has(opt.value);
+                return (
+                  <label
+                    key={opt.value}
+                    className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
+                      ativo ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-line-soft"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-[13.5px] font-medium text-aurora-fg">
+                      <input
+                        type="checkbox"
+                        checked={ativo}
+                        onChange={() => toggleChannel(opt.value)}
+                        className="h-[15px] w-[15px] accent-aurora-accent"
+                      />
+                      {opt.label}
+                      {opt.recommended && (
+                        <span className="rounded-md bg-aurora-accent/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-aurora-accent-text">
+                          Recomendado
+                        </span>
+                      )}
+                    </span>
+                    <span className="pl-[23px] text-xs text-aurora-muted">{opt.hint}</span>
+                    {ativo && (
+                      <div className="ml-[23px] mt-1.5 rounded-lg border border-aurora-accent/35 bg-aurora-accent/[0.06] px-3 py-2.5 text-xs leading-relaxed text-aurora-muted">
+                        <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">Como funciona</span>
+                        <p className="mt-1">{opt.info}</p>
+                      </div>
                     )}
-                  </span>
-                  <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
-                </label>
-              ))}
+                  </label>
+                );
+              })}
             </div>
-            {channelInfo?.info && (
-              <div className="rounded-lg border border-violet/30 bg-violet/5 px-3 py-2.5 text-xs leading-relaxed text-muted">
-                <span className="text-[11px] font-bold uppercase tracking-wide text-violet">Como funciona</span>
-                <p className="mt-1">{channelInfo.info}</p>
-              </div>
-            )}
-            {channelInfo && (
-              <p className="text-xs leading-relaxed text-muted-2">{channelInfo.setup}</p>
-            )}
+
             {wantsTelegram && (
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+              <label className="flex flex-col gap-1.5 text-[13.5px] font-semibold text-aurora-fg">
                 Token do bot do Telegram
                 <input
                   type="password"
-                  className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-[13.5px] font-normal text-foreground placeholder:text-muted-2 focus:border-cyan focus:outline-none"
+                  className="rounded-lg border border-aurora-line bg-aurora-surface-2 px-3 py-2 text-[13.5px] font-normal text-aurora-fg placeholder:text-aurora-muted-2 focus:border-aurora-accent focus:outline-none"
                   value={telegramToken}
                   onChange={(e) => setTelegramToken(e.target.value)}
                   placeholder={props.telegramConnected ? "Já recebemos um token — cole outro pra trocar" : "Cole o token do @BotFather aqui"}
                 />
-                <details className="rounded-lg border border-line px-3 py-2 text-xs font-normal text-muted">
-                  <summary className="cursor-pointer text-[12.5px] font-semibold text-cyan">
+                <details className="rounded-lg border border-aurora-line px-3 py-2 text-xs font-normal text-aurora-muted">
+                  <summary className="cursor-pointer text-[12.5px] font-semibold text-aurora-accent-text">
                     Como criar esse bot?
                   </summary>
                   <ol className="mt-2 list-decimal space-y-1 pl-4">
@@ -910,29 +829,31 @@ export default function OnboardingWizard(props: {
                     ))}
                   </ol>
                 </details>
-                <span className="text-xs font-normal text-muted-2">
+                <span className="text-[11.5px] font-normal text-aurora-muted-2">
                   Não sabe montar isso ainda? Pode deixar em branco e ajustar depois.
                 </span>
               </label>
             )}
             {wantsWhatsapp && (
-              whatsappConnected ? (
-                <p className="text-xs leading-relaxed text-muted-2">
-                  Seu WhatsApp já está vinculado — não precisa fazer nada aqui.
-                </p>
-              ) : (
-                <p className="text-xs leading-relaxed text-muted-2">
-                  Não precisa preencher nada agora — ao concluir esse passo você recebe um
-                  código de 6 letras pra colar numa mensagem pro WhatsApp oficial e vincular
-                  o seu número.
-                </p>
-              )
+              <p className="text-xs leading-relaxed text-aurora-muted-2">
+                {whatsappConnected
+                  ? "Seu WhatsApp já está vinculado — não precisa fazer nada aqui."
+                  : "Não precisa preencher nada agora — ao concluir esse passo você recebe um código de 6 letras pra colar numa mensagem pro WhatsApp oficial e vincular o seu número."}
+              </p>
             )}
+            {wantsTeams && (
+              <p className="text-xs leading-relaxed text-aurora-muted-2">
+                {teamsConnected
+                  ? "Sua conta do Teams já está vinculada — não precisa fazer nada aqui."
+                  : "Não precisa preencher nada agora — ao concluir esse passo você recebe um código de 6 letras pra colar numa mensagem pro bot da Mia no Teams e vincular sua conta."}
+              </p>
+            )}
+
             <fieldset className="mt-1 flex flex-col gap-2 border-0 p-0">
-              <legend className="mb-1 text-sm font-medium text-foreground">
+              <legend className="mb-1 text-[13.5px] font-semibold text-aurora-fg">
                 Ela pode confirmar compromissos sozinha?
               </legend>
-              <span className="mb-1 text-xs font-normal text-muted-2">
+              <span className="mb-1 text-[11.5px] font-normal text-aurora-muted-2">
                 Por padrão ela escreve a mensagem e você envia, do seu WhatsApp. Se preferir,
                 ela mesma manda a confirmação e o lembrete, pelo número oficial da plataforma.
               </span>
@@ -953,57 +874,83 @@ export default function OnboardingWizard(props: {
                 return (
                   <label
                     key={String(opt.v)}
-                    className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 transition ${
+                    className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition ${
                       // Sem verificação concluída na Meta, a segunda opção não é
                       // clicável: ligar algo que o backend vai recusar a cada
                       // mensagem seria mentir na tela.
                       !props.envioOficialDisponivel && opt.v
-                        ? "cursor-not-allowed border-line opacity-50"
+                        ? "cursor-not-allowed border-aurora-line opacity-50"
                         : ativo
-                        ? "cursor-pointer border-cyan bg-surface-2"
-                        : "cursor-pointer border-line hover:border-muted-2"
+                        ? "cursor-pointer border-aurora-accent bg-aurora-surface-2"
+                        : "cursor-pointer border-aurora-line hover:border-aurora-muted-2"
                     }`}
                   >
                     <input
                       type="radio"
                       name="envio_oficial"
-                      className="mt-1 accent-cyan"
+                      className="mt-1 accent-aurora-accent"
                       checked={ativo}
                       disabled={!props.envioOficialDisponivel && opt.v}
                       onChange={() => setEnvioOficial(opt.v)}
                     />
                     <span className="flex flex-col">
-                      <span className="text-[13.5px] font-medium text-foreground">{opt.nm}</span>
-                      <span className="text-xs font-normal text-muted-2">{opt.rz}</span>
+                      <span className="text-[13.5px] font-medium text-aurora-fg">{opt.nm}</span>
+                      <span className="text-xs font-normal text-aurora-muted-2">{opt.rz}</span>
                     </span>
                   </label>
                 );
               })}
 
               {!props.envioOficialDisponivel && (
-                <p className="rounded-lg border border-dashed border-line bg-surface-2 px-3.5 py-2.5 text-xs leading-relaxed text-muted">
+                <p className="rounded-lg border border-dashed border-aurora-line bg-aurora-surface-2 px-3.5 py-2.5 text-xs leading-relaxed text-aurora-muted">
                   O envio automático abre quando a verificação da nossa empresa junto ao
                   WhatsApp for concluída. Até lá ela escreve e você envia — que continua
                   valendo pra tudo que não é confirmação ou lembrete.
                 </p>
               )}
 
-              <span className="text-xs font-normal text-muted-2">
+              <span className="text-[11.5px] font-normal text-aurora-muted-2">
                 Quem receber pode responder SAIR a qualquer momento, e ela para de enviar.
               </span>
+            </fieldset>
+
+            <fieldset className="mt-1 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-1 text-[13.5px] font-semibold text-aurora-fg">
+                Ela responde em áudio?
+              </legend>
+              <span className="mb-1 text-[11.5px] font-normal text-aurora-muted-2">
+                Por padrão, ela espelha o que você manda — áudio pra áudio, texto pra texto. Dá
+                pra forçar sempre áudio, bom pra quem tá dirigindo ou andando.
+              </span>
+              <label
+                className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3.5 py-2.5 transition ${
+                  respostaAudioSempre ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-muted-2"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-1 h-[15px] w-[15px] accent-aurora-accent"
+                  checked={respostaAudioSempre}
+                  onChange={(e) => setRespostaAudioSempre(e.target.checked)}
+                />
+                <span className="flex flex-col">
+                  <span className="text-[13.5px] font-medium text-aurora-fg">Sempre responder em áudio</span>
+                  <span className="text-xs font-normal text-aurora-muted-2">Mesmo quando você escreve em texto, ela responde falando.</span>
+                </span>
+              </label>
             </fieldset>
 
             <div className="mt-2 flex gap-3">
               <button
                 onClick={() => setStep(2)}
-                className="rounded-lg border border-line px-6 py-3 font-medium text-foreground transition hover:bg-surface-2"
+                className="rounded-lg border border-aurora-line px-6 py-3 font-medium text-aurora-fg transition hover:bg-aurora-surface-2"
               >
                 Voltar
               </button>
               <button
                 onClick={handleChannelSubmit}
-                disabled={saving || !channel}
-                className="flex-1 rounded-lg bg-cyan px-6 py-3 font-semibold text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                disabled={saving || channels.size === 0}
+                className="flex-1 rounded-lg bg-aurora-fg px-6 py-3 font-semibold text-aurora-bg transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
               >
                 {saving ? "Salvando…" : "Concluir"}
               </button>
@@ -1012,11 +959,11 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 4 && finished && (
-          <section className="flex flex-col gap-2 rounded-xl border border-line bg-surface p-7">
-            <h1 className="text-xl font-semibold text-foreground">
+          <section className="mt-4 flex flex-col gap-2 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+            <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">
               Tudo pronto, {nome.split(" ")[0] || ""}
             </h1>
-            <p className="mb-2 text-[13px] leading-relaxed text-muted">
+            <p className="mb-2 text-[13px] leading-relaxed text-aurora-muted">
               Sua secretária foi configurada com os dados abaixo.
             </p>
             <dl className="flex flex-col">
@@ -1036,7 +983,12 @@ export default function OnboardingWizard(props: {
                   ok={props.outlookConnected}
                 />
               )}
-              <ReceiptRow label="Canal" value={channelInfo?.label ?? "—"} />
+              <ReceiptRow
+                label="Canal"
+                value={[...channels].length > 0
+                  ? [...channels].map((c) => CHANNEL_OPTIONS.find((o) => o.value === c)?.label ?? c).join(", ")
+                  : "—"}
+              />
               {wantsTelegram && (
                 <ReceiptRow
                   label="Bot Telegram"
@@ -1057,37 +1009,44 @@ export default function OnboardingWizard(props: {
                   ok={whatsappConnected}
                 />
               )}
+              {wantsTeams && (
+                <ReceiptRow
+                  label="Teams"
+                  value={teamsConnected ? "Vinculado" : "Aguardando código"}
+                  ok={teamsConnected}
+                />
+              )}
             </dl>
             <div
               className={`mt-5 flex items-center gap-2 rounded-lg px-3 py-2.5 text-[11.5px] font-bold tracking-wide ${
                 telegramActive
-                  ? "bg-cyan/10 text-cyan"
+                  ? "bg-aurora-ok/15 text-aurora-ok"
                   : telegramFailed
-                  ? "bg-amber-50 text-amber-800"
-                  : "bg-surface-2 text-muted"
+                  ? "bg-aurora-warn/15 text-aurora-warn"
+                  : "bg-aurora-surface-2 text-aurora-muted"
               }`}
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
                   telegramActive
-                    ? "bg-cyan"
+                    ? "bg-aurora-ok"
                     : telegramFailed
-                    ? "bg-amber-600"
-                    : "bg-muted-2"
+                    ? "bg-aurora-warn"
+                    : "bg-aurora-muted-2"
                 }`}
               />
-              {telegramActive && (!wantsWhatsapp || whatsappConnected)
+              {telegramActive && (!wantsWhatsapp || whatsappConnected) && (!wantsTeams || teamsConnected)
                 ? "Tudo ativo"
                 : telegramActive
                 ? "Telegram ativo"
                 : telegramFailed
                 ? "Telegram não ativou automaticamente"
-                : wantsTelegram && !wantsWhatsapp
+                : wantsTelegram && !wantsWhatsapp && !wantsTeams
                 ? "Telegram pronto pra ativar"
                 : "Aguardando conexão de canal"}
             </div>
             {wantsTelegram && (
-              <p className="text-[12.5px] leading-relaxed text-muted">
+              <p className="text-[12.5px] leading-relaxed text-aurora-muted">
                 {telegramActive
                   ? "Seu bot do Telegram já está ativo — pode mandar uma mensagem pra ele agora."
                   : telegramFailed
@@ -1097,12 +1056,12 @@ export default function OnboardingWizard(props: {
             )}
             {wantsWhatsapp && (
               whatsappConnected ? (
-                <div className="flex flex-col gap-1 rounded-lg border border-cyan/30 bg-cyan/5 px-4 py-3">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-cyan">
+                <div className="flex flex-col gap-1 rounded-lg border border-aurora-accent/35 bg-aurora-accent/[0.06] px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
                     O número dela
                   </span>
                   <NumeroDaSecretaria />
-                  <span className="text-[12.5px] leading-relaxed text-muted">
+                  <span className="text-[12.5px] leading-relaxed text-aurora-muted">
                     Seu WhatsApp já está vinculado — salva esse contato e manda
                     uma mensagem pra ela agora.
                   </span>
@@ -1111,23 +1070,23 @@ export default function OnboardingWizard(props: {
                 // Sem aprovação o código não vincula (consumeWhatsAppLinkCode
                 // recusa), então mostrar o código só faria a pessoa mandar
                 // mensagem e ficar no vácuo.
-                <p className="text-[12.5px] leading-relaxed text-muted">
+                <p className="text-[12.5px] leading-relaxed text-aurora-muted">
                   O passo de conectar o WhatsApp abre assim que seu acesso for
                   liberado — a gente te avisa por e-mail.
                 </p>
               ) : whatsappLinkCode ? (
-                <div className="rounded-lg border border-cyan/30 bg-cyan/5 px-4 py-3">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-cyan">
+                <div className="rounded-lg border border-aurora-accent/35 bg-aurora-accent/[0.06] px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
                     Código de vínculo do WhatsApp
                   </span>
-                  <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-foreground">
+                  <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-aurora-fg">
                     {whatsappLinkCode}
                   </p>
-                  <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-cyan">
+                  <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
                     Manda pra este número
                   </p>
                   <NumeroDaSecretaria />
-                  <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-aurora-muted">
                     O código vale por 30 minutos
                     {whatsappLinkCodeExpiresAt && (
                       <> (até {new Date(whatsappLinkCodeExpiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})</>
@@ -1136,19 +1095,55 @@ export default function OnboardingWizard(props: {
                   </p>
                 </div>
               ) : (
-                <p className="text-[12.5px] leading-relaxed text-muted">
+                <p className="text-[12.5px] leading-relaxed text-aurora-muted">
                   Não conseguimos gerar seu código de vínculo agora — volta aqui e conclui esse passo de novo.
                 </p>
               )
             )}
-            <p className="mt-3 text-xs text-muted-2">Seu identificador: {props.slug}</p>
+            {wantsTeams && (
+              teamsConnected ? (
+                <p className="text-[12.5px] leading-relaxed text-aurora-muted">
+                  Sua conta do Teams já está vinculada — pode chamar a Mia por lá agora.
+                </p>
+              ) : !props.aprovado ? (
+                // Mesmo motivo do bloco do WhatsApp acima: sem aprovação o
+                // código não vincula (consumeTeamsLinkCode recusa), então
+                // mostrar o código só faria a pessoa mandar mensagem e ficar
+                // no vácuo.
+                <p className="text-[12.5px] leading-relaxed text-aurora-muted">
+                  O passo de conectar o Teams abre assim que seu acesso for
+                  liberado — a gente te avisa por e-mail.
+                </p>
+              ) : teamsLinkCode ? (
+                <div className="rounded-lg border border-aurora-accent/35 bg-aurora-accent/[0.06] px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
+                    Código de vínculo do Teams
+                  </span>
+                  <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-aurora-fg">
+                    {teamsLinkCode}
+                  </p>
+                  <p className="mt-3 text-[12.5px] leading-relaxed text-aurora-muted">
+                    Manda esse código numa mensagem pro bot da Mia no Teams. O código vale por 30 minutos
+                    {teamsLinkCodeExpiresAt && (
+                      <> (até {new Date(teamsLinkCodeExpiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})</>
+                    )}
+                    . Se vencer, é só voltar aqui e concluir esse passo de novo pra gerar outro.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[12.5px] leading-relaxed text-aurora-muted">
+                  Não conseguimos gerar seu código de vínculo do Teams agora — volta aqui e conclui esse passo de novo.
+                </p>
+              )
+            )}
+            <p className="mt-3 text-xs text-aurora-muted-2">Seu identificador: {props.slug}</p>
             {props.isPlatformOwner && (
               // Único caminho na interface pra chegar no /admin — sem isto, a
               // URL só era alcançável de cor. É onde quem administra a
               // plataforma aprova (ou recusa) todo cadastro novo.
               <a
                 href="/admin"
-                className="mt-2 self-start text-xs text-cyan underline underline-offset-2"
+                className="mt-2 self-start text-xs text-aurora-accent-text underline underline-offset-2"
               >
                 Painel de administração
               </a>
@@ -1158,7 +1153,7 @@ export default function OnboardingWizard(props: {
                 setFinished(false);
                 setStep(1);
               }}
-              className="mt-4 self-start text-xs text-cyan underline underline-offset-2"
+              className="mt-4 self-start text-xs text-aurora-accent-text underline underline-offset-2"
             >
               Editar configuração
             </button>
@@ -1180,7 +1175,7 @@ export default function OnboardingWizard(props: {
 function NumeroDaSecretaria() {
   if (!WHATSAPP_NUMERO) {
     return (
-      <span className="text-[12.5px] leading-relaxed text-muted">
+      <span className="text-[12.5px] leading-relaxed text-aurora-muted">
         O número oficial da plataforma foi enviado no seu e-mail de boas-vindas.
       </span>
     );
@@ -1190,7 +1185,7 @@ function NumeroDaSecretaria() {
       href={WHATSAPP_LINK ?? "#"}
       target="_blank"
       rel="noreferrer"
-      className="font-mono text-[19px] font-bold tracking-tight text-foreground underline decoration-cyan/40 underline-offset-4"
+      className="font-mono text-[19px] font-bold tracking-tight text-aurora-fg underline decoration-aurora-accent/40 underline-offset-4"
     >
       {WHATSAPP_NUMERO}
     </a>
@@ -1200,11 +1195,11 @@ function NumeroDaSecretaria() {
 function AvisoAprovacao({ recusado }: { recusado: boolean }) {
   if (recusado) {
     return (
-      <section className="flex flex-col gap-1.5 rounded-xl border border-line bg-surface-2 px-5 py-4">
-        <span className="text-[13.5px] font-semibold text-foreground">
+      <section className="mt-4 flex flex-col gap-1.5 rounded-[16px] border border-aurora-line bg-aurora-surface-2 px-5 py-4">
+        <span className="text-[13.5px] font-semibold text-aurora-fg">
           Seu acesso não foi liberado
         </span>
-        <span className="text-[12.5px] leading-relaxed text-muted">
+        <span className="text-[12.5px] leading-relaxed text-aurora-muted">
           A secretária está em beta fechado e não conseguimos abrir uma vaga pra
           você agora. Sua configuração fica salva — se abrir espaço, a gente
           avisa por e-mail.
@@ -1213,11 +1208,11 @@ function AvisoAprovacao({ recusado }: { recusado: boolean }) {
     );
   }
   return (
-    <section className="flex flex-col gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4">
-      <span className="text-[13.5px] font-semibold text-amber-900">
+    <section className="mt-4 flex flex-col gap-1.5 rounded-[16px] border border-aurora-warn/30 bg-aurora-warn/[0.06] px-5 py-4">
+      <span className="text-[13.5px] font-semibold text-aurora-fg">
         Seu acesso está em análise
       </span>
-      <span className="text-[12.5px] leading-relaxed text-amber-900/80">
+      <span className="text-[12.5px] leading-relaxed text-aurora-muted">
         A secretária está em beta fechado, com vagas limitadas. Pode configurar
         tudo por aqui normalmente — assim que liberarmos seu acesso, o passo de
         conectar o WhatsApp aparece e ela começa a responder.
@@ -1229,23 +1224,32 @@ function AvisoAprovacao({ recusado }: { recusado: boolean }) {
 function ProviderOption({
   opt,
   selected,
+  recommended,
+  recommendedLabel,
   onSelect,
 }: {
   opt: (typeof PROVIDER_OPTIONS)[number];
   selected: boolean;
+  recommended?: boolean;
+  recommendedLabel?: string;
   onSelect: () => void;
 }) {
   return (
     <label
       className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-4 py-3 transition ${
-        selected ? "border-cyan bg-cyan/5" : "border-line hover:border-line-soft"
+        selected ? "border-aurora-accent bg-aurora-surface-2" : "border-aurora-line hover:border-aurora-line-soft"
       }`}
     >
-      <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
-        <input type="radio" name="provider" checked={selected} onChange={onSelect} className="accent-cyan" />
+      <span className="flex flex-wrap items-center gap-2 text-[13.5px] font-medium text-aurora-fg">
+        <input type="radio" name="provider" checked={selected} onChange={onSelect} className="accent-aurora-accent" />
         {opt.label}
+        {recommended && recommendedLabel && (
+          <span className="rounded-md bg-aurora-accent/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-aurora-accent-text">
+            {recommendedLabel}
+          </span>
+        )}
       </span>
-      <span className="pl-[21px] text-xs text-muted">{opt.hint}</span>
+      <span className="pl-[23px] text-xs text-aurora-muted">{opt.hint}</span>
     </label>
   );
 }
@@ -1260,24 +1264,39 @@ function CheckIcon() {
 
 function ReceiptRow({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-line-soft py-2.5 text-[12.5px] last:border-none">
-      <dt className="text-[11px] font-bold uppercase tracking-wide text-muted-2">{label}</dt>
-      <dd className={`font-medium ${ok ? "text-cyan" : "text-foreground"}`}>{value}</dd>
+    <div className="flex items-baseline justify-between border-b border-aurora-line-soft py-2.5 text-[12.5px] last:border-none">
+      <dt className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">{label}</dt>
+      <dd className={`font-medium ${ok ? "text-aurora-ok" : "text-aurora-fg"}`}>{value}</dd>
     </div>
   );
 }
 
-function StepIndicator({ step }: { step: Step }) {
-  const labels = ["Você", "Tarefas", "Canal", "Pronto"];
+function StepTabs({ step, onSelect }: { step: Step; onSelect: (s: Step) => void }) {
+  const labels: Array<[Step, string]> = [[1, "Você"], [2, "Tarefas"], [3, "Canal"], [4, "Pronto"]];
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[12px] font-semibold text-muted-2">
-      {labels.map((label, i) => {
-        const n = (i + 1) as Step;
+    <div className="flex flex-wrap items-center gap-1.5">
+      {labels.map(([n, label]) => {
+        const current = n === step;
         return (
-          <span key={label} className={`flex items-center gap-1.5 ${n === step ? "text-cyan" : ""}`}>
-            {i > 0 && <span className="text-muted-2">·</span>}
-            {n} {label}
-          </span>
+          <button
+            key={n}
+            type="button"
+            onClick={() => onSelect(n)}
+            className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-bold transition ${
+              current
+                ? "border-aurora-line bg-aurora-surface-2 text-aurora-accent-text"
+                : "border-transparent text-aurora-muted-2 hover:text-aurora-muted"
+            }`}
+          >
+            <span
+              className={`flex h-4 w-4 items-center justify-center rounded-[5px] text-[10px] ${
+                current ? "bg-aurora-accent text-aurora-accent-ink" : "bg-aurora-surface-2 text-aurora-muted-2"
+              }`}
+            >
+              {n}
+            </span>
+            {label}
+          </button>
         );
       })}
     </div>

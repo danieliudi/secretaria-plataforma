@@ -4,31 +4,32 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { upsertTenantSecret } from "@/lib/tenant-provisioning";
 import { dispararTarefaCron } from "@/lib/cron-call";
 
-const VALID_CHANNELS = new Set(["whatsapp", "telegram", "both"]);
+const VALID_CHANNELS = new Set(["whatsapp", "telegram", "teams"]);
 const TELEGRAM_API = "https://api.telegram.org";
 
-// Mesmo alfabeto/tamanho/TTL de createWhatsAppLinkCode em
-// supabase/functions/_shared/tenant.ts — duplicado aqui porque o wizard
-// (Next.js/Node) não importa código Deno das edge functions diretamente.
-// Sem 0/O/1/I — evita confusão ao ler/digitar o código no WhatsApp.
-const WHATSAPP_LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-const WHATSAPP_LINK_CODE_LENGTH = 6;
-const WHATSAPP_LINK_CODE_TTL_MIN = 30;
+// Mesmo alfabeto/tamanho/TTL de generateLinkCode em supabase/functions/_shared/tenant.ts
+// — duplicado aqui porque o wizard (Next.js/Node) não importa código Deno das
+// edge functions diretamente. Sem 0/O/1/I — evita confusão ao ler/digitar o
+// código no WhatsApp/Teams. Usado tanto pro WhatsApp quanto pro Teams: os
+// dois autorizam por "código de vínculo de 6 letras", mesmo esquema.
+const LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const LINK_CODE_LENGTH = 6;
+const LINK_CODE_TTL_MIN = 30;
 
 // Gerador CRIPTOGRÁFICO (não Math.random): este código é o ÚNICO fator que
-// autoriza um telefone a assumir uma conta, e não há limite de tentativas.
-// Mesma implementação de generateWhatsAppLinkCode em
-// supabase/functions/_shared/tenant.ts — o módulo descarta a cauda incompleta
-// do byte pra não enviesar as primeiras letras do alfabeto.
-function generateWhatsAppLinkCode(): string {
-  const limite = 256 - (256 % WHATSAPP_LINK_CODE_ALPHABET.length);
+// autoriza um telefone/conta a assumir um tenant, e não há limite de tentativas.
+// Mesma implementação de generateLinkCode em supabase/functions/_shared/tenant.ts
+// — o módulo descarta a cauda incompleta do byte pra não enviesar as
+// primeiras letras do alfabeto.
+function generateLinkCode(): string {
+  const limite = 256 - (256 % LINK_CODE_ALPHABET.length);
   let code = "";
-  while (code.length < WHATSAPP_LINK_CODE_LENGTH) {
-    const bytes = crypto.getRandomValues(new Uint8Array(WHATSAPP_LINK_CODE_LENGTH));
+  while (code.length < LINK_CODE_LENGTH) {
+    const bytes = crypto.getRandomValues(new Uint8Array(LINK_CODE_LENGTH));
     for (const b of bytes) {
       if (b >= limite) continue;
-      code += WHATSAPP_LINK_CODE_ALPHABET[b % WHATSAPP_LINK_CODE_ALPHABET.length];
-      if (code.length === WHATSAPP_LINK_CODE_LENGTH) break;
+      code += LINK_CODE_ALPHABET[b % LINK_CODE_ALPHABET.length];
+      if (code.length === LINK_CODE_LENGTH) break;
     }
   }
   return code;
@@ -37,7 +38,7 @@ function generateWhatsAppLinkCode(): string {
 // Alfabeto do secret_token do webhook do Telegram (regra da própria API:
 // só A-Z, a-z, 0-9, "_", "-", 1-256 chars). 64 símbolos == potência de 2 —
 // byte % 64 é uniforme sem precisar descartar cauda, ao contrário do
-// alfabeto de 33 símbolos do código de vínculo do WhatsApp acima.
+// alfabeto de 33 símbolos do código de vínculo acima.
 const TELEGRAM_SECRET_TOKEN_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
 const TELEGRAM_SECRET_TOKEN_LENGTH = 32;
@@ -106,9 +107,10 @@ export async function POST(request: Request) {
   }
 
   let body: {
-    channel_preference?: unknown;
+    channels?: unknown;
     telegram_bot_token?: unknown;
     envio_oficial?: unknown;
+    resposta_audio_sempre?: unknown;
   };
   try {
     body = await request.json();
@@ -116,9 +118,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  const channelPreference = typeof body.channel_preference === "string" ? body.channel_preference : "";
-  if (!VALID_CHANNELS.has(channelPreference)) {
-    return NextResponse.json({ error: `canal inválido: '${channelPreference}'` }, { status: 400 });
+  // Múltipla escolha (decisão de 18/08/2026: cada canal já vincula
+  // independente no banco, não faz sentido mais um único enum "whatsapp
+  // | telegram | both") — array com pelo menos 1 canal válido.
+  const channelsRaw = Array.isArray(body.channels) ? body.channels : [];
+  const channels = [...new Set(channelsRaw.filter((c): c is string => typeof c === "string" && VALID_CHANNELS.has(c)))];
+  if (channels.length === 0) {
+    return NextResponse.json({ error: "escolhe pelo menos 1 canal" }, { status: 400 });
   }
 
   // Envio automático pela API oficial. Só aceita `true` quando a plataforma
@@ -128,8 +134,12 @@ export async function POST(request: Request) {
   // a cada mensagem; este aqui só evita gravar intenção impossível.
   const envioDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioOficial = envioDisponivel && body.envio_oficial === true;
+  const respostaAudioSempre = body.resposta_audio_sempre === true;
 
-  const wantsTelegram = channelPreference === "telegram" || channelPreference === "both";
+  const wantsTelegram = channels.includes("telegram");
+  const wantsWhatsapp = channels.includes("whatsapp");
+  const wantsTeams = channels.includes("teams");
+
   const telegramToken = wantsTelegram && typeof body.telegram_bot_token === "string"
     ? body.telegram_bot_token.trim()
     : "";
@@ -137,7 +147,9 @@ export async function POST(request: Request) {
   const admin = createServiceClient();
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
-    .select("id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number, aprovado_em, avisado_em")
+    .select(
+      "id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number, teams_authorized_user_id, aprovado_em, avisado_em",
+    )
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
@@ -179,28 +191,43 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 
-  const wantsWhatsapp = channelPreference === "whatsapp" || channelPreference === "both";
-  const alreadyAuthorized = Boolean(tenant.whatsapp_authorized_number);
+  // Gera um código novo (substituindo qualquer pendente) toda vez que o passo
+  // é concluído pedindo um canal por-código que ainda não está vinculado —
+  // mesma regra de createWhatsAppLinkCode/createTeamsLinkCode no backend.
+  const whatsappAlreadyAuthorized = Boolean(tenant.whatsapp_authorized_number);
+  const teamsAlreadyAuthorized = Boolean(tenant.teams_authorized_user_id);
 
-  // Gera um código novo (substituindo qualquer pendente) toda vez que o
-  // passo é concluído pedindo WhatsApp e o número ainda não está vinculado —
-  // mesma regra de createWhatsAppLinkCode no backend.
   let whatsappLinkCode: string | null = null;
   let whatsappLinkCodeExpiresAt: string | null = null;
-  if (wantsWhatsapp && !alreadyAuthorized) {
-    whatsappLinkCode = generateWhatsAppLinkCode();
-    whatsappLinkCodeExpiresAt = new Date(Date.now() + WHATSAPP_LINK_CODE_TTL_MIN * 60_000).toISOString();
+  if (wantsWhatsapp && !whatsappAlreadyAuthorized) {
+    whatsappLinkCode = generateLinkCode();
+    whatsappLinkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
+  }
+
+  let teamsLinkCode: string | null = null;
+  let teamsLinkCodeExpiresAt: string | null = null;
+  if (wantsTeams && !teamsAlreadyAuthorized) {
+    teamsLinkCode = generateLinkCode();
+    teamsLinkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
   }
 
   const { error } = await admin
     .from("tenants")
     .update({
-      channel_preference: channelPreference,
+      // Texto livre agora (sem CHECK de enum) — só pra exibição em
+      // cron/index.ts e /admin. Quem autoriza de verdade é cada coluna
+      // própria (whatsapp_authorized_number / telegram_authorized_chat_id /
+      // teams_authorized_user_id).
+      channel_preference: channels.join(","),
       envio_oficial: envioOficial,
+      resposta_audio_sempre: respostaAudioSempre,
       telegram_bot_token_secret_id: telegramSecretId,
       telegram_webhook_secret_id: telegramWebhookSecretId,
-      ...(wantsWhatsapp && !alreadyAuthorized
+      ...(wantsWhatsapp && !whatsappAlreadyAuthorized
         ? { whatsapp_link_code: whatsappLinkCode, whatsapp_link_code_expires_at: whatsappLinkCodeExpiresAt }
+        : {}),
+      ...(wantsTeams && !teamsAlreadyAuthorized
+        ? { teams_link_code: teamsLinkCode, teams_link_code_expires_at: teamsLinkCodeExpiresAt }
         : {}),
       updated_at: new Date().toISOString(),
     })
@@ -249,8 +276,11 @@ export async function POST(request: Request) {
     ok: true,
     telegram_webhook: telegramWebhook,
     telegram_webhook_warning: telegramWebhookWarning,
-    whatsapp_already_linked: wantsWhatsapp && alreadyAuthorized,
+    whatsapp_already_linked: wantsWhatsapp && whatsappAlreadyAuthorized,
     whatsapp_link_code: whatsappLinkCode,
     whatsapp_link_code_expires_at: whatsappLinkCodeExpiresAt,
+    teams_already_linked: wantsTeams && teamsAlreadyAuthorized,
+    teams_link_code: teamsLinkCode,
+    teams_link_code_expires_at: teamsLinkCodeExpiresAt,
   });
 }

@@ -60,5 +60,8 @@ export default async function AdminPage() {
     criadoEm: String(t.created_at),
   }));
 
-  return <AdminLista cadastros={cadastros} />;
+  const nomeDono = linhas.find((t) => t.auth_user_id === dono.authUserId)?.nome as string | null;
+  const primeiroNome = (nomeDono ?? "").trim().split(/\s+/)[0] ?? "";
+
+  return <AdminLista cadastros={cadastros} userLabel={primeiroNome} />;
 }

@@ -18,6 +18,7 @@ import {
   listTasks,
   tryLoadClickUpMap,
 } from "../../fast/tools/clickup.ts";
+import { frentesDoEnv } from "../tenant.ts";
 
 export function createClickUpProvider(env?: (key: string) => string | undefined): TaskProvider {
   const deps = env ? { ...defaultClickUpDeps(), env } : defaultClickUpDeps();
@@ -53,7 +54,7 @@ export function createClickUpProvider(env?: (key: string) => string | undefined)
 
     buildSystemBlock: (): string => {
       const map = tryLoadClickUpMap(deps.env);
-      return buildClickUpSystemBlock(map);
+      return buildClickUpSystemBlock(map, frentesDoEnv(deps.env));
     },
   };
 }

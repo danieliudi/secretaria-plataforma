@@ -128,7 +128,15 @@ export async function GET(request: Request) {
       );
       await admin
         .from("tenants")
-        .update({ [secretColumn]: secretId, updated_at: new Date().toISOString() })
+        .update({
+          [secretColumn]: secretId,
+          updated_at: new Date().toISOString(),
+          // Reconectou o Google → limpa a marca de token revogado (ver
+          // supabase/functions/cron/index.ts), senão o tenant ficava
+          // permanentemente pulado pelas tasks de Calendar mesmo depois de
+          // corrigir o problema.
+          ...(provider === "google" ? { google_erro_em: null } : {}),
+        })
         .eq("id", tenant.id);
     }
   } catch (err) {

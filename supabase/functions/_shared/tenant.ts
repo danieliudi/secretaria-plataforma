@@ -4,7 +4,7 @@ import type { Personalidade } from "./personalidade.ts";
 
 export const DEFAULT_TENANT_SLUG = "daniel";
 
-export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "sanwey_tasks";
+export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks";
 
 export interface Tenant {
   id: string;
@@ -21,6 +21,7 @@ export interface Tenant {
   google_client_id: string | null;
   google_client_secret_secret_id: string | null;
   google_refresh_token_secret_id: string | null;
+  outlook_refresh_token_secret_id: string | null;
   ga4_property_map: Record<string, unknown>;
   whatsapp_evolution_instance: string | null;
   whatsapp_evolution_api_key_secret_id: string | null;
@@ -41,6 +42,21 @@ export interface Tenant {
   whatsapp_authorized_number: string | null;
   whatsapp_link_code: string | null;
   whatsapp_link_code_expires_at: string | null;
+  teams_authorized_user_id: string | null;
+  teams_link_code: string | null;
+  teams_link_code_expires_at: string | null;
+  /** Toggle do wizard: sempre responder em áudio, além do espelhamento por formato recebido. */
+  resposta_audio_sempre: boolean;
+  recusado_em: string | null;
+  created_at: string;
+  /**
+   * Marcado quando o refresh do Google falhou com `invalid_grant` (token
+   * revogado/expirado) — ver `marcaGoogleRevogado` em cron/index.ts. Enquanto
+   * setado, as tasks que dependem de Calendar pulam o tenant em vez de bater
+   * na mesma falha centenas de vezes por dia. Limpo quando o Google é
+   * reconectado (novo refresh token gravado no wizard).
+   */
+  google_erro_em: string | null;
 }
 
 const TENANT_COLUMNS = `
@@ -48,12 +64,14 @@ const TENANT_COLUMNS = `
   task_provider, task_provider_list_map, task_provider_token_secret_id,
   trello_api_key_secret_id,
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
+  outlook_refresh_token_secret_id,
   ga4_property_map,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
   whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at,
-  personalidade
+  teams_authorized_user_id, teams_link_code, teams_link_code_expires_at,
+  personalidade, resposta_audio_sempre, recusado_em, created_at, google_erro_em
 `;
 
 // ATENÇÃO: comparação EXATA (`eq`), nunca `ilike`. Com `ilike`, o `%` do
@@ -90,6 +108,62 @@ export async function getDefaultTenant(): Promise<Tenant | null> {
   return getTenantBySlug(DEFAULT_TENANT_SLUG);
 }
 
+// ─── Multi-tenant (proativos do cron) ───────────────────────────────────────
+
+/** Único tenant com is_platform_owner — nunca por slug (slug é mutável, is_platform_owner é regra). */
+export async function getPlatformOwnerTenant(): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("is_platform_owner", true)
+    .eq("active", true)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (platform owner) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/** Carrega um tenant pelo id, sem filtro de elegibilidade — quem chama decide via `tenantElegivel`. */
+export async function getTenantById(id: string): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("id", id)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (id) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/**
+ * Portão de acesso pago do CLAUDE.md §3 aplicado no backend: elegível pra
+ * proativo/multi-tenant é ativo, aprovado e não recusado. Usado tanto pra
+ * filtrar a lista do coordenador quanto pra REVALIDAR no executor (nunca
+ * confiar só no tenant_id que chegou no corpo).
+ */
+export function tenantElegivel(tenant: Pick<Tenant, "active" | "aprovado_em" | "recusado_em">): boolean {
+  return tenant.active === true && tenant.aprovado_em !== null && tenant.recusado_em === null;
+}
+
+/**
+ * Todo tenant elegível pra tasks proativas multi-tenant, dono primeiro (se
+ * algum teto for atingido, ele é o último a sofrer). `limit` é teto de
+ * segurança, não expectativa de escala.
+ */
+export async function listTenantsElegiveis(limit = 200): Promise<Tenant[]> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .is("recusado_em", null)
+    .order("is_platform_owner", { ascending: false })
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`tenants lookup (elegíveis) falhou: ${error.message}`);
+  return (data ?? []) as Tenant[];
+}
+
 // ─── Número compartilhado (autorização por telefone) ────────────────────────
 //
 // Resolve pelo REMETENTE (`from`), não pela instância que recebeu — o
@@ -108,6 +182,23 @@ export function normalizeWhatsAppJidToE164(jid: string): string | null {
   if (jid.includes("@g.us")) return null;
   const digits = jid.split("@")[0].replace(/\D/g, "");
   return digits ? `+${digits}` : null;
+}
+
+/** Inverso de normalizeWhatsAppJidToE164: E.164 ("+5511999999999") pro JID que a Evolution espera. */
+export function jidFromE164(e164: string): string {
+  return `${e164.replace(/\D/g, "")}@s.whatsapp.net`;
+}
+
+/** Lê `TENANT_FRENTES` do env (setado por buildTenantEnv) — lista vazia se ausente/inválido, nunca lança. */
+export function frentesDoEnv(env: (key: string) => string | undefined): string[] {
+  try {
+    const raw = env("TENANT_FRENTES");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((f): f is string => typeof f === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 // `aprovado_em` NÃO é filtro cosmético: sem ele, qualquer pessoa que
@@ -163,7 +254,7 @@ const LINK_CODE_TTL_MIN = 30;
 // reconstruível a partir de poucas saídas — bastava gerar vários códigos
 // próprios pra prever os dos outros. O módulo evita o viés de `% length`
 // descartando os valores da cauda incompleta do byte.
-function generateWhatsAppLinkCode(): string {
+function generateLinkCode(): string {
   const limite = 256 - (256 % LINK_CODE_ALPHABET.length);
   let code = "";
   while (code.length < LINK_CODE_LENGTH) {
@@ -179,7 +270,7 @@ function generateWhatsAppLinkCode(): string {
 
 /** Gera (substituindo qualquer pendente) o código de vínculo do tenant. Chamado pelo onboarding self-serve. */
 export async function createWhatsAppLinkCode(tenantId: string): Promise<{ code: string; expiresAt: string }> {
-  const code = generateWhatsAppLinkCode();
+  const code = generateLinkCode();
   const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
   const { error } = await getSupabaseClient()
     .from("tenants")
@@ -235,6 +326,78 @@ export async function consumeWhatsAppLinkCode(text: string, fromE164: string): P
   };
 }
 
+// ─── Teams: bot único compartilhado, vínculo por código (mesmo modelo do
+// WhatsApp por número compartilhado — NÃO o modelo de bot próprio por
+// tenant do Telegram) ────────────────────────────────────────────────────
+
+/** Busca o tenant autorizado pra este aadObjectId do Teams. null = não vinculado (ou não aprovado). */
+export async function getTenantByAuthorizedTeamsUserId(teamsUserId: string): Promise<Tenant | null> {
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("teams_authorized_user_id", teamsUserId)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`tenants lookup (teams_authorized_user_id) falhou: ${error.message}`);
+  return (data as Tenant | null) ?? null;
+}
+
+/** Gera (substituindo qualquer pendente) o código de vínculo do Teams do tenant. Chamado pelo onboarding self-serve. */
+export async function createTeamsLinkCode(tenantId: string): Promise<{ code: string; expiresAt: string }> {
+  const code = generateLinkCode();
+  const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
+  const { error } = await getSupabaseClient()
+    .from("tenants")
+    .update({ teams_link_code: code, teams_link_code_expires_at: expiresAt })
+    .eq("id", tenantId);
+  if (error) throw new Error(`teams_link_code update falhou: ${error.message}`);
+  return { code, expiresAt };
+}
+
+/**
+ * Mesma lógica de consumeWhatsAppLinkCode, adaptada pro aadObjectId do
+ * Teams. aadObjectId já vinculado a OUTRO tenant faz o update falhar
+ * (constraint unique) — propaga como erro, não sobrescreve.
+ */
+export async function consumeTeamsLinkCode(text: string, teamsUserId: string): Promise<Tenant | null> {
+  const code = text.trim().toUpperCase();
+  if (!code) return null;
+
+  const { data, error } = await getSupabaseClient()
+    .from("tenants")
+    .select(TENANT_COLUMNS)
+    .eq("teams_link_code", code)
+    .eq("active", true)
+    .not("aprovado_em", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`teams_link_code lookup falhou: ${error.message}`);
+  const tenant = data as Tenant | null;
+  if (!tenant) return null;
+  if (!tenant.teams_link_code_expires_at || new Date(tenant.teams_link_code_expires_at) < new Date()) {
+    return null;
+  }
+
+  const { error: updateErr } = await getSupabaseClient()
+    .from("tenants")
+    .update({
+      teams_authorized_user_id: teamsUserId,
+      teams_link_code: null,
+      teams_link_code_expires_at: null,
+    })
+    .eq("id", tenant.id);
+  if (updateErr) throw new Error(`teams_authorized_user_id update falhou: ${updateErr.message}`);
+
+  return {
+    ...tenant,
+    teams_authorized_user_id: teamsUserId,
+    teams_link_code: null,
+    teams_link_code_expires_at: null,
+  };
+}
+
 /** Lê um segredo do Vault pelo uuid. null (id ou valor) vira undefined — cai no fallback de env global. */
 async function readSecret(secretId: string | null): Promise<string | undefined> {
   if (!secretId) return undefined;
@@ -265,6 +428,16 @@ export async function getTelegramWebhookSecret(tenant: Tenant): Promise<string |
  * secret_token vira o dono; chat_id diferente depois disso é recusado.
  * UPDATE condicional (`is(...,null)`) evita corrida entre duas primeiras
  * mensagens simultâneas roubando o vínculo uma da outra.
+ *
+ * O mesmo chat_id (é o id da CONTA de Telegram da pessoa, não do bot) pode
+ * tentar se vincular a DOIS tenants diferentes — cada tenant tem seu próprio
+ * bot. Sem uma trava de unicidade, isso misturava histórico/memória de dois
+ * clientes na mesma chave `tg:<chatId>` (achado real: um único JID de
+ * WhatsApp já apareceu em conversation_history sob dois tenants diferentes,
+ * mesmo padrão de bug). O índice único parcial (migration
+ * 20260821_telegram_chat_id_unico.sql) faz este UPDATE falhar com 23505
+ * quando o chat_id já pertence a OUTRO tenant — trata como recusa silenciosa
+ * (mesmo formato de retorno de "perdeu a corrida"), não como erro.
  */
 export async function authorizeTelegramChatId(tenant: Tenant, chatId: number): Promise<boolean> {
   if (tenant.telegram_authorized_chat_id !== null) {
@@ -277,7 +450,10 @@ export async function authorizeTelegramChatId(tenant: Tenant, chatId: number): P
     .is("telegram_authorized_chat_id", null)
     .select("id")
     .maybeSingle();
-  if (error) throw new Error(`telegram_authorized_chat_id update falhou: ${error.message}`);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return false; // chat_id já é de outro tenant
+    throw new Error(`telegram_authorized_chat_id update falhou: ${error.message}`);
+  }
   if (data) return true;
 
   // Perdeu a corrida pro vínculo — confere quem ganhou antes de recusar.
@@ -295,6 +471,7 @@ const PROVIDER_LIST_MAP_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_DATABASE_MAP",
   trello: "TRELLO_LIST_MAP",
   google_tasks: "GOOGLE_TASKS_LIST_MAP",
+  microsoft_todo: "MICROSOFT_TODO_LIST_MAP",
   sanwey_tasks: "SANWEY_TASKS_LIST_MAP",
 };
 
@@ -307,6 +484,7 @@ const PROVIDER_TOKEN_ENV_KEY: Record<TaskProviderKind, string> = {
   notion: "NOTION_API_TOKEN",
   trello: "TRELLO_API_TOKEN",
   google_tasks: "", // Google Tasks reusa as credenciais do Google — sem token próprio.
+  microsoft_todo: "", // Idem — reusa as credenciais do Outlook (outlook_refresh_token_secret_id).
   sanwey_tasks: "SANWEY_TASKS_API_TOKEN",
 };
 
@@ -326,6 +504,7 @@ const SHARED_INFRA_KEYS = new Set([
   // Contas de API da plataforma
   "ANTHROPIC_API_KEY",
   "GROQ_API_KEY",
+  "GOOGLE_TTS_API_KEY",
   // Infra do próprio Supabase
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",
@@ -339,6 +518,11 @@ const SHARED_INFRA_KEYS = new Set([
   // pessoal é o refresh token, que continua fora desta lista.
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
+  // Mesma lógica pro App Registration do Microsoft ("Secretaria-plataforma") —
+  // um app só pra toda a plataforma; MICROSOFT_REFRESH_TOKEN (pessoal) fica
+  // fora desta lista.
+  "MICROSOFT_CLIENT_ID",
+  "MICROSOFT_CLIENT_SECRET",
   // Key de APLICAÇÃO do Trello (o token de acesso é que é pessoal).
   "TRELLO_API_KEY",
 ]);
@@ -354,10 +538,11 @@ const SHARED_INFRA_KEYS = new Set([
 export async function buildTenantEnv(
   tenant: Tenant,
 ): Promise<(key: string) => string | undefined> {
-  const [googleClientSecret, googleRefreshToken, taskProviderToken, trelloApiKey, evolutionApiKey, telegramBotToken] =
+  const [googleClientSecret, googleRefreshToken, outlookRefreshToken, taskProviderToken, trelloApiKey, evolutionApiKey, telegramBotToken] =
     await Promise.all([
       readSecret(tenant.google_client_secret_secret_id),
       readSecret(tenant.google_refresh_token_secret_id),
+      readSecret(tenant.outlook_refresh_token_secret_id),
       readSecret(tenant.task_provider_token_secret_id),
       readSecret(tenant.trello_api_key_secret_id),
       readSecret(tenant.whatsapp_evolution_api_key_secret_id),
@@ -365,9 +550,15 @@ export async function buildTenantEnv(
     ]);
 
   const overrides = new Map<string, string>();
+  // Frentes REAIS do tenant — nunca uma lista fixa. Achado da auditoria de
+  // "prompt mestre" (21/08/2026): 6 módulos (providers de tarefas + GA4)
+  // tinham a lista de frentes do Daniel hardcoded, usada pra montar o bloco
+  // "frentes sem X configurado" do system prompt de QUALQUER tenant.
+  overrides.set("TENANT_FRENTES", JSON.stringify(tenant.frentes ?? []));
   if (tenant.google_client_id) overrides.set("GOOGLE_CLIENT_ID", tenant.google_client_id);
   if (googleClientSecret) overrides.set("GOOGLE_CLIENT_SECRET", googleClientSecret);
   if (googleRefreshToken) overrides.set("GOOGLE_REFRESH_TOKEN", googleRefreshToken);
+  if (outlookRefreshToken) overrides.set("MICROSOFT_REFRESH_TOKEN", outlookRefreshToken);
   if (Object.keys(tenant.ga4_property_map ?? {}).length > 0) {
     overrides.set("GA4_PROPERTY_MAP", JSON.stringify(tenant.ga4_property_map));
   }

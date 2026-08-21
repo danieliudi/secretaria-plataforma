@@ -67,13 +67,14 @@ export interface TaskProvider {
   buildSystemBlock(): string;
 }
 
-export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "sanwey_tasks";
+export type TaskProviderKind = "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks";
 
 const VALID_KINDS: ReadonlySet<string> = new Set([
   "clickup",
   "notion",
   "trello",
   "google_tasks",
+  "microsoft_todo",
   "sanwey_tasks",
 ]);
 
