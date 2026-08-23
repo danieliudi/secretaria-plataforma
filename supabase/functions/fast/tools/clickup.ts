@@ -10,6 +10,8 @@
 // (sem `list` no input) ou filtrar uma list específica (com `list`).
 // createTask exige `list` obrigatório.
 
+import { fetchComRetry } from "../../_shared/http-retry.ts";
+
 const CLICKUP_BASE = "https://api.clickup.com/api/v2";
 
 /** {frente: {listName: listId}} — case-insensitive lookup nos dois níveis. */
@@ -155,9 +157,9 @@ async function fetchListTasks(
     url.searchParams.set("archived", "false");
     url.searchParams.set("page", String(page));
 
-    const res = await fetchFn(url.toString(), {
+    const res = await fetchComRetry(url.toString(), {
       headers: { Authorization: token },
-    });
+    }, fetchFn);
     if (!res.ok) {
       throw new Error(`ClickUp list failed: ${res.status} ${await res.text()}`);
     }
@@ -219,14 +221,14 @@ export async function createTask(
   if (input.description) body.description = input.description;
   if (input.due_date) body.due_date = new Date(input.due_date).getTime();
 
-  const res = await deps.fetch(`${CLICKUP_BASE}/list/${listId}/task`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/list/${listId}/task`, {
     method: "POST",
     headers: {
       Authorization: token,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, deps.fetch);
   if (!res.ok) {
     throw new Error(`ClickUp create failed: ${res.status} ${await res.text()}`);
   }
@@ -246,9 +248,9 @@ async function getListStatuses(
   token: string,
   fetchFn: typeof fetch,
 ): Promise<ClickUpStatusInfo[]> {
-  const res = await fetchFn(`${CLICKUP_BASE}/list/${listId}`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/list/${listId}`, {
     headers: { Authorization: token },
-  });
+  }, fetchFn);
   if (!res.ok) {
     throw new Error(`ClickUp list info failed: ${res.status} ${await res.text()}`);
   }
@@ -302,11 +304,11 @@ export async function completeTask(
   const statuses = await getListStatuses(listId, token, deps.fetch);
   const closedStatus = pickClosedStatus(statuses);
 
-  const res = await deps.fetch(`${CLICKUP_BASE}/task/${task.id}`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/task/${task.id}`, {
     method: "PUT",
     headers: { Authorization: token, "Content-Type": "application/json" },
     body: JSON.stringify({ status: closedStatus }),
-  });
+  }, deps.fetch);
   if (!res.ok) {
     throw new Error(`ClickUp update status failed: ${res.status} ${await res.text()}`);
   }

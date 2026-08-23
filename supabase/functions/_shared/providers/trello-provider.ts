@@ -28,6 +28,7 @@ import type {
   TaskProvider,
 } from "../task-provider.ts";
 import { frentesDoEnv } from "../tenant.ts";
+import { fetchComRetry } from "../http-retry.ts";
 
 const TRELLO_BASE = "https://api.trello.com/1";
 
@@ -147,7 +148,7 @@ async function fetchListCards(
   url.searchParams.set("fields", "name,due,dueComplete,url,idList");
   authParams(url, key, token);
 
-  const res = await fetchFn(url.toString());
+  const res = await fetchComRetry(url.toString(), {}, fetchFn);
   if (!res.ok) {
     throw new Error(`Trello list cards failed: ${res.status} ${await res.text()}`);
   }
@@ -207,7 +208,7 @@ export async function createTask(
   }
   authParams(url, key, token);
 
-  const res = await deps.fetch(url.toString(), { method: "POST" });
+  const res = await fetchComRetry(url.toString(), { method: "POST" }, deps.fetch);
   if (!res.ok) {
     throw new Error(`Trello create card failed: ${res.status} ${await res.text()}`);
   }
@@ -245,7 +246,7 @@ export async function completeTask(
   url.searchParams.set("dueComplete", "true");
   authParams(url, key, token);
 
-  const res = await deps.fetch(url.toString(), { method: "PUT" });
+  const res = await fetchComRetry(url.toString(), { method: "PUT" }, deps.fetch);
   if (!res.ok) {
     throw new Error(`Trello update card failed: ${res.status} ${await res.text()}`);
   }

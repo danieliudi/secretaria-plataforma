@@ -37,6 +37,7 @@ import type {
   TaskProvider,
 } from "../task-provider.ts";
 import { frentesDoEnv } from "../tenant.ts";
+import { fetchComRetry } from "../http-retry.ts";
 
 const NOTION_BASE = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
@@ -145,9 +146,9 @@ async function fetchDatabaseSchema(
   const cached = schemaCache.get(databaseId);
   if (cached) return cached;
 
-  const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}`, {
+  const res = await fetchComRetry(`${NOTION_BASE}/databases/${databaseId}`, {
     headers: authHeaders(token),
-  });
+  }, fetchFn);
   if (!res.ok) {
     throw new Error(`Notion database schema failed: ${res.status} ${await res.text()}`);
   }
@@ -258,11 +259,11 @@ async function queryDatabase(
   // seguir isso, uma database com mais de 100 tasks abertas perde o
   // excedente em silêncio.
   do {
-    const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}/query`, {
+    const res = await fetchComRetry(`${NOTION_BASE}/databases/${databaseId}/query`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify({ page_size: 100, ...(startCursor ? { start_cursor: startCursor } : {}) }),
-    });
+    }, fetchFn);
     if (!res.ok) {
       throw new Error(`Notion database query failed: ${res.status} ${await res.text()}`);
     }
@@ -319,7 +320,7 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
         }]
         : undefined;
 
-      const res = await deps.fetch(`${NOTION_BASE}/pages`, {
+      const res = await fetchComRetry(`${NOTION_BASE}/pages`, {
         method: "POST",
         headers: authHeaders(token),
         body: JSON.stringify({
@@ -327,7 +328,7 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
           properties,
           ...(children ? { children } : {}),
         }),
-      });
+      }, deps.fetch);
       if (!res.ok) {
         throw new Error(`Notion create page failed: ${res.status} ${await res.text()}`);
       }
@@ -377,11 +378,11 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
         statusValue = { select: { name: doneName } };
       }
 
-      const res = await deps.fetch(`${NOTION_BASE}/pages/${page.id}`, {
+      const res = await fetchComRetry(`${NOTION_BASE}/pages/${page.id}`, {
         method: "PATCH",
         headers: authHeaders(token),
         body: JSON.stringify({ properties: { [schema.statusProp]: statusValue } }),
-      });
+      }, deps.fetch);
       if (!res.ok) {
         throw new Error(`Notion update page failed: ${res.status} ${await res.text()}`);
       }
