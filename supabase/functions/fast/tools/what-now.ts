@@ -2,7 +2,7 @@
 // Junta tasks com prazo de TODAS as frentes com gerenciador de tarefas
 // configurado e devolve as mais urgentes (vencidas primeiro, depois por
 // prazo mais próximo). O fast mostra só a #1 — as outras ficam de reserva
-// se o Daniel pedir mais opções.
+// se o usuário pedir mais opções.
 
 import { getTaskProvider } from "../../_shared/task-provider-factory.ts";
 import type { TaskProvider } from "../../_shared/task-provider.ts";

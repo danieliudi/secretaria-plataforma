@@ -158,6 +158,7 @@ interface GraphTodoTask {
 
 interface GraphListResponse {
   value?: GraphTodoTask[];
+  "@odata.nextLink"?: string;
 }
 
 function mapTask(t: GraphTodoTask): MicrosoftTodoItem {
@@ -178,16 +179,27 @@ async function fetchListTasks(
   { onlyOpen = true }: { onlyOpen?: boolean } = {},
 ): Promise<MicrosoftTodoItem[]> {
   const headers = await getAuthHeaders(deps);
-  const url = new URL(`${GRAPH_BASE}/me/todo/lists/${encodeURIComponent(listId)}/tasks`);
-  if (onlyOpen) url.searchParams.set("$filter", "status ne 'completed'");
-  url.searchParams.set("$top", "100");
+  const tasks: MicrosoftTodoItem[] = [];
 
-  const res = await deps.fetch(url.toString(), { headers });
-  if (!res.ok) {
-    throw new Error(`Microsoft To Do list failed: ${res.status} ${await res.text()}`);
+  const firstUrl = new URL(`${GRAPH_BASE}/me/todo/lists/${encodeURIComponent(listId)}/tasks`);
+  if (onlyOpen) firstUrl.searchParams.set("$filter", "status ne 'completed'");
+  firstUrl.searchParams.set("$top", "100");
+
+  // Microsoft Graph pagina via "@odata.nextLink" (URL completa pra próxima
+  // página) — sem seguir isso, uma lista com mais de 100 tasks abertas perde
+  // o excedente em silêncio.
+  let nextUrl: string | undefined = firstUrl.toString();
+  while (nextUrl) {
+    const res = await deps.fetch(nextUrl, { headers });
+    if (!res.ok) {
+      throw new Error(`Microsoft To Do list failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as GraphListResponse;
+    tasks.push(...(data.value ?? []).map(mapTask));
+    nextUrl = data["@odata.nextLink"];
   }
-  const data = (await res.json()) as GraphListResponse;
-  return (data.value ?? []).map(mapTask);
+
+  return tasks;
 }
 
 // ─── API pública ─────────────────────────────────────────────────────────────
@@ -243,7 +255,7 @@ export async function createTask(
  * Marca como concluída a task cujo nome contém `query` (case-insensitive).
  * `list` é ignorado.
  * - Nenhum match: throw (executeTool traduz em {error}).
- * - Mais de um match: devolve candidates pro modelo pedir pra Daniel escolher.
+ * - Mais de um match: devolve candidates pro modelo pedir pro usuário escolher.
  * - Exatamente um: PATCH status → "completed".
  */
 export async function completeTask(
@@ -325,7 +337,7 @@ export function buildMicrosoftTodoSystemBlock(map: MicrosoftTodoListMap | null, 
 ${frentesList}
 - IMPORTANTE: igual ao Google Tasks, Microsoft To Do NÃO tem sub-listas dentro da frente — é só a frente inteira como uma lista única. Não existe parâmetro \`list\` aqui; não pergunte "em qual list" nem tente usá-lo.
 - create_task: due_date, se enviado, só agenda a DATA — Microsoft To Do ignora o horário.
-- complete_task: use quando o Daniel disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro Everton", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
+- complete_task: use quando o usuário disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro cliente", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
 }
 
 // ─── Adapter: encaixa na interface TaskProvider comum ───────────────────────

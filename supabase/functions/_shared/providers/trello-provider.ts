@@ -222,7 +222,7 @@ export async function createTask(
  * (case-insensitive), procurando só entre cards ainda ABERTOS (dueComplete
  * falso) na frente (ou só na list, se vier).
  * - Nenhum match: throw (executeTool traduz em {error}).
- * - Mais de um match: devolve candidates pro modelo pedir pra Daniel escolher.
+ * - Mais de um match: devolve candidates pro modelo pedir pro usuário escolher.
  * - Exatamente um: faz o PUT dueComplete=true.
  */
 export async function completeTask(
@@ -284,7 +284,7 @@ export async function listAllOpenTasksWithDue(
  * Gera o bloco do system prompt do Sonnet com base no map carregado.
  * - Sem map ou vazio: bloco curto "não configurado".
  * - Com map: lista frentes/lists configuradas + lista frentes faltantes
- *   pra Sonnet saber o que dizer quando Daniel pedir tasks de uma frente
+ *   pra Sonnet saber o que dizer quando o usuário pedir tasks de uma frente
  *   que não tem Trello.
  */
 export function buildTrelloSystemBlock(map: TrelloListMap | null, frentes: string[] = []): string {
@@ -312,8 +312,8 @@ export function buildTrelloSystemBlock(map: TrelloListMap | null, frentes: strin
 - Frentes e suas lists no Trello:
 ${frentesList}
 - list_tasks: \`list\` é opcional — sem ele, agrega tasks de TODAS as lists da frente.
-- create_task: \`list\` é OBRIGATÓRIO. Se Daniel não disser onde (qual list dentro da frente), PERGUNTE — não chute.
-- complete_task: use quando o Daniel disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro Everton", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
+- create_task: \`list\` é OBRIGATÓRIO. Se o usuário não disser onde (qual list dentro da frente), PERGUNTE — não chute.
+- complete_task: use quando o usuário disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro cliente", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
 }
 
 // ─── Adapter: encaixa as funções acima na interface TaskProvider comum ──────
@@ -330,7 +330,7 @@ export function createTrelloProvider(env?: (key: string) => string | undefined):
     createTask: (input: PCreateTaskInput): Promise<TaskItem> => {
       if (!input.list) {
         throw new Error(
-          "Trello exige `list` pra criar card — pergunte ao Daniel em qual list.",
+          "Trello exige `list` pra criar card — pergunte em qual list.",
         );
       }
       return createTask({ ...input, list: input.list }, deps);

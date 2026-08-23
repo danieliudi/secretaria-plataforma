@@ -251,16 +251,27 @@ async function queryDatabase(
   fetchFn: typeof fetch,
 ): Promise<{ pages: NotionPage[]; schema: ResolvedSchema }> {
   const schema = await fetchDatabaseSchema(databaseId, token, fetchFn);
-  const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}/query`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({ page_size: 100 }),
-  });
-  if (!res.ok) {
-    throw new Error(`Notion database query failed: ${res.status} ${await res.text()}`);
-  }
-  const data = (await res.json()) as { results: NotionPage[] };
-  return { pages: data.results, schema };
+  const pages: NotionPage[] = [];
+  let startCursor: string | undefined;
+
+  // Notion pagina em blocos de até 100 e devolve has_more/next_cursor — sem
+  // seguir isso, uma database com mais de 100 tasks abertas perde o
+  // excedente em silêncio.
+  do {
+    const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}/query`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ page_size: 100, ...(startCursor ? { start_cursor: startCursor } : {}) }),
+    });
+    if (!res.ok) {
+      throw new Error(`Notion database query failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as { results: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
+    pages.push(...data.results);
+    startCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined;
+  } while (startCursor);
+
+  return { pages, schema };
 }
 
 // ─── API pública ────────────────────────────────────────────────────────
