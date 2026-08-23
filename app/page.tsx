@@ -53,7 +53,7 @@ const EXEMPLOS: Array<{ titulo: string; frases: string[] }> = [
   {
     titulo: "Arquivos",
     frases: [
-      "me manda as tarefas da Resibag em planilha",
+      "me manda as tarefas da Nike em planilha",
       "exporta minha agenda da semana",
     ],
   },
@@ -130,7 +130,7 @@ export default async function Home() {
           <Bolha de="eu">bom dia</Bolha>
           <Bolha de="ela">
             Bom dia! Você tem 3 compromissos hoje — o primeiro é 10h, alinhamento
-            com a Sanwey. O deck da Resibag está 2 dias atrasado.
+            com a Nike. O deck da Adidas está 2 dias atrasado.
           </Bolha>
           <Bolha de="eu">marca almoço com o João amanhã 12h</Bolha>
           <Bolha de="ela">Marquei ✅ Amanhã, 12h–13h, “Almoço com João”.</Bolha>
@@ -199,9 +199,9 @@ export default async function Home() {
           </div>
           <div className="flex flex-col px-6 py-4">
             {[
-              ["09:00", "Conselho Sanwey", "60 min"],
-              ["10:00", "Fornecedor — IBC", "30 min · sem intervalo"],
-              ["10:30", "Comercial Resibag", "60 min · sem intervalo"],
+              ["09:00", "Conselho Nike", "60 min"],
+              ["10:00", "Fornecedor — Foxconn", "30 min · sem intervalo"],
+              ["10:30", "Comercial Adidas", "60 min · sem intervalo"],
               ["11:30", "Jurídico", "45 min · sem intervalo"],
             ].map(([hora, titulo, sub], i, arr) => (
               <div
