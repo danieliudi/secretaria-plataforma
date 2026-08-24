@@ -10,6 +10,10 @@
 //                  (suporta recorrência: daily/weekly/monthly_first_business_day).
 //   - "marketing": review semanal por frente (GA4 + tarefas) com otimizações.
 //   - "evening_recap": recap de fim de dia (o que ficou em aberto hoje).
+//   - "whatsapp_watchdog": checa se a instância compartilhada da Evolution
+//                  API está conectada, tenta reconectar sozinha e só avisa
+//                  (Telegram, dedup) se continuar fora do ar depois disso —
+//                  ver runWhatsappWatchdog (achado do incidente de 20-24/08).
 //
 // Envio: roteado por canal (WhatsApp/Evolution ou Telegram) conforme o destino
 // resolvido do tenant (ver destinoDoTenant/resolveEntrega).
@@ -21,8 +25,8 @@
 // rodam MULTI-TENANT: o Deno.serve abaixo despacha uma execução isolada por
 // tenant elegível (coordenador → executor). As tasks que passam pelo /fast
 // (brief, weekly, marketing, evening_recap) e as de plataforma (novos_
-// cadastros, feedback_novo) continuam single-tenant — ver comentário em
-// TASKS_MULTI_TENANT pro motivo. O `env` de cada execução é resolvido 1x
+// cadastros, feedback_novo, whatsapp_watchdog) continuam single-tenant — ver
+// comentário em TASKS_MULTI_TENANT pro motivo. O `env` de cada execução é resolvido 1x
 // (buildTenantEnv) e passado pra tudo que tem override por tenant — Calendar
 // (Google), GA4, TaskProvider e canal de entrega. Sem override no tenant, cai
 // no secret global só se for infra compartilhada ou o tenant for o dono da
@@ -30,7 +34,14 @@
 
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { getGoogleAccessToken } from "../_shared/google-oauth.ts";
-import { hasEvolutionConfig, sendWhatsAppImage, sendWhatsAppText } from "../_shared/whatsapp.ts";
+import {
+  type EvolutionConnectionState,
+  getEvolutionConnectionState,
+  hasEvolutionConfig,
+  restartEvolutionInstance,
+  sendWhatsAppImage,
+  sendWhatsAppText,
+} from "../_shared/whatsapp.ts";
 import { sendTelegramMessage } from "../_shared/telegram.ts";
 import { channelFromUserId, telegramChatId } from "../_shared/channel.ts";
 import { getGa4Snapshot, tryLoadGa4Map } from "../_shared/ga4.ts";
@@ -241,6 +252,101 @@ async function desfazAviso(tenantId: string, tipo: string, chave: string): Promi
       `[cron] AVISO ${tipo}/${semDadoPessoal(chave)} PERDIDO (tenant ${tenantId}): envio falhou e o rollback do claim também — ${semDadoPessoal(error.message)}`,
     );
   }
+}
+
+const WHATSAPP_WATCHDOG_TIPO = "whatsapp_watchdog_down";
+const WHATSAPP_WATCHDOG_CHAVE = "atual"; // fixa — o claim em si É a memória de "já tô alertado desta queda"
+const WHATSAPP_WATCHDOG_RESTART_WAIT_MS = 8_000; // tempo pra Evolution reconectar antes de reconferir
+
+/**
+ * Manda uma mensagem pro dono da plataforma SEMPRE por Telegram, nunca pelo
+ * canal resolvido do tenant — o ponto do watchdog é avisar quando o WhatsApp
+ * está quebrado, então avisar por WhatsApp seria inútil no caso que importa.
+ */
+async function alertaWatchdogTelegram(tenant: Tenant, texto: string, env: EnvFn): Promise<void> {
+  if (tenant.telegram_authorized_chat_id == null) {
+    throw new Error("telegram_authorized_chat_id não configurado pro dono da plataforma");
+  }
+  await sendTelegramMessage(tenant.telegram_authorized_chat_id, texto, { fetch, env });
+}
+
+/**
+ * Vigia a instância compartilhada de WhatsApp (Evolution API) direto pelo
+ * estado da conexão — não por silêncio de tráfego (silêncio é normal à noite
+ * e fim de semana, e só apareceria horas depois de uma queda real).
+ *
+ * Não é MULTI_TENANT: a instância é uma só (número compartilhado), roda 1x
+ * por tick sempre contra o dono da plataforma — mesmo padrão de
+ * novos_cadastros/feedback_novo.
+ *
+ * Fluxo: consulta estado → "open" (encerra quieto; se havia queda registrada,
+ * desarma e avisa recuperação) → não-"open" (tenta reiniciar a instância
+ * sozinho, reconsulta — se voltou, fica quieto, log só) → continua fora do ar
+ * mesmo após a tentativa (avisa 1x por queda via Telegram — dedup em
+ * avisos_enviados, mesmo padrão das outras tasks, nunca reenvia a cada tick
+ * enquanto a queda persiste).
+ */
+async function runWhatsappWatchdog(env: EnvFn, tenant: Tenant): Promise<{ estado: string }> {
+  if (!hasEvolutionConfig(env)) return { estado: "sem_config" };
+  const deps = { fetch, env };
+
+  async function consultaEstado(): Promise<EvolutionConnectionState | "erro"> {
+    try {
+      return await getEvolutionConnectionState(deps);
+    } catch (err) {
+      console.error(`[cron] whatsapp_watchdog: consulta de estado falhou: ${semDadoPessoal(err)}`);
+      return "erro";
+    }
+  }
+
+  const estado = await consultaEstado();
+
+  if (estado === "open") {
+    const { error, count } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("tipo", WHATSAPP_WATCHDOG_TIPO)
+      .eq("chave", WHATSAPP_WATCHDOG_CHAVE);
+    if (error) {
+      console.error(`[cron] whatsapp_watchdog: checar queda pendente falhou: ${semDadoPessoal(error.message)}`);
+      return { estado: "ok" };
+    }
+    if (count) {
+      await desfazAviso(tenant.id, WHATSAPP_WATCHDOG_TIPO, WHATSAPP_WATCHDOG_CHAVE);
+      try {
+        await alertaWatchdogTelegram(tenant, "✅ WhatsApp reconectado — voltou a responder normalmente.", env);
+      } catch (err) {
+        console.error(`[cron] whatsapp_watchdog: alerta de recuperação falhou: ${semDadoPessoal(err)}`);
+      }
+    }
+    return { estado: "ok" };
+  }
+
+  // Não está "open" — tenta reconectar sozinho antes de incomodar alguém.
+  await restartEvolutionInstance(deps);
+  await new Promise((resolve) => setTimeout(resolve, WHATSAPP_WATCHDOG_RESTART_WAIT_MS));
+  const estadoDepois = await consultaEstado();
+
+  if (estadoDepois === "open") {
+    console.log(`[cron] whatsapp_watchdog: caiu (${estado}) mas reconectou sozinho`);
+    return { estado: "recuperado_sozinho" };
+  }
+
+  const podeAvisar = await reivindicaAviso(tenant.id, WHATSAPP_WATCHDOG_TIPO, WHATSAPP_WATCHDOG_CHAVE);
+  if (podeAvisar) {
+    try {
+      await alertaWatchdogTelegram(
+        tenant,
+        `⚠️ O WhatsApp caiu e não reconectou sozinho (estado: ${estadoDepois}).\n\nProvavelmente a instância desconectou na Evolution API e precisa de um QR novo. Abre o painel da Evolution/Railway pra reconectar — assim que a conexão voltar eu aviso por aqui.`,
+        env,
+      );
+    } catch (err) {
+      await desfazAviso(tenant.id, WHATSAPP_WATCHDOG_TIPO, WHATSAPP_WATCHDOG_CHAVE);
+      console.error(`[cron] whatsapp_watchdog: alerta de queda falhou: ${semDadoPessoal(err)}`);
+    }
+  }
+  return { estado: "alertado" };
 }
 
 /** Mesmo padrão de reivindicaAviso, pra clickup_alerts_sent (schema próprio: task_id+due_ms, não tipo+chave). */
@@ -2191,7 +2297,7 @@ const TASKS_MULTI_TENANT = new Set([
 // Tasks de PLATAFORMA: varredura global (não por tenant), só o dono vê —
 // carregam PII (nome/e-mail de quem se cadastrou) ou texto livre de terceiro
 // (feedback). Nunca entram em fan-out.
-const TASKS_PLATAFORMA = new Set(["novos_cadastros", "feedback_novo"]);
+const TASKS_PLATAFORMA = new Set(["novos_cadastros", "feedback_novo", "whatsapp_watchdog"]);
 
 // Só pra PRÉ-FILTRAR o coordenador (poupar invocação em tenant sem Google) —
 // não é a guarda de verdade: cada task revalida `googleConectado` sozinha.
@@ -2401,6 +2507,7 @@ Deno.serve(async (req: Request) => {
     if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env, tenant.id)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     if (task === "feedback_novo") return json({ ok: true, ...(await runFeedbackNovo(env)) });
+    if (task === "whatsapp_watchdog") return json({ ok: true, ...(await runWhatsappWatchdog(env, tenant)) });
     return json({
       error: "task: " + [...TASKS_MULTI_TENANT, ...TASKS_PLATAFORMA].join(" | ") +
         " | brief | weekly | marketing | evening_recap | <mecânica>_dry",
