@@ -194,6 +194,10 @@ export default function OnboardingWizard(props: {
   initialProvider: Provider;
   googleConnected: boolean;
   outlookConnected: boolean;
+  /** E-mail da conta vinculada — `null` quando ainda não conectado ou quando
+   * o provider não devolveu e-mail na identidade (raro). */
+  googleEmail: string | null;
+  outlookEmail: string | null;
   linkError: string | null;
   initialChannels: Channel[];
   telegramConnected: boolean;
@@ -347,6 +351,66 @@ export default function OnboardingWizard(props: {
     // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
   }
 
+  // "Trocar conta" num provider JÁ conectado (ex: linkou o Outlook errado
+  // entre os vários e-mails Microsoft salvos). NÃO reusa `signInWithOAuth`
+  // (o branch "já é identidade" de handleConnectProvider): reautenticar por
+  // ali troca a SESSÃO INTEIRA se a pessoa escolher uma conta diferente da
+  // atual — o Supabase loga como o usuário DONO daquela identidade (criando
+  // um usuário novo do zero se ninguém for dono ainda), não troca só o
+  // provider dentro da conta logada. O caminho seguro é desvincular a
+  // identidade atual (`unlinkIdentity`) e then vincular de novo
+  // (`linkIdentity`) — que sempre gruda no usuário JÁ logado.
+  async function handleSwitchProvider(provider: OAuthProviderId) {
+    setConnectingProvider(provider);
+    setError(null);
+    if (garanteOrigemCanonica("/onboarding")) return;
+
+    const supabase = createClient();
+    const cfg = OAUTH_PROVIDERS[provider];
+
+    const { data, error: listError } = await supabase.auth.getUserIdentities();
+    if (listError) {
+      setConnectingProvider(null);
+      setError(`Não conseguimos verificar sua conta ${cfg.label} atual — tenta de novo?`);
+      return;
+    }
+    const identidadeAtual = (data?.identities ?? []).find((i) => i.provider === provider);
+    if (!identidadeAtual) {
+      // Não deveria acontecer ("trocar" só aparece quando já está conectado)
+      // — por segurança, cai pro fluxo normal de conectar.
+      return handleConnectProvider(provider);
+    }
+
+    const { error: unlinkError } = await supabase.auth.unlinkIdentity(identidadeAtual);
+    if (unlinkError) {
+      setConnectingProvider(null);
+      setError(
+        unlinkError.code === "single_identity_not_deletable"
+          ? `Essa é sua única conta conectada — conecta o outro provedor (Google ou Outlook) antes de trocar esta.`
+          : `Não conseguimos desconectar a conta atual de ${cfg.label} pra trocar — tenta de novo?`,
+      );
+      console.error(`[onboarding] trocar ${provider} — unlinkIdentity falhou:`, unlinkError.message);
+      return;
+    }
+
+    const { error } = await supabase.auth.linkIdentity({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+        scopes: cfg.scopes,
+        queryParams: cfg.queryParams,
+      },
+    });
+    if (error) {
+      setConnectingProvider(null);
+      console.error(`[onboarding] trocar ${provider} — linkIdentity falhou:`, error.message);
+      setError(
+        `Desconectamos a conta antiga de ${cfg.label}, mas não conseguimos abrir a nova autorização — clica em "Conectar" pra tentar de novo.`,
+      );
+    }
+    // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
+  }
+
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
     // "chefe" é o padrão do backend, então vai como null em vez de literal —
@@ -452,16 +516,32 @@ export default function OnboardingWizard(props: {
               <div className="flex flex-col gap-2">
                 {enabledOAuthProviders().map((cfg) => {
                   const connected = cfg.id === "google" ? props.googleConnected : props.outlookConnected;
+                  const email = cfg.id === "google" ? props.googleEmail : props.outlookEmail;
                   return (
                     <div
                       key={cfg.id}
                       className="flex items-center justify-between gap-3 rounded-lg border border-aurora-line-soft px-3 py-2 text-[13px]"
                     >
-                      <span className="text-aurora-fg">{cfg.label}</span>
+                      <div className="flex flex-col">
+                        <span className="text-aurora-fg">{cfg.label}</span>
+                        {connected && email && (
+                          <span className="text-[11px] tabular-nums text-aurora-muted">{email}</span>
+                        )}
+                      </div>
                       {connected ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-aurora-ok/15 px-2 py-0.5 text-[11.5px] font-bold text-aurora-ok">
-                          <CheckIcon /> Conectado
-                        </span>
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchProvider(cfg.id)}
+                            disabled={connectingProvider !== null}
+                            className="text-[11px] font-semibold text-aurora-muted underline underline-offset-2 hover:text-aurora-muted-2 disabled:opacity-60"
+                          >
+                            {connectingProvider === cfg.id ? "Trocando…" : "Trocar conta"}
+                          </button>
+                          <span className="inline-flex items-center gap-1 rounded-md bg-aurora-ok/15 px-2 py-0.5 text-[11.5px] font-bold text-aurora-ok">
+                            <CheckIcon /> Conectado
+                          </span>
+                        </div>
                       ) : (
                         <button
                           type="button"

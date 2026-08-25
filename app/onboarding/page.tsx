@@ -23,6 +23,16 @@ export default async function OnboardingPage({
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  // E-mail de cada conta vinculada (Google/Outlook), pra mostrar QUAL conta
+  // está conectada — não só "conectado". O Supabase Auth já guarda isso em
+  // `identities[].identity_data.email`, então não precisa de coluna nova nem
+  // de a pessoa reconectar nada pra essa informação aparecer.
+  const identityEmails = new Map<string, string>();
+  for (const identity of user.identities ?? []) {
+    const identityEmail = (identity.identity_data?.email as string | undefined)?.trim();
+    if (identityEmail) identityEmails.set(identity.provider, identityEmail);
+  }
+
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
     .from("tenants")
@@ -120,6 +130,8 @@ export default async function OnboardingPage({
       initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}
+      googleEmail={identityEmails.get("google") ?? null}
+      outlookEmail={identityEmails.get("azure") ?? null}
       linkError={linkError ?? null}
       initialChannels={initialChannels as ("whatsapp" | "telegram" | "teams")[]}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
