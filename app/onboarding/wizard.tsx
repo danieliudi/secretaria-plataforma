@@ -1173,6 +1173,23 @@ export default function OnboardingWizard(props: {
                   <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-aurora-fg">
                     {whatsappLinkCode}
                   </p>
+                  {WHATSAPP_LINK && (
+                    <>
+                      <a
+                        href={`${WHATSAPP_LINK}?text=${encodeURIComponent(whatsappLinkCode)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="aurora-glow mt-3 flex items-center justify-center gap-2 rounded-lg bg-aurora-accent px-4 py-2.5 text-[13px] font-bold text-aurora-accent-ink transition active:scale-[0.98]"
+                      >
+                        Abrir WhatsApp com o código pronto
+                      </a>
+                      <div className="mt-3 flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-wide text-aurora-muted-2">
+                        <span className="h-px flex-1 bg-aurora-line" />
+                        ou manualmente
+                        <span className="h-px flex-1 bg-aurora-line" />
+                      </div>
+                    </>
+                  )}
                   <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
                     Manda pra este número
                   </p>
