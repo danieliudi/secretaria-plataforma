@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { Logo } from "@/components/Logo";
 
 // Quem já entrou vai direto pro wizard — a landing é pra quem ainda não
 // conhece. Antes desta página o "/" redirecionava direto pro /login, e a
@@ -83,24 +84,23 @@ export default async function Home() {
   return (
     <main className="aurora-bg flex min-h-screen flex-col">
       {/* ── topo ── */}
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <div className="flex items-center gap-2">
-          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
-        </div>
-        <div className="flex items-center gap-6">
-          <Link
-            href="/novidades"
-            className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
-          >
-            Novidades
-          </Link>
-          <Link
-            href="/login"
-            className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-          >
-            Entrar
-          </Link>
+      <header className="bg-aurora-header-bg">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+          <Logo variant="header" />
+          <div className="flex items-center gap-6">
+            <Link
+              href="/novidades"
+              className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
+            >
+              Novidades
+            </Link>
+            <Link
+              href="/login"
+              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
+            >
+              Entrar
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -288,8 +288,7 @@ export default async function Home() {
 
       <footer className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-x-2 gap-y-2 px-6 py-7">
-          <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
+          <Logo variant="footer" />
           <span className="mx-1 text-aurora-line">·</span>
           <Link href="/privacidade" className="text-[13px] text-aurora-muted-2 transition hover:text-aurora-muted">
             Privacidade

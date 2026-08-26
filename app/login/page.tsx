@@ -4,6 +4,7 @@ import { use, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { OAUTH_PROVIDERS, enabledOAuthProviders, type OAuthProviderId } from "@/lib/oauth-providers";
 import { garanteOrigemCanonica } from "@/lib/site-url";
+import { Logo } from "@/components/Logo";
 
 const providers = enabledOAuthProviders();
 
@@ -108,10 +109,7 @@ export default function LoginPage({
   return (
     <main className="aurora-bg flex min-h-screen items-center justify-center px-8 py-16 md:px-20">
       <div className="flex w-full max-w-md flex-col items-start gap-6 text-left">
-        <div className="flex items-center gap-2">
-          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
-        </div>
+        <Logo variant="header" />
         <h1 className="text-balance text-[32px] font-semibold leading-[1.2] tracking-tight text-aurora-fg">
           Sua secretária, em minutos
         </h1>
