@@ -37,9 +37,19 @@ import type {
   TaskProvider,
 } from "../task-provider.ts";
 import { frentesDoEnv } from "../tenant.ts";
+import { fetchComRetry } from "../http-retry.ts";
 
 const NOTION_BASE = "https://api.notion.com/v1";
-const NOTION_VERSION = "2022-06-28";
+// A partir desta versão, "database" virou um CONTÊINER de uma ou mais "data
+// sources" — schema/query/criação de página passaram a agir sobre uma data
+// source específica (/v1/data_sources/*), não mais sobre a database direto.
+// Migração obrigatória mesmo sem nenhum tenant com múltiplas fontes HOJE: o
+// dono do workspace pode criar uma 2ª fonte numa database a qualquer momento
+// pela própria UI do Notion, sem avisar o sistema — e a partir desse instante
+// TODA chamada feita com a versão antiga (2022-06-28) contra aquela database
+// específica passa a falhar com validation_error explícito (GET database,
+// query, create-page com parent.database_id). Ver resolveDataSourceId.
+const NOTION_VERSION = "2025-09-03";
 
 /** {frente: databaseId} — lookup case-insensitive na frente. */
 export type NotionDatabaseMap = Record<string, string>;
@@ -135,6 +145,59 @@ interface ResolvedSchema {
 
 const DONE_SELECT_NAMES = new Set(["done", "concluído", "concluido", "completed", "feito"]);
 
+interface NotionDataSourceRef {
+  id: string;
+  name: string;
+}
+
+interface NotionDatabaseObject {
+  data_sources?: NotionDataSourceRef[];
+}
+
+const dataSourceIdCache = new Map<string, string>();
+
+/**
+ * Resolve o data_source_id operacional a partir do database_id salvo na
+ * config do tenant (esse último continua sendo o único identificador que a
+ * config guarda — ver NotionDatabaseMap). Uma database com 1 única fonte
+ * (o caso normal de todo tenant hoje) resolve sozinha, sem perguntar nada.
+ * Com 2+ fontes, a API do Notion não marca nenhuma como "padrão" (sem
+ * is_default/primary no retorno) — pegar a primeira do array silenciosamente
+ * seria loteria, então isso vira erro explícito pedindo configuração manual.
+ */
+async function resolveDataSourceId(
+  databaseId: string,
+  token: string,
+  fetchFn: typeof fetch,
+): Promise<string> {
+  const cached = dataSourceIdCache.get(databaseId);
+  if (cached) return cached;
+
+  const res = await fetchComRetry(`${NOTION_BASE}/databases/${databaseId}`, {
+    headers: authHeaders(token),
+  }, fetchFn);
+  if (!res.ok) {
+    throw new Error(`Notion database lookup failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as NotionDatabaseObject;
+  const sources = data.data_sources ?? [];
+
+  if (sources.length === 0) {
+    throw new Error(`Database ${databaseId} não tem nenhuma data source — configuração inválida no Notion`);
+  }
+  if (sources.length > 1) {
+    const nomes = sources.map((s) => s.name).join(", ");
+    throw new Error(
+      `Database ${databaseId} tem ${sources.length} data sources (${nomes}) — o Notion não marca qual é a padrão, ` +
+        `não dá pra escolher sozinho sem risco de operar na fonte errada. Configure manualmente qual data source usar.`,
+    );
+  }
+
+  const dataSourceId = sources[0].id;
+  dataSourceIdCache.set(databaseId, dataSourceId);
+  return dataSourceId;
+}
+
 const schemaCache = new Map<string, ResolvedSchema>();
 
 async function fetchDatabaseSchema(
@@ -145,9 +208,10 @@ async function fetchDatabaseSchema(
   const cached = schemaCache.get(databaseId);
   if (cached) return cached;
 
-  const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}`, {
+  const dataSourceId = await resolveDataSourceId(databaseId, token, fetchFn);
+  const res = await fetchComRetry(`${NOTION_BASE}/data_sources/${dataSourceId}`, {
     headers: authHeaders(token),
-  });
+  }, fetchFn);
   if (!res.ok) {
     throw new Error(`Notion database schema failed: ${res.status} ${await res.text()}`);
   }
@@ -251,16 +315,28 @@ async function queryDatabase(
   fetchFn: typeof fetch,
 ): Promise<{ pages: NotionPage[]; schema: ResolvedSchema }> {
   const schema = await fetchDatabaseSchema(databaseId, token, fetchFn);
-  const res = await fetchFn(`${NOTION_BASE}/databases/${databaseId}/query`, {
-    method: "POST",
-    headers: authHeaders(token),
-    body: JSON.stringify({ page_size: 100 }),
-  });
-  if (!res.ok) {
-    throw new Error(`Notion database query failed: ${res.status} ${await res.text()}`);
-  }
-  const data = (await res.json()) as { results: NotionPage[] };
-  return { pages: data.results, schema };
+  const dataSourceId = await resolveDataSourceId(databaseId, token, fetchFn);
+  const pages: NotionPage[] = [];
+  let startCursor: string | undefined;
+
+  // Notion pagina em blocos de até 100 e devolve has_more/next_cursor — sem
+  // seguir isso, uma database com mais de 100 tasks abertas perde o
+  // excedente em silêncio.
+  do {
+    const res = await fetchComRetry(`${NOTION_BASE}/data_sources/${dataSourceId}/query`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ page_size: 100, ...(startCursor ? { start_cursor: startCursor } : {}) }),
+    }, fetchFn);
+    if (!res.ok) {
+      throw new Error(`Notion database query failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as { results: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
+    pages.push(...data.results);
+    startCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined;
+  } while (startCursor);
+
+  return { pages, schema };
 }
 
 // ─── API pública ────────────────────────────────────────────────────────
@@ -290,6 +366,7 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
       const map = loadMap(deps.env);
       const databaseId = resolveDatabaseId(map, input.frente);
       const schema = await fetchDatabaseSchema(databaseId, token, deps.fetch);
+      const dataSourceId = await resolveDataSourceId(databaseId, token, deps.fetch);
 
       // deno-lint-ignore no-explicit-any
       const properties: Record<string, any> = {
@@ -308,15 +385,15 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
         }]
         : undefined;
 
-      const res = await deps.fetch(`${NOTION_BASE}/pages`, {
+      const res = await fetchComRetry(`${NOTION_BASE}/pages`, {
         method: "POST",
         headers: authHeaders(token),
         body: JSON.stringify({
-          parent: { database_id: databaseId },
+          parent: { type: "data_source_id", data_source_id: dataSourceId },
           properties,
           ...(children ? { children } : {}),
         }),
-      });
+      }, deps.fetch);
       if (!res.ok) {
         throw new Error(`Notion create page failed: ${res.status} ${await res.text()}`);
       }
@@ -366,11 +443,11 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
         statusValue = { select: { name: doneName } };
       }
 
-      const res = await deps.fetch(`${NOTION_BASE}/pages/${page.id}`, {
+      const res = await fetchComRetry(`${NOTION_BASE}/pages/${page.id}`, {
         method: "PATCH",
         headers: authHeaders(token),
         body: JSON.stringify({ properties: { [schema.statusProp]: statusValue } }),
-      });
+      }, deps.fetch);
       if (!res.ok) {
         throw new Error(`Notion update page failed: ${res.status} ${await res.text()}`);
       }

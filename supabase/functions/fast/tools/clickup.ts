@@ -10,6 +10,8 @@
 // (sem `list` no input) ou filtrar uma list específica (com `list`).
 // createTask exige `list` obrigatório.
 
+import { fetchComRetry } from "../../_shared/http-retry.ts";
+
 const CLICKUP_BASE = "https://api.clickup.com/api/v2";
 
 /** {frente: {listName: listId}} — case-insensitive lookup nos dois níveis. */
@@ -34,7 +36,7 @@ export interface ListTasksInput {
 
 export interface CreateTaskInput {
   frente: string;
-  /** Obrigatório — Sonnet deve perguntar se Daniel não disser. */
+  /** Obrigatório — o modelo deve perguntar se o usuário não disser. */
   list: string;
   title: string;
   description?: string;
@@ -136,23 +138,40 @@ function mapTask(t: GTask, listName?: string): ClickUpTask {
   return listName ? { ...base, list: listName } : base;
 }
 
+// ClickUp devolve no máximo 100 tasks por página e não manda contagem total
+// nem "has_more" — a própria API recomenda parar quando uma página vem com
+// MENOS que o tamanho máximo (uma página cheia sempre pode ter mais atrás).
+const CLICKUP_PAGE_SIZE = 100;
+
 async function fetchListTasks(
   listId: string,
   listName: string,
   token: string,
   fetchFn: typeof fetch,
 ): Promise<ClickUpTask[]> {
-  const url = new URL(`${CLICKUP_BASE}/list/${listId}/task`);
-  url.searchParams.set("archived", "false");
+  const tasks: ClickUpTask[] = [];
+  let page = 0;
 
-  const res = await fetchFn(url.toString(), {
-    headers: { Authorization: token },
-  });
-  if (!res.ok) {
-    throw new Error(`ClickUp list failed: ${res.status} ${await res.text()}`);
+  for (;;) {
+    const url = new URL(`${CLICKUP_BASE}/list/${listId}/task`);
+    url.searchParams.set("archived", "false");
+    url.searchParams.set("page", String(page));
+
+    const res = await fetchComRetry(url.toString(), {
+      headers: { Authorization: token },
+    }, fetchFn);
+    if (!res.ok) {
+      throw new Error(`ClickUp list failed: ${res.status} ${await res.text()}`);
+    }
+    const data = (await res.json()) as { tasks?: GTask[] };
+    const pageTasks = data.tasks ?? [];
+    tasks.push(...pageTasks.map((t) => mapTask(t, listName)));
+
+    if (pageTasks.length < CLICKUP_PAGE_SIZE) break;
+    page++;
   }
-  const data = (await res.json()) as { tasks?: GTask[] };
-  return (data.tasks ?? []).map((t) => mapTask(t, listName));
+
+  return tasks;
 }
 
 // ─── API pública ─────────────────────────────────────────────────────────────
@@ -202,14 +221,14 @@ export async function createTask(
   if (input.description) body.description = input.description;
   if (input.due_date) body.due_date = new Date(input.due_date).getTime();
 
-  const res = await deps.fetch(`${CLICKUP_BASE}/list/${listId}/task`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/list/${listId}/task`, {
     method: "POST",
     headers: {
       Authorization: token,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, deps.fetch);
   if (!res.ok) {
     throw new Error(`ClickUp create failed: ${res.status} ${await res.text()}`);
   }
@@ -229,9 +248,9 @@ async function getListStatuses(
   token: string,
   fetchFn: typeof fetch,
 ): Promise<ClickUpStatusInfo[]> {
-  const res = await fetchFn(`${CLICKUP_BASE}/list/${listId}`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/list/${listId}`, {
     headers: { Authorization: token },
-  });
+  }, fetchFn);
   if (!res.ok) {
     throw new Error(`ClickUp list info failed: ${res.status} ${await res.text()}`);
   }
@@ -260,7 +279,7 @@ export type CompleteTaskResult =
 /**
  * Marca como concluída a task cujo nome contém `query` (case-insensitive).
  * - Nenhum match: throw (executeTool traduz em {error}).
- * - Mais de um match: devolve candidates pro modelo pedir pra Daniel escolher.
+ * - Mais de um match: devolve candidates pro modelo pedir pro usuário escolher.
  * - Exatamente um: resolve o status "closed"/"done" da list e faz o PUT.
  */
 export async function completeTask(
@@ -285,11 +304,11 @@ export async function completeTask(
   const statuses = await getListStatuses(listId, token, deps.fetch);
   const closedStatus = pickClosedStatus(statuses);
 
-  const res = await deps.fetch(`${CLICKUP_BASE}/task/${task.id}`, {
+  const res = await fetchComRetry(`${CLICKUP_BASE}/task/${task.id}`, {
     method: "PUT",
     headers: { Authorization: token, "Content-Type": "application/json" },
     body: JSON.stringify({ status: closedStatus }),
-  });
+  }, deps.fetch);
   if (!res.ok) {
     throw new Error(`ClickUp update status failed: ${res.status} ${await res.text()}`);
   }
@@ -360,6 +379,6 @@ export function buildClickUpSystemBlock(map: ClickUpListMap | null, frentes: str
 - Frentes e suas lists no ClickUp:
 ${frentesList}
 - list_tasks: \`list\` é opcional — sem ele, agrega tasks de TODAS as lists da frente.
-- create_task: \`list\` é OBRIGATÓRIO. Se Daniel não disser onde (qual list dentro da frente), PERGUNTE — não chute.
-- complete_task: use quando o Daniel disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro Everton", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
+- create_task: \`list\` é OBRIGATÓRIO. Se o usuário não disser onde (qual list dentro da frente), PERGUNTE — não chute.
+- complete_task: use quando o usuário disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro cliente", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
 }

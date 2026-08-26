@@ -32,7 +32,7 @@ export function createClickUpProvider(env?: (key: string) => string | undefined)
     createTask: (input: PCreateTaskInput): Promise<TaskItem> => {
       if (!input.list) {
         throw new Error(
-          "ClickUp exige `list` pra criar task — pergunte ao Daniel em qual list.",
+          "ClickUp exige `list` pra criar task — pergunte em qual list.",
         );
       }
       return createTask(
