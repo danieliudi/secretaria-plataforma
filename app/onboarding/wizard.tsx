@@ -233,6 +233,7 @@ export default function OnboardingWizard(props: {
   const [teamsLinkCodeExpiresAt, setTeamsLinkCodeExpiresAt] = useState<string | null>(props.initialTeamsLinkCodeExpiresAt);
   const [teamsConnected, setTeamsConnected] = useState(props.teamsConnected);
   const [respostaAudioSempre, setRespostaAudioSempre] = useState(props.initialRespostaAudioSempre);
+  const [whatsappVerifying, setWhatsappVerifying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -398,6 +399,43 @@ export default function OnboardingWizard(props: {
       if (result.teams_already_linked === true) setTeamsConnected(true);
       setStep(4);
       setFinished(true);
+    }
+  }
+
+  /**
+   * Reconsulta o vínculo do WhatsApp sem reabrir o formulário inteiro (botão
+   * "já mandei, verificar" no card do código). Reusa o mesmo endpoint de
+   * sempre — seguro chamar de novo agora que o backend reaproveita o código
+   * pendente em vez de trocar por um novo a cada chamada. Estado próprio
+   * (não usa `saving`/`error` do formulário) pra não misturar com o resto.
+   */
+  async function verificarWhatsapp() {
+    setWhatsappVerifying(true);
+    try {
+      const res = await fetch("/api/onboarding/channel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channels: [...channels],
+          telegram_bot_token: telegramToken,
+          envio_oficial: envioOficial,
+          resposta_audio_sempre: respostaAudioSempre,
+        }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok || !result) return;
+      if (result.whatsapp_already_linked === true) {
+        setWhatsappConnected(true);
+      } else {
+        setWhatsappLinkCode(typeof result.whatsapp_link_code === "string" ? result.whatsapp_link_code : null);
+        setWhatsappLinkCodeExpiresAt(
+          typeof result.whatsapp_link_code_expires_at === "string" ? result.whatsapp_link_code_expires_at : null,
+        );
+      }
+    } catch {
+      // best-effort — a pessoa pode tentar de novo
+    } finally {
+      setWhatsappVerifying(false);
     }
   }
 
@@ -1083,16 +1121,37 @@ export default function OnboardingWizard(props: {
                   <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-aurora-fg">
                     {whatsappLinkCode}
                   </p>
-                  <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
-                    Manda pra este número
-                  </p>
-                  <NumeroDaSecretaria />
+                  {WHATSAPP_LINK ? (
+                    <a
+                      href={`${WHATSAPP_LINK}?text=${encodeURIComponent(whatsappLinkCode)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex w-fit items-center gap-1.5 rounded-lg border border-aurora-accent/40 bg-aurora-accent/[0.08] px-4 py-2 text-[13px] font-semibold text-aurora-accent-text transition hover:border-aurora-accent"
+                    >
+                      Abrir WhatsApp e vincular ↗
+                    </a>
+                  ) : (
+                    <>
+                      <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
+                        Manda pra este número
+                      </p>
+                      <NumeroDaSecretaria />
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={verificarWhatsapp}
+                    disabled={whatsappVerifying}
+                    className="mt-2 block text-[12px] text-aurora-muted underline underline-offset-2 disabled:opacity-60"
+                  >
+                    {whatsappVerifying ? "Verificando…" : "Já mandei, verificar"}
+                  </button>
                   <p className="mt-2 text-[12.5px] leading-relaxed text-aurora-muted">
                     O código vale por 30 minutos
                     {whatsappLinkCodeExpiresAt && (
                       <> (até {new Date(whatsappLinkCodeExpiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})</>
                     )}
-                    . Se vencer, é só voltar aqui e concluir esse passo de novo pra gerar outro.
+                    . Continua valendo se você voltar aqui antes de vencer — não gera outro à toa.
                   </p>
                 </div>
               ) : (
