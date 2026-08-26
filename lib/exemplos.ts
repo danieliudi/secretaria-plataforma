@@ -72,7 +72,7 @@ export const EXEMPLOS: Exemplo[] = [
     descricao:
       "Quando o que você precisa é um arquivo — não só uma resposta — ela exporta em planilha ou PDF na hora, direto na conversa.",
     frases: [
-      "me manda as tarefas da Resibag em planilha",
+      "me manda as tarefas da Nike em planilha",
       "exporta minha agenda da semana",
     ],
   },
