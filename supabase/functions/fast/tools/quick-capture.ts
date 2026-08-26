@@ -1,4 +1,4 @@
-// Quick capture — anotação livre que o Daniel pede pra registrar ("anota X",
+// Quick capture — anotação livre que o usuário pede pra registrar ("anota X",
 // "lembra de Y", "guarda isso"). Grava na tabela `quick_capture` do Supabase.
 //
 // Tabela schema (assumido — existente desde Fase 1):
@@ -23,7 +23,7 @@ type InsertFn = (
 // Marca como processadas (somem da triagem semanal de "paradas há mais de 7
 // dias", ver cron/index.ts getStaleCaptures) as notas pendentes que batem com
 // `query` — ou todas, sem query. Devolve as linhas afetadas (só `texto`) pra
-// confirmar ao Daniel o que foi arquivado.
+// confirmar ao usuário o que foi arquivado.
 type ArchiveFn = (
   query: string | undefined,
 ) => Promise<{ data: { texto: string }[] | null; error: { message: string } | null }>;

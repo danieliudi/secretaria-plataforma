@@ -10,6 +10,7 @@
 
 import { getGoogleAccessToken } from "./google-oauth.ts";
 import { frentesDoEnv } from "./tenant.ts";
+import { fetchComRetry } from "./http-retry.ts";
 
 const GA4_BASE = "https://analyticsdata.googleapis.com/v1beta";
 
@@ -81,14 +82,14 @@ async function runReport(
   deps: Ga4Deps,
 ): Promise<RunReportResponse> {
   const token = await deps.getAccessToken();
-  const res = await deps.fetch(`${GA4_BASE}/${property}:runReport`, {
+  const res = await fetchComRetry(`${GA4_BASE}/${property}:runReport`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, deps.fetch);
   if (!res.ok) {
     throw new Ga4ApiError(res.status, `GA4 runReport ${res.status}: ${(await res.text()).slice(0, 250)}`);
   }

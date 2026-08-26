@@ -77,7 +77,7 @@ export default async function Home() {
             Criar a minha
           </Link>
           <span className="text-[13px] text-aurora-muted-2">
-            Leva menos de 3 minutos. Você conecta sua conta Google e escolhe o canal.
+            Leva menos de 3 minutos. Você conecta sua conta Google ou Outlook e escolhe o canal.
           </span>
         </div>
 
@@ -85,7 +85,7 @@ export default async function Home() {
           <Bolha de="eu">bom dia</Bolha>
           <Bolha de="ela">
             Bom dia! Você tem 3 compromissos hoje — o primeiro é 10h, alinhamento
-            com a Sanwey. O deck da Resibag está 2 dias atrasado.
+            com a Nike. O deck da Adidas está 2 dias atrasado.
           </Bolha>
           <Bolha de="eu">marca almoço com o João amanhã 12h</Bolha>
           <Bolha de="ela">Marquei ✅ Amanhã, 12h–13h, “Almoço com João”.</Bolha>
@@ -154,9 +154,9 @@ export default async function Home() {
           </div>
           <div className="flex flex-col px-6 py-4">
             {[
-              ["09:00", "Conselho Sanwey", "60 min"],
-              ["10:00", "Fornecedor — IBC", "30 min · sem intervalo"],
-              ["10:30", "Comercial Resibag", "60 min · sem intervalo"],
+              ["09:00", "Conselho Nike", "60 min"],
+              ["10:00", "Fornecedor — Foxconn", "30 min · sem intervalo"],
+              ["10:30", "Comercial Adidas", "60 min · sem intervalo"],
               ["11:30", "Jurídico", "45 min · sem intervalo"],
             ].map(([hora, titulo, sub], i, arr) => (
               <div
@@ -207,7 +207,7 @@ export default async function Home() {
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
             {[
               {
-                t: "Uma conta Google",
+                t: "Uma conta Google ou Outlook",
                 d: "É por onde ela enxerga sua agenda, seu e-mail e suas tarefas. Você autoriza no login, e revoga quando quiser.",
               },
               {

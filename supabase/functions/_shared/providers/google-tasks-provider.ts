@@ -151,6 +151,7 @@ interface GTaskItem {
 
 interface GTaskListResponse {
   items?: GTaskItem[];
+  nextPageToken?: string;
 }
 
 // Google Tasks normaliza `due` pra meia-noite UTC do dia escolhido (só a parte
@@ -186,21 +187,32 @@ async function fetchTasklistTasks(
   deps: GoogleTasksDeps,
 ): Promise<GoogleTaskItem[]> {
   const headers = await getAuthHeaders(deps);
-  const url = new URL(
-    `${GOOGLE_TASKS_BASE}/lists/${tasklistId}/tasks`,
-  );
-  url.searchParams.set("showCompleted", "false");
-  url.searchParams.set("showHidden", "false");
-  url.searchParams.set("maxResults", "100");
+  const tasks: GoogleTaskItem[] = [];
+  let pageToken: string | undefined;
 
-  const res = await deps.fetch(url.toString(), { headers });
-  if (!res.ok) {
-    throw new Error(
-      `Google Tasks list failed: ${res.status} ${await res.text()}`,
+  // maxResults=100 é só o teto por página — sem seguir nextPageToken, uma
+  // tasklist com mais de 100 tasks abertas perde o excedente em silêncio.
+  do {
+    const url = new URL(
+      `${GOOGLE_TASKS_BASE}/lists/${tasklistId}/tasks`,
     );
-  }
-  const data = (await res.json()) as GTaskListResponse;
-  return (data.items ?? []).map(mapTask);
+    url.searchParams.set("showCompleted", "false");
+    url.searchParams.set("showHidden", "false");
+    url.searchParams.set("maxResults", "100");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const res = await deps.fetch(url.toString(), { headers });
+    if (!res.ok) {
+      throw new Error(
+        `Google Tasks list failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    const data = (await res.json()) as GTaskListResponse;
+    tasks.push(...(data.items ?? []).map(mapTask));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return tasks;
 }
 
 // ─── API pública ─────────────────────────────────────────────────────────────
@@ -262,7 +274,7 @@ export async function createTask(
  * Marca como concluída a task cujo nome contém `query` (case-insensitive).
  * `list` é ignorado.
  * - Nenhum match: throw (executeTool traduz em {error}).
- * - Mais de um match: devolve candidates pro modelo pedir pra Daniel escolher.
+ * - Mais de um match: devolve candidates pro modelo pedir pro usuário escolher.
  * - Exatamente um: PATCH status → "completed".
  */
 export async function completeTask(
@@ -352,7 +364,7 @@ export function buildGoogleTasksSystemBlock(map: GoogleTasksListMap | null, fren
 ${frentesList}
 - IMPORTANTE: diferente do ClickUp, Google Tasks NÃO tem sub-listas dentro da frente — é só a frente inteira como uma tasklist única. Não existe parâmetro \`list\` aqui; não pergunte "em qual list" nem tente usá-lo.
 - create_task: due_date, se enviado, só agenda a DATA — Google Tasks ignora o horário.
-- complete_task: use quando o Daniel disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro Everton", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
+- complete_task: use quando o usuário disser que JÁ FEZ algo que soa como task existente (ex: "já apresentei o deck pro cliente", "terminei o X"). \`query\` é um trecho do nome da task pra identificar qual — se vier \`candidates\` (mais de uma task parecida), pergunte qual antes de marcar.${missingNote}`;
 }
 
 // ─── Adapter: encaixa na interface TaskProvider comum ───────────────────────

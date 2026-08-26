@@ -77,6 +77,55 @@ export async function sendWhatsAppText(
   }
 }
 
+/** Estados possíveis da instância na Evolution API. */
+export type EvolutionConnectionState = "open" | "connecting" | "close";
+
+/**
+ * Consulta o estado da conexão da instância direto na Evolution API — usado
+ * pelo watchdog (cron `whatsapp_watchdog`) pra detectar queda sem depender de
+ * silêncio no tráfego (silêncio também é normal à noite/fim de semana).
+ * Lança Error se faltar config ou a API retornar não-2xx/corpo inesperado.
+ */
+export async function getEvolutionConnectionState(
+  deps: WhatsAppDeps = defaultWhatsAppDeps(),
+): Promise<EvolutionConnectionState> {
+  const { base, instance, apikey } = evolutionConfig(deps.env);
+  const url = `${base}/instance/connectionState/${instance}`;
+  const res = await deps.fetch(url, { headers: { "apikey": apikey } });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Evolution connectionState ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { instance?: { state?: string } };
+  const state = data.instance?.state;
+  if (state !== "open" && state !== "connecting" && state !== "close") {
+    throw new Error(`Evolution connectionState devolveu estado inesperado: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return state;
+}
+
+/**
+ * Pede pra Evolution API reiniciar a instância — recupera sozinho o caso mais
+ * comum (sessão travada num estado ruim mas ainda válida). NÃO resolve sessão
+ * deslogada de verdade (aí precisa de QR novo, humano tem que agir). Best-
+ * effort por design: quem chama decide o que fazer se isto falhar ou não
+ * resolver — nunca lança, só loga.
+ */
+export async function restartEvolutionInstance(
+  deps: WhatsAppDeps = defaultWhatsAppDeps(),
+): Promise<void> {
+  try {
+    const { base, instance, apikey } = evolutionConfig(deps.env);
+    const url = `${base}/instance/restart/${instance}`;
+    const res = await deps.fetch(url, { method: "PUT", headers: { "apikey": apikey } });
+    if (!res.ok) {
+      console.error(`[whatsapp] restart da instância falhou: ${res.status} ${(await res.text()).slice(0, 150)}`);
+    }
+  } catch (err) {
+    console.error(`[whatsapp] restart da instância falhou: ${semDadoPessoal(err)}`);
+  }
+}
+
 /**
  * Sinaliza "digitando" no WhatsApp por `durationMs` (Evolution chama de delay).
  * Best-effort: erro só loga e segue — typing falhar não justifica abortar o envio.

@@ -47,6 +47,23 @@ import {
   type ListEmailsInput,
   listRecentEmails as defaultListRecentEmails,
 } from "./tools/gmail-read.ts";
+// Outlook — mesmo contrato de tipos que o Google (calendar-read/write.ts,
+// gmail-read.ts); qual dos dois roda é decidido em runtime por
+// CALENDAR_MAIL_PROVIDER (ver getAccessToken/tools mais abaixo), setado em
+// buildTenantEnv só quando o tenant tem Outlook conectado E é o dono da
+// plataforma (Daniel, decisão explícita de 26/08/2026 — ver tenant.ts).
+import {
+  createEvent as outlookCreateEvent,
+  deleteEvent as outlookDeleteEvent,
+  getEventsByDate as outlookGetEventsByDate,
+  getNextEvents as outlookGetNextEvents,
+  outlookCalendarDepsFromEnv,
+  updateEvent as outlookUpdateEvent,
+} from "../_shared/providers/outlook-calendar-provider.ts";
+import {
+  listRecentEmails as outlookListRecentEmails,
+  outlookMailReadDepsFromEnv,
+} from "../_shared/providers/outlook-mail-provider.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import type {
   CompleteTaskInput,
@@ -804,20 +821,7 @@ const TOOLS = [
 // ─── System prompt builder ───────────────────────────────────────────────────
 
 const TOOLS_INSTRUCTIONS_TEMPLATE = `
-ACESSO À AGENDA (Google Calendar)
-- 5 tools de calendar: get_next_events, get_events_by_date, create_event, delete_event, update_event.
-- get_next_events(n): próximos eventos sem data específica.
-- get_events_by_date(date): eventos de um dia concreto.
-- create_event(title, start, end, ...): cria um evento. Use offset -03:00 (SP fixo).
-- delete_event(event_id): remove um evento. update_event(event_id, ...): muda horário/título/local sem recriar.
-- delete_event e update_event exigem o event_id de verdade (campo 'id' de get_next_events/get_events_by_date) — se não tiver vindo numa chamada recente desta conversa, busque antes. NUNCA invente um id.
-- Se uma tool falhar ou não existir pro que o usuário pediu, diga isso claramente. NUNCA invente motivo técnico (ex: "problema de autenticação", "sistema fora do ar") pra disfarçar erro ou capacidade que não existe — isso é pior que admitir o limite.
-
-ACESSO AO EMAIL (Gmail, somente leitura)
-- 1 tool: list_recent_emails(n, query?).
-- Use pra perguntas como "tem algo urgente?", "me mostra o último email do X", "resume meu inbox".
-- Snippet (~150 chars) é o suficiente pra sumarizar. NÃO invente texto além do snippet — se o usuário quiser o conteúdo completo, avise que ainda não tem essa capacidade.
-- Use Gmail search syntax no query: 'is:unread', 'from:joao@x.com', 'subject:fatura', 'after:2026/06/01'.
+{{calendar_email_block}}
 
 {{tasks_block}}
 
@@ -908,16 +912,48 @@ function todayISOInSP(now: Date): string {
   }).format(now);
 }
 
+/**
+ * Bloco "ACESSO À AGENDA/EMAIL" do system prompt — muda de Google pra Outlook
+ * quando o tenant usa Outlook pra Calendar/E-mail (ver CALENDAR_MAIL_PROVIDER
+ * em tenant.ts). Sem isso, o modelo diria "conferi seu Gmail"/"no Google
+ * Calendar" com dado que na verdade veio do Outlook — a mesma confusão que
+ * gerou a pergunta original do Daniel (26/08/2026).
+ */
+export function buildCalendarEmailSystemBlock(usaOutlook: boolean): string {
+  const agenda = usaOutlook ? "Outlook Calendar" : "Google Calendar";
+  const email = usaOutlook ? "Outlook" : "Gmail";
+  const querySyntaxNote = usaOutlook
+    ? "Use a mesma sintaxe de sempre no query: 'is:unread', 'from:joao@x.com', 'subject:fatura', 'after:2026/06/01' — traduzida por baixo dos panos pro filtro do Outlook."
+    : "Use Gmail search syntax no query: 'is:unread', 'from:joao@x.com', 'subject:fatura', 'after:2026/06/01'.";
+
+  return `ACESSO À AGENDA (${agenda})
+- 5 tools de calendar: get_next_events, get_events_by_date, create_event, delete_event, update_event.
+- get_next_events(n): próximos eventos sem data específica.
+- get_events_by_date(date): eventos de um dia concreto.
+- create_event(title, start, end, ...): cria um evento. Use offset -03:00 (SP fixo).
+- delete_event(event_id): remove um evento. update_event(event_id, ...): muda horário/título/local sem recriar.
+- delete_event e update_event exigem o event_id de verdade (campo 'id' de get_next_events/get_events_by_date) — se não tiver vindo numa chamada recente desta conversa, busque antes. NUNCA invente um id.
+- Se uma tool falhar ou não existir pro que o usuário pediu, diga isso claramente. NUNCA invente motivo técnico (ex: "problema de autenticação", "sistema fora do ar") pra disfarçar erro ou capacidade que não existe — isso é pior que admitir o limite.
+
+ACESSO AO EMAIL (${email}, somente leitura)
+- 1 tool: list_recent_emails(n, query?).
+- Use pra perguntas como "tem algo urgente?", "me mostra o último email do X", "resume meu inbox".
+- Snippet (~150 chars) é o suficiente pra sumarizar. NÃO invente texto além do snippet — se o usuário quiser o conteúdo completo, avise que ainda não tem essa capacidade.
+- ${querySyntaxNote}`;
+}
+
 export function buildFastWithToolsSystemPrompt(
   now: Date = new Date(),
   tasksBlock: string = getTaskProvider().buildSystemBlock(),
   ga4Block: string = buildGa4SystemBlock(null, () => undefined),
   persona: TenantPersona = DEFAULT_PERSONA,
   crmBlock: string = buildCrmSystemBlock(false),
+  calendarEmailBlock: string = buildCalendarEmailSystemBlock(false),
 ): string {
   const base = buildFastSystemPrompt(nowInSaoPaulo(now), persona);
   const tools = TOOLS_INSTRUCTIONS_TEMPLATE
     .replace("{{today_iso}}", todayISOInSP(now))
+    .replace("{{calendar_email_block}}", calendarEmailBlock)
     .replace("{{tasks_block}}", tasksBlock)
     .replace("{{ga4_block}}", ga4Block)
     .replace("{{crm_block}}", crmBlock)
@@ -1060,6 +1096,12 @@ export function defaultFastWithToolsDeps(
   // Telegram, do Teams e do proativo. Não influencia nada no comportamento.
   origem: OrigemUso = "whatsapp",
 ): FastWithToolsDeps {
+  // Google é o padrão pra toda a base — Outlook só assume Calendar/E-mail
+  // quando buildTenantEnv setou CALENDAR_MAIL_PROVIDER (hoje, só o tenant
+  // dono da plataforma com Outlook conectado — ver tenant.ts). Login/
+  // vínculo de conta Outlook sem isso continua sem efeito nenhum aqui, igual
+  // sempre foi.
+  const usaOutlookParaCalendarEEmail = env("CALENDAR_MAIL_PROVIDER") === "outlook";
   const getAccessToken = () => getGoogleAccessToken({ env, fetch });
   const quickCaptureDeps = () => {
     if (!tenantId) {
@@ -1097,6 +1139,7 @@ export function defaultFastWithToolsDeps(
         buildGa4SystemBlock(ga4, env),
         persona,
         buildCrmSystemBlock(hasCrmConfig(env)),
+        buildCalendarEmailSystemBlock(usaOutlookParaCalendarEEmail),
       );
     },
     createMessage: async (params) => {
@@ -1138,14 +1181,32 @@ export function defaultFastWithToolsDeps(
       return response as unknown as AnthropicMessage;
     },
     tools: {
-      getNextEvents: (n) => defaultGetNextEvents(n, { getAccessToken, fetch, now: () => new Date() }),
-      getEventsByDate: (date) => defaultGetEventsByDate(date, { getAccessToken, fetch, now: () => new Date() }),
-      createEvent: (input) => defaultCreateEvent(input, { getAccessToken, fetch }),
-      deleteEvent: (eventId) => defaultDeleteEvent(eventId, { getAccessToken, fetch }),
-      updateEvent: (eventId, input) => defaultUpdateEvent(eventId, input, { getAccessToken, fetch }),
+      getNextEvents: (n) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookGetNextEvents(n, outlookCalendarDepsFromEnv(env, fetch))
+          : defaultGetNextEvents(n, { getAccessToken, fetch, now: () => new Date() }),
+      getEventsByDate: (date) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookGetEventsByDate(date, outlookCalendarDepsFromEnv(env, fetch))
+          : defaultGetEventsByDate(date, { getAccessToken, fetch, now: () => new Date() }),
+      createEvent: (input) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookCreateEvent(input, outlookCalendarDepsFromEnv(env, fetch))
+          : defaultCreateEvent(input, { getAccessToken, fetch }),
+      deleteEvent: (eventId) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookDeleteEvent(eventId, outlookCalendarDepsFromEnv(env, fetch))
+          : defaultDeleteEvent(eventId, { getAccessToken, fetch }),
+      updateEvent: (eventId, input) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookUpdateEvent(eventId, input, outlookCalendarDepsFromEnv(env, fetch))
+          : defaultUpdateEvent(eventId, input, { getAccessToken, fetch }),
       saveQuickCapture: (input) => defaultSaveQuickCapture(input, quickCaptureDeps()),
       archiveQuickCaptures: (input) => defaultArchiveQuickCaptures(input, quickCaptureDeps()),
-      listRecentEmails: (input) => defaultListRecentEmails(input, { getAccessToken, fetch }),
+      listRecentEmails: (input) =>
+        usaOutlookParaCalendarEEmail
+          ? outlookListRecentEmails(input, outlookMailReadDepsFromEnv(env, fetch))
+          : defaultListRecentEmails(input, { getAccessToken, fetch }),
       listTasks: (input) => getTaskProvider(env).listTasks(input),
       createTask: (input) => getTaskProvider(env).createTask(input),
       // tenantId vai junto pra memória nascer com dono: a consolidação
