@@ -46,9 +46,11 @@ function dataCurta(iso: string): string {
 export default function AdminLista({
   cadastros,
   userLabel,
+  mensagensNoMes,
 }: {
   cadastros: CadastroAdmin[];
   userLabel: string;
+  mensagensNoMes: number;
 }) {
   const router = useRouter();
   const [emCurso, setEmCurso] = useState<string | null>(null);
@@ -140,6 +142,25 @@ export default function AdminLista({
         {erro && (
           <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">{erro}</p>
         )}
+
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-line-soft bg-aurora-surface p-4">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Aguardando</span>
+            <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{aguardando.length}</span>
+          </div>
+          <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-line-soft bg-aurora-surface p-4">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Ativos</span>
+            <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{rodando.length}</span>
+          </div>
+          <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-line-soft bg-aurora-surface p-4">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Pausados</span>
+            <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{recusados.length}</span>
+          </div>
+          <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-line-soft bg-aurora-surface p-4">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Mensagens no mês</span>
+            <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{mensagensNoMes.toLocaleString("pt-BR")}</span>
+          </div>
+        </section>
 
         <section className="flex flex-col gap-2.5">
           <h2 className="flex items-baseline gap-2 text-[11px] font-bold uppercase tracking-[0.09em] text-aurora-muted-2">

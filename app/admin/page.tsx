@@ -63,5 +63,26 @@ export default async function AdminPage() {
   const nomeDono = linhas.find((t) => t.auth_user_id === dono.authUserId)?.nome as string | null;
   const primeiroNome = (nomeDono ?? "").trim().split(/\s+/)[0] ?? "";
 
-  return <AdminLista cadastros={cadastros} userLabel={primeiroNome} />;
+  // Mensagens de TODOS os tenants no mês — mesmo cálculo de app/app/page.tsx
+  // (uso_modelo por `origem`), só sem o filtro de um tenant só. Só contagem
+  // de chamada, nunca conteúdo da mensagem.
+  const inicioDoMes = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+  const { data: usoRows } = await admin
+    .from("uso_modelo")
+    .select("origem")
+    .gte("ts", inicioDoMes);
+  const usoPorOrigem: Record<string, number> = {};
+  for (const row of usoRows ?? []) {
+    const origem = (row as { origem: string }).origem;
+    usoPorOrigem[origem] = (usoPorOrigem[origem] ?? 0) + 1;
+  }
+  const mensagensNoMes = (usoPorOrigem.whatsapp ?? 0) + (usoPorOrigem.telegram ?? 0) + (usoPorOrigem.teams ?? 0);
+
+  return (
+    <AdminLista
+      cadastros={cadastros}
+      userLabel={primeiroNome}
+      mensagensNoMes={mensagensNoMes}
+    />
+  );
 }
