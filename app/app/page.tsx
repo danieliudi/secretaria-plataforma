@@ -145,7 +145,7 @@ export default async function AppPage() {
         </h1>
 
         {/* hero — única manchete da página */}
-        <section className="relative mb-[68px] overflow-hidden rounded-[22px] border border-aurora-line bg-aurora-surface px-8 py-9 backdrop-blur sm:px-[52px] sm:py-11">
+        <section className="relative mb-[68px] overflow-hidden aurora-card rounded-[22px] border border-aurora-line bg-aurora-surface px-8 py-9 backdrop-blur sm:px-[52px] sm:py-11">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 opacity-40"

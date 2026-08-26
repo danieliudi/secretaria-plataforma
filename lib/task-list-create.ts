@@ -1,4 +1,4 @@
-// Cria uma lista/database nova, por frente, em cada um dos 5 provedores de
+// Cria uma lista/database nova, por frente, em cada um dos 6 provedores de
 // tarefas — usado pelo /api/onboarding/task-provider pra não obrigar a
 // pessoa a ir criar isso na mão antes de mapear (decisão de 18/08/2026:
 // "auto-criar sempre", em vez do picker manual de lista existente que
@@ -197,4 +197,30 @@ export async function createTrelloList(
     method: "POST",
   });
   return { id: data.id, name: data.name };
+}
+
+// ─── Sanwey Tasks ────────────────────────────────────────────────────────────
+//
+// Não existe lista/database pra criar de verdade — `personal_tasks` (o "Meu
+// To-Do" pessoal do Daniel, no sanwey-crm) é UMA lista só, e frente vira tag
+// (texto livre, sem endpoint de criação). "Criar" aqui só confere que o
+// token bate com a function personal-tasks-agent (GET barato) e usa a
+// própria frente como id/nome da tag — mesma convenção de
+// _shared/providers/sanwey-tasks-provider.ts no lado da secretária.
+const PERSONAL_TASKS_API_URL =
+  "https://adizvduyfzfftyswkijj.supabase.co/functions/v1/personal-tasks-agent";
+
+export async function createSanweyTasksList(
+  token: string,
+  frente: string,
+): Promise<CreatedList> {
+  const res = await fetch(`${PERSONAL_TASKS_API_URL}?action=list&limit=1`, {
+    headers: { "X-Personal-Tasks-Key": token },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(`Sanwey Tasks recusou o token: ${data.error ?? res.status}`);
+  }
+  return { id: frente, name: frente };
 }

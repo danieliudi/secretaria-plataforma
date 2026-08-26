@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Logo } from "@/components/Logo";
 
 // Página pública e estática — texto legal, sem dado dinâmico. Conteúdo
 // aprovado por mockup (ver conversa) antes de virar rota real, seguindo o
@@ -7,19 +8,20 @@ import Link from "next/link";
 export default function PrivacidadePage() {
   return (
     <main className="aurora-bg flex min-h-screen flex-col">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
-        </Link>
-        <div className="flex items-center gap-6">
-          <span className="text-[13.5px] font-semibold text-aurora-fg">Privacidade</span>
-          <Link
-            href="/login"
-            className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-          >
-            Entrar
+      <header className="bg-aurora-header-bg">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+          <Link href="/">
+            <Logo variant="header" />
           </Link>
+          <div className="flex items-center gap-6">
+            <span className="text-[13.5px] font-semibold text-aurora-fg">Privacidade</span>
+            <Link
+              href="/login"
+              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
+            >
+              Entrar
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -38,7 +40,7 @@ export default function PrivacidadePage() {
           </p>
         </div>
 
-        <div className="flex gap-3 rounded-xl border border-aurora-line bg-aurora-surface p-5">
+        <div className="flex gap-3 aurora-card rounded-xl border border-aurora-line bg-aurora-surface p-5">
           <span className="mt-0.5 w-[3px] flex-none rounded-full bg-aurora-accent" />
           <p className="text-[13.5px] leading-relaxed text-aurora-muted">
             <strong className="font-semibold text-aurora-fg">A Mia é um projeto pessoal</strong>, não uma
@@ -196,7 +198,7 @@ export default function PrivacidadePage() {
           </Secao>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-aurora-line bg-aurora-surface px-6 py-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 aurora-card rounded-2xl border border-aurora-line bg-aurora-surface px-6 py-5">
           <div>
             <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-aurora-muted-2">
               Dúvida sobre privacidade?
@@ -216,8 +218,7 @@ export default function PrivacidadePage() {
 
       <footer className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
-          <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
+          <Logo variant="footer" />
           <span className="mx-1 text-aurora-line">·</span>
           <Link href="/termos" className="text-[13px] text-aurora-muted-2 transition hover:text-aurora-muted">
             Termos de Uso

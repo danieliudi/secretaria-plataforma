@@ -16,12 +16,23 @@ function primeiroNome(nomeCompleto: string): string {
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ link_error?: string; step?: string }>;
+  searchParams: Promise<{ link_error?: string; step?: string; linked_provider?: string }>;
 }) {
-  const { link_error: linkError, step: stepParam } = await searchParams;
+  const { link_error: linkError, step: stepParam, linked_provider: linkedProviderRaw } = await searchParams;
+  const linkedProvider = linkedProviderRaw === "google" || linkedProviderRaw === "azure" ? linkedProviderRaw : null;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
+
+  // E-mail de cada conta vinculada (Google/Outlook), pra mostrar QUAL conta
+  // está conectada — não só "conectado". O Supabase Auth já guarda isso em
+  // `identities[].identity_data.email`, então não precisa de coluna nova nem
+  // de a pessoa reconectar nada pra essa informação aparecer.
+  const identityEmails = new Map<string, string>();
+  for (const identity of user.identities ?? []) {
+    const identityEmail = (identity.identity_data?.email as string | undefined)?.trim();
+    if (identityEmail) identityEmails.set(identity.provider, identityEmail);
+  }
 
   const admin = createServiceClient();
   const { data: tenant, error } = await admin
@@ -117,10 +128,14 @@ export default async function OnboardingPage({
       // verificação na Meta passa a ser mudar a variável no Netlify, sem
       // precisar de build novo (NEXT_PUBLIC_* é resolvida em tempo de build).
       envioOficialDisponivel={Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL)}
-      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo"}
+      initialProvider={(tenant.task_provider ?? "google_tasks") as "clickup" | "notion" | "trello" | "google_tasks" | "microsoft_todo" | "sanwey_tasks"}
       googleConnected={Boolean(tenant.google_refresh_token_secret_id)}
       outlookConnected={Boolean(tenant.outlook_refresh_token_secret_id)}
+      googleEmail={identityEmails.get("google") ?? null}
+      outlookEmail={identityEmails.get("azure") ?? null}
       linkError={linkError ?? null}
+      linkedEmail={linkedProvider ? identityEmails.get(linkedProvider) ?? null : null}
+      linkedProvider={linkedProvider}
       initialChannels={initialChannels as ("whatsapp" | "telegram" | "teams")[]}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
       trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}

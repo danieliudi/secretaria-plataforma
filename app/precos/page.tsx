@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
+import { Logo } from "@/components/Logo";
 
 // Prévia interna da página de preços — ainda em beta fechado com conhecidos,
 // sem cobrança nenhuma rodando. 404 (não "acesso negado") pra quem não é
@@ -55,14 +56,15 @@ export default async function PrecosPage() {
 
   return (
     <main className="aurora-bg flex min-h-screen flex-col">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
-        </Link>
-        <span className="rounded-full border border-aurora-warn/35 bg-aurora-warn/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-aurora-warn">
-          Prévia interna — só você vê essa página
-        </span>
+      <header className="bg-aurora-header-bg">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+          <Link href="/">
+            <Logo variant="header" />
+          </Link>
+          <span className="rounded-full border border-aurora-warn/35 bg-aurora-warn/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-aurora-warn">
+            Prévia interna — só você vê essa página
+          </span>
+        </div>
       </header>
 
       <section className="mx-auto flex w-full max-w-3xl flex-col items-center gap-3 px-6 pb-4 pt-8 text-center md:pt-14">
@@ -79,7 +81,7 @@ export default async function PrecosPage() {
         {PLANOS.map((plano) => (
           <div
             key={plano.nome}
-            className={`relative flex flex-col gap-4 rounded-[20px] border p-6 ${
+            className={`aurora-card relative flex flex-col gap-4 rounded-[20px] border p-6 ${
               plano.destaque
                 ? "border-aurora-accent/50 bg-aurora-accent/[0.06]"
                 : "border-aurora-line bg-aurora-surface"
@@ -137,8 +139,7 @@ export default async function PrecosPage() {
 
       <footer className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-6 py-7">
-          <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
+          <Logo variant="footer" />
         </div>
       </footer>
     </main>
