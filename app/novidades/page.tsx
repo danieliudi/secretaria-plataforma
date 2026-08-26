@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { Logo } from "@/components/Logo";
 
 // Página pública (sem login) — mesmo lugar que o link "Novidades" na landing
 // aponta. Lê com o client anon (RLS: "atualizacoes: leitura pública"), não o
@@ -49,19 +50,20 @@ export default async function NovidadesPage() {
   return (
     <main className="aurora-bg flex min-h-screen flex-col">
       {/* ── topo (mesmo padrão da landing) ── */}
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="aurora-glow h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13.5px] font-bold tracking-tight text-aurora-fg">Mia</span>
-        </Link>
-        <div className="flex items-center gap-6">
-          <span className="text-[13.5px] font-semibold text-aurora-fg">Novidades</span>
-          <Link
-            href="/login"
-            className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-          >
-            Entrar
+      <header className="bg-aurora-header-bg">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
+          <Link href="/">
+            <Logo variant="header" />
           </Link>
+          <div className="flex items-center gap-6">
+            <span className="text-[13.5px] font-semibold text-aurora-fg">Novidades</span>
+            <Link
+              href="/login"
+              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
+            >
+              Entrar
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -110,8 +112,7 @@ export default async function NovidadesPage() {
 
       <footer className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-x-2 gap-y-2 px-6 py-7">
-          <span className="h-2 w-2 rounded-sm bg-aurora-accent" />
-          <span className="text-[13px] font-semibold text-aurora-muted">Mia</span>
+          <Logo variant="footer" />
           <span className="mx-1 text-aurora-line">·</span>
           <Link href="/privacidade" className="text-[13px] text-aurora-muted-2 transition hover:text-aurora-muted">
             Privacidade

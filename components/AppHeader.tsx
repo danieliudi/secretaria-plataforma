@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { FeedbackButton } from "@/components/FeedbackButton";
+import { Logo } from "@/components/Logo";
 
 // Cabeçalho compartilhado por /app e /admin — mesma marca, mesmo trocador de
 // papel. Só quem é `is_platform_owner` vê a aba Administração; pra todo mundo
@@ -17,10 +18,9 @@ export function AppHeader({
   userLabel: string;
 }) {
   return (
-    <header className="flex items-center gap-4 border-b border-aurora-line-soft px-8 py-5">
-      <Link href="/app" className="flex items-center gap-2">
-        <span className="aurora-glow h-[9px] w-[9px] rounded-sm bg-aurora-accent" />
-        <span className="text-[15px] font-extrabold tracking-tight text-aurora-fg">Mia</span>
+    <header className="flex items-center gap-4 bg-aurora-header-bg px-8 py-5">
+      <Link href="/app">
+        <Logo variant="headerApp" />
       </Link>
 
       {isPlatformOwner && (

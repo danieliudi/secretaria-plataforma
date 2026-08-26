@@ -49,6 +49,12 @@
   --aurora-info: #3f7fc4;
   --aurora-warn: #b8752e;
   --aurora-crit: #b33939;
+
+  /* Redesign 26/08/2026: header vira uma barra evidente (cinza-claro,
+     diferencia do fundo sem pesar) e cartões ganham sombra + grão fino em
+     vez de só borda — mockup aprovado em artifact separado. */
+  --aurora-header-bg: #e9edf3;
+  --aurora-shadow: 0 14px 26px -20px rgba(15, 23, 42, 0.16), 0 2px 6px -2px rgba(15, 23, 42, 0.06);
 }
 
 @theme inline {
@@ -78,6 +84,7 @@
   --color-aurora-info: var(--aurora-info);
   --color-aurora-warn: var(--aurora-warn);
   --color-aurora-crit: var(--aurora-crit);
+  --color-aurora-header-bg: var(--aurora-header-bg);
 
   --font-sans: var(--font-body);
   --font-serif: var(--font-display);
@@ -102,4 +109,12 @@ body {
 
 .aurora-glow-btn {
   box-shadow: 0 6px 18px var(--aurora-glow);
+}
+
+/* Cartões "flutuando" (sombra + grão fino) — soma em cima de bg-aurora-surface
+   já existente, não substitui. Aplicado nos cartões reais do site (redesign
+   26/08/2026, mockup aprovado). */
+.aurora-card {
+  box-shadow: var(--aurora-shadow);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/></svg>");
 }

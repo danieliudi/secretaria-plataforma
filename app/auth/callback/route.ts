@@ -154,6 +154,15 @@ export async function GET(request: Request) {
     );
   }
 
+  // Avisa qual provider acabou de conectar, pra pessoa ver na hora — não só
+  // procurando depois no cartão "Contas conectadas". Só o NOME do provider
+  // vai pra URL (valor fechado, "google" ou "azure"); o e-mail em si a
+  // página busca de novo no banco (ver app/onboarding/page.tsx) em vez de
+  // confiar num valor que viria de fora sem validação.
+  const destino = new URL(response.headers.get("location") ?? `${origin}/onboarding`);
+  destino.searchParams.set("linked_provider", provider);
+  response.headers.set("location", destino.toString());
+
   // `response` (criada no topo) é a única que carrega os cookies de sessão.
   // Devolver um `NextResponse.redirect` novo aqui perderia a sessão — foi
   // exatamente esse o defeito.

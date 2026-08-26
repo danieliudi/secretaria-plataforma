@@ -194,7 +194,15 @@ export default function OnboardingWizard(props: {
   initialProvider: Provider;
   googleConnected: boolean;
   outlookConnected: boolean;
+  /** E-mail da conta vinculada — `null` quando ainda não conectado ou quando
+   * o provider não devolveu e-mail na identidade (raro). */
+  googleEmail: string | null;
+  outlookEmail: string | null;
   linkError: string | null;
+  /** E-mail e provider que acabaram de conectar (vem do /auth/callback) —
+   * pra mostrar na hora, não só quando a pessoa reparar no cartão abaixo. */
+  linkedEmail: string | null;
+  linkedProvider: OAuthProviderId | null;
   initialChannels: Channel[];
   telegramConnected: boolean;
   trelloApiKeyConfigured: boolean;
@@ -247,6 +255,7 @@ export default function OnboardingWizard(props: {
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [connectingProvider, setConnectingProvider] = useState<OAuthProviderId | null>(null);
+  const [avisoContaFechado, setAvisoContaFechado] = useState(false);
 
   const providerInfo = PROVIDER_OPTIONS.find((p) => p.value === provider)!;
   const wantsTelegram = channels.has("telegram");
@@ -347,6 +356,66 @@ export default function OnboardingWizard(props: {
     // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
   }
 
+  // "Trocar conta" num provider JÁ conectado (ex: linkou o Outlook errado
+  // entre os vários e-mails Microsoft salvos). NÃO reusa `signInWithOAuth`
+  // (o branch "já é identidade" de handleConnectProvider): reautenticar por
+  // ali troca a SESSÃO INTEIRA se a pessoa escolher uma conta diferente da
+  // atual — o Supabase loga como o usuário DONO daquela identidade (criando
+  // um usuário novo do zero se ninguém for dono ainda), não troca só o
+  // provider dentro da conta logada. O caminho seguro é desvincular a
+  // identidade atual (`unlinkIdentity`) e then vincular de novo
+  // (`linkIdentity`) — que sempre gruda no usuário JÁ logado.
+  async function handleSwitchProvider(provider: OAuthProviderId) {
+    setConnectingProvider(provider);
+    setError(null);
+    if (garanteOrigemCanonica("/onboarding")) return;
+
+    const supabase = createClient();
+    const cfg = OAUTH_PROVIDERS[provider];
+
+    const { data, error: listError } = await supabase.auth.getUserIdentities();
+    if (listError) {
+      setConnectingProvider(null);
+      setError(`Não conseguimos verificar sua conta ${cfg.label} atual — tenta de novo?`);
+      return;
+    }
+    const identidadeAtual = (data?.identities ?? []).find((i) => i.provider === provider);
+    if (!identidadeAtual) {
+      // Não deveria acontecer ("trocar" só aparece quando já está conectado)
+      // — por segurança, cai pro fluxo normal de conectar.
+      return handleConnectProvider(provider);
+    }
+
+    const { error: unlinkError } = await supabase.auth.unlinkIdentity(identidadeAtual);
+    if (unlinkError) {
+      setConnectingProvider(null);
+      setError(
+        unlinkError.code === "single_identity_not_deletable"
+          ? `Essa é sua única conta conectada — conecta o outro provedor (Google ou Outlook) antes de trocar esta.`
+          : `Não conseguimos desconectar a conta atual de ${cfg.label} pra trocar — tenta de novo?`,
+      );
+      console.error(`[onboarding] trocar ${provider} — unlinkIdentity falhou:`, unlinkError.message);
+      return;
+    }
+
+    const { error } = await supabase.auth.linkIdentity({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?provider=${provider}&intent=link`,
+        scopes: cfg.scopes,
+        queryParams: cfg.queryParams,
+      },
+    });
+    if (error) {
+      setConnectingProvider(null);
+      console.error(`[onboarding] trocar ${provider} — linkIdentity falhou:`, error.message);
+      setError(
+        `Desconectamos a conta antiga de ${cfg.label}, mas não conseguimos abrir a nova autorização — clica em "Conectar" pra tentar de novo.`,
+      );
+    }
+    // Sucesso: navegador é redirecionado pro provider, nada mais a fazer aqui.
+  }
+
   async function handlePersonaSubmit() {
     const frentesArrTrim = frentes.split(",").map((f) => f.trim()).filter(Boolean);
     // "chefe" é o padrão do backend, então vai como null em vez de literal —
@@ -442,8 +511,35 @@ export default function OnboardingWizard(props: {
 
         {step === 1 && (
           <div className="mt-4 flex flex-col gap-4">
-            <section className="flex flex-col gap-3 rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
+            <section className="flex flex-col gap-3 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
               <h2 className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">Contas conectadas</h2>
+              {props.linkedEmail && props.linkedProvider && !avisoContaFechado && (
+                <div className="flex items-start gap-2 rounded-lg border border-aurora-ok/35 bg-aurora-ok/10 px-3 py-2.5 text-[12.5px] text-aurora-fg">
+                  <span className="mt-px">✅</span>
+                  <div className="flex-1">
+                    Conectado com <b>{OAUTH_PROVIDERS[props.linkedProvider].label}</b>: <b>{props.linkedEmail}</b>
+                    <div className="mt-1.5 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAvisoContaFechado(true);
+                          handleSwitchProvider(props.linkedProvider!);
+                        }}
+                        className="text-[11.5px] font-bold text-aurora-accent-text underline underline-offset-2 hover:text-aurora-fg"
+                      >
+                        Não era essa — trocar conta
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAvisoContaFechado(true)}
+                        className="text-[11.5px] font-semibold text-aurora-muted hover:text-aurora-muted-2"
+                      >
+                        ✕ ok, era essa mesmo
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {props.linkError && (
                 <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
                   {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}
@@ -452,16 +548,32 @@ export default function OnboardingWizard(props: {
               <div className="flex flex-col gap-2">
                 {enabledOAuthProviders().map((cfg) => {
                   const connected = cfg.id === "google" ? props.googleConnected : props.outlookConnected;
+                  const email = cfg.id === "google" ? props.googleEmail : props.outlookEmail;
                   return (
                     <div
                       key={cfg.id}
                       className="flex items-center justify-between gap-3 rounded-lg border border-aurora-line-soft px-3 py-2 text-[13px]"
                     >
-                      <span className="text-aurora-fg">{cfg.label}</span>
+                      <div className="flex flex-col">
+                        <span className="text-aurora-fg">{cfg.label}</span>
+                        {connected && email && (
+                          <span className="text-[11px] tabular-nums text-aurora-muted">{email}</span>
+                        )}
+                      </div>
                       {connected ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-aurora-ok/15 px-2 py-0.5 text-[11.5px] font-bold text-aurora-ok">
-                          <CheckIcon /> Conectado
-                        </span>
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchProvider(cfg.id)}
+                            disabled={connectingProvider !== null}
+                            className="text-[11px] font-semibold text-aurora-muted underline underline-offset-2 hover:text-aurora-muted-2 disabled:opacity-60"
+                          >
+                            {connectingProvider === cfg.id ? "Trocando…" : "Trocar conta"}
+                          </button>
+                          <span className="inline-flex items-center gap-1 rounded-md bg-aurora-ok/15 px-2 py-0.5 text-[11.5px] font-bold text-aurora-ok">
+                            <CheckIcon /> Conectado
+                          </span>
+                        </div>
                       ) : (
                         <button
                           type="button"
@@ -478,7 +590,7 @@ export default function OnboardingWizard(props: {
               </div>
             </section>
 
-            <section className="flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+            <section className="flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
               <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Quem é você?</h1>
               <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
                 É o que a secretária usa pra falar com você. Só o nome é
@@ -624,7 +736,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 2 && (
-          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Onde ficam suas tarefas?</h1>
             <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
               Escolha onde a secretária vai ler e criar tarefas pra você.
@@ -779,7 +891,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 3 && (
-          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Como você quer conversar com ela?</h1>
             <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
               Escolha um ou mais canais onde a secretária vai te mandar mensagens e receber as suas.
@@ -970,7 +1082,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 4 && finished && (
-          <section className="mt-4 flex flex-col gap-2 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-2 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">
               Tudo pronto, {nome.split(" ")[0] || ""}
             </h1>
@@ -1093,6 +1205,23 @@ export default function OnboardingWizard(props: {
                   <p className="mt-1.5 font-mono text-2xl font-bold tracking-[0.2em] text-aurora-fg">
                     {whatsappLinkCode}
                   </p>
+                  {WHATSAPP_LINK && (
+                    <>
+                      <a
+                        href={`${WHATSAPP_LINK}?text=${encodeURIComponent(whatsappLinkCode)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="aurora-glow mt-3 flex items-center justify-center gap-2 rounded-lg bg-aurora-accent px-4 py-2.5 text-[13px] font-bold text-aurora-accent-ink transition active:scale-[0.98]"
+                      >
+                        Abrir WhatsApp com o código pronto
+                      </a>
+                      <div className="mt-3 flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-wide text-aurora-muted-2">
+                        <span className="h-px flex-1 bg-aurora-line" />
+                        ou manualmente
+                        <span className="h-px flex-1 bg-aurora-line" />
+                      </div>
+                    </>
+                  )}
                   <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-aurora-accent-text">
                     Manda pra este número
                   </p>
