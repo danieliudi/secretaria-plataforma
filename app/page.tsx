@@ -2,63 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Logo } from "@/components/Logo";
+import { EXEMPLOS } from "@/lib/exemplos";
 
 // Quem já entrou vai direto pro wizard — a landing é pra quem ainda não
 // conhece. Antes desta página o "/" redirecionava direto pro /login, e a
 // pessoa chegava na secretária sem ideia do que dizer pra ela: o produto é
 // uma caixa de conversa vazia, então o que ensina a usar é ver exemplo real.
-
-const EXEMPLOS: Array<{ titulo: string; frases: string[] }> = [
-  {
-    titulo: "Agenda",
-    frases: [
-      "o que eu tenho hoje?",
-      "marca almoço com o João amanhã 12h",
-      "bloqueia 2h de deep work na sexta de manhã",
-      "minha quinta à tarde tá livre?",
-    ],
-  },
-  {
-    titulo: "E-mail",
-    frases: [
-      "tem algo urgente no e-mail?",
-      "resume meu inbox",
-      "chegou alguma coisa do fornecedor?",
-    ],
-  },
-  {
-    titulo: "Tarefas",
-    frases: [
-      "o que tá atrasado?",
-      "cria uma task de revisar o contrato pra sexta",
-      "já entreguei o deck",
-      "tô perdido, o que eu faço agora?",
-    ],
-  },
-  {
-    titulo: "Memória",
-    frases: [
-      "anota que o fornecedor novo cobra 12% a mais",
-      "o que eu tinha anotado sobre o contrato?",
-      "prefiro reunião de manhã",
-    ],
-  },
-  {
-    titulo: "Lembretes",
-    frases: [
-      "me lembra de ligar pro João amanhã às 14h",
-      "todo dia 5 me avisa do fechamento",
-      "me cutuca em 1h",
-    ],
-  },
-  {
-    titulo: "Arquivos",
-    frases: [
-      "me manda as tarefas da Resibag em planilha",
-      "exporta minha agenda da semana",
-    ],
-  },
-];
 
 function Bolha({ children, de }: { children: React.ReactNode; de: "eu" | "ela" }) {
   // Cores literais de propósito, não tokens: isto representa uma captura de
@@ -93,6 +42,12 @@ export default async function Home() {
               className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
             >
               Novidades
+            </Link>
+            <Link
+              href="/funcionalidades"
+              className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
+            >
+              Funcionalidades
             </Link>
             <Link
               href="/login"
