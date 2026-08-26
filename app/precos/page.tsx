@@ -81,7 +81,7 @@ export default async function PrecosPage() {
         {PLANOS.map((plano) => (
           <div
             key={plano.nome}
-            className={`relative flex flex-col gap-4 rounded-[20px] border p-6 ${
+            className={`aurora-card relative flex flex-col gap-4 rounded-[20px] border p-6 ${
               plano.destaque
                 ? "border-aurora-accent/50 bg-aurora-accent/[0.06]"
                 : "border-aurora-line bg-aurora-surface"

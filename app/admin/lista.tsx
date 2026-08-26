@@ -189,7 +189,7 @@ export default function AdminLista({
             aguardando.map((c) => (
               <div
                 key={c.slug}
-                className="flex flex-col gap-3.5 rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur sm:flex-row sm:items-start sm:justify-between"
+                className="flex flex-col gap-3.5 aurora-card rounded-[14px] border border-aurora-line bg-aurora-surface p-5 backdrop-blur sm:flex-row sm:items-start sm:justify-between"
               >
                 <div className="flex min-w-0 gap-3">
                   <input

@@ -140,7 +140,7 @@ export default function LoginPage({
         </div>
         <p className="text-[13px] text-aurora-muted-2">Leva menos de 3 minutos.</p>
 
-        <div className="w-full rounded-2xl border border-aurora-line bg-aurora-surface px-[18px] pb-2 pt-[18px]">
+        <div className="w-full aurora-card rounded-2xl border border-aurora-line bg-aurora-surface px-[18px] pb-2 pt-[18px]">
           <p className="mb-4 text-[11px] font-semibold uppercase tracking-wide text-aurora-muted-2">
             O que você vai precisar antes de começar
           </p>

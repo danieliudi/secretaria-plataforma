@@ -159,7 +159,7 @@ export default async function Home() {
             {EXEMPLOS.map((grupo) => (
               <div
                 key={grupo.titulo}
-                className="flex flex-col gap-3 rounded-xl border border-aurora-line bg-aurora-surface p-5 backdrop-blur-sm"
+                className="flex flex-col gap-3 aurora-card rounded-xl border border-aurora-line bg-aurora-surface p-5 backdrop-blur-sm"
               >
                 <span className="text-[13px] font-bold tracking-tight text-aurora-accent-text">
                   {grupo.titulo}
@@ -185,7 +185,7 @@ export default async function Home() {
           Aurora — mesmo tratamento de superfície/acento das outras seções, em
           vez de um esquema de cor à parte só pra este card. */}
       <section className="mx-auto grid w-full max-w-5xl grid-cols-1 items-center gap-12 px-6 py-20 md:grid-cols-[0.95fr_1.05fr]">
-        <div className="order-2 overflow-hidden rounded-2xl border border-aurora-line bg-aurora-surface backdrop-blur-sm md:order-1">
+        <div className="order-2 overflow-hidden aurora-card rounded-2xl border border-aurora-line bg-aurora-surface backdrop-blur-sm md:order-1">
           <div className="flex items-start justify-between border-b border-aurora-line-soft px-6 py-5">
             <div className="flex flex-col">
               <span className="text-[10px] font-bold tracking-[0.14em] text-aurora-warn">
@@ -264,7 +264,7 @@ export default async function Home() {
                 d: "O resto é escolher como ela te chama e onde ficam suas tarefas. Dá pra mudar tudo depois.",
               },
             ].map((c) => (
-              <div key={c.t} className="flex flex-col gap-2 rounded-xl border border-aurora-line bg-aurora-surface p-5">
+              <div key={c.t} className="flex flex-col gap-2 aurora-card rounded-xl border border-aurora-line bg-aurora-surface p-5">
                 <span className="text-[15px] font-semibold text-aurora-fg">{c.t}</span>
                 <span className="text-[13.5px] leading-relaxed text-aurora-muted">{c.d}</span>
               </div>

@@ -511,7 +511,7 @@ export default function OnboardingWizard(props: {
 
         {step === 1 && (
           <div className="mt-4 flex flex-col gap-4">
-            <section className="flex flex-col gap-3 rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
+            <section className="flex flex-col gap-3 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
               <h2 className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">Contas conectadas</h2>
               {props.linkedEmail && props.linkedProvider && !avisoContaFechado && (
                 <div className="flex items-start gap-2 rounded-lg border border-aurora-ok/35 bg-aurora-ok/10 px-3 py-2.5 text-[12.5px] text-aurora-fg">
@@ -590,7 +590,7 @@ export default function OnboardingWizard(props: {
               </div>
             </section>
 
-            <section className="flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+            <section className="flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
               <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Quem é você?</h1>
               <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
                 É o que a secretária usa pra falar com você. Só o nome é
@@ -736,7 +736,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 2 && (
-          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Onde ficam suas tarefas?</h1>
             <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
               Escolha onde a secretária vai ler e criar tarefas pra você.
@@ -891,7 +891,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 3 && (
-          <section className="mt-4 flex flex-col gap-4 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-4 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">Como você quer conversar com ela?</h1>
             <p className="-mt-2 text-[13px] leading-relaxed text-aurora-muted">
               Escolha um ou mais canais onde a secretária vai te mandar mensagens e receber as suas.
@@ -1082,7 +1082,7 @@ export default function OnboardingWizard(props: {
         )}
 
         {step === 4 && finished && (
-          <section className="mt-4 flex flex-col gap-2 rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
+          <section className="mt-4 flex flex-col gap-2 aurora-card rounded-[16px] border border-aurora-line bg-aurora-surface p-7">
             <h1 className="text-[21px] font-semibold tracking-tight text-aurora-fg">
               Tudo pronto, {nome.split(" ")[0] || ""}
             </h1>
