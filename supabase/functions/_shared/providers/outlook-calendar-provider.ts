@@ -111,6 +111,8 @@ interface GraphEvent {
   start: GraphDateTimeTimeZone;
   end: GraphDateTimeTimeZone;
   attendees?: GraphAttendee[];
+  /** Evento de dia inteiro — start/end vêm em meia-noite; CalendarEvent.time tem que virar null nesse caso (mesmo contrato do lado Google), não "00:00". */
+  isAllDay?: boolean;
 }
 
 interface GraphListResponse {
@@ -171,7 +173,7 @@ function mapEvent(e: GraphEvent, meEmail: string): CalendarEvent {
   const startISO = toStartISO(e.start);
   return {
     id: e.id,
-    time: formatTimeInSP(startISO),
+    time: e.isAllDay ? null : formatTimeInSP(startISO),
     startISO,
     title: e.subject ?? "(sem título)",
     location: e.location?.displayName ?? null,
@@ -194,7 +196,7 @@ async function listCalendarView(
   url.searchParams.set("$orderby", "start/dateTime");
   url.searchParams.set(
     "$select",
-    "subject,location,start,end,attendees,webLink",
+    "subject,location,start,end,attendees,webLink,isAllDay",
   );
   if (top) url.searchParams.set("$top", String(top));
 
@@ -265,12 +267,17 @@ export async function getEventsByDate(
 // ─── API pública — escrita ────────────────────────────────────────────────────
 
 function mapCreatedEvent(data: GraphEvent, fallbackTitle: string, fallbackStart: string, fallbackEnd: string): CreatedEvent {
+  // toStartISO (não concatenação nua de SP_OFFSET) — só é seguro assumir que
+  // data.start/end.dateTime já vem em horário local de SP porque create/
+  // update mandam o header Prefer: outlook.timezone (ver createEvent/
+  // updateEvent); sem ele o Graph devolve em UTC e a resposta confirmada ao
+  // usuário sairia 3h errada (achado de revisão adversarial, 26/08/2026).
   return {
     id: data.id,
     htmlLink: data.webLink,
     title: data.subject ?? fallbackTitle,
-    start: data.start?.dateTime ? `${data.start.dateTime}${SP_OFFSET}` : fallbackStart,
-    end: data.end?.dateTime ? `${data.end.dateTime}${SP_OFFSET}` : fallbackEnd,
+    start: data.start?.dateTime ? toStartISO(data.start) : fallbackStart,
+    end: data.end?.dateTime ? toStartISO(data.end) : fallbackEnd,
   };
 }
 
@@ -296,7 +303,14 @@ export async function createEvent(
     `${GRAPH_ME}/events`,
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        // Sem isto, a RESPOSTA volta em UTC mesmo com timeZone certo no
+        // corpo do POST — o evento em si fica correto, mas o horário
+        // confirmado ao usuário sairia errado (ver mapCreatedEvent).
+        Prefer: `outlook.timezone="${TIMEZONE}"`,
+      },
       body: JSON.stringify(body),
     },
     deps.fetch,
@@ -352,7 +366,12 @@ export async function updateEvent(
     `${GRAPH_ME}/events/${encodeURIComponent(eventId)}`,
     {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        // Mesmo motivo do createEvent — sem isto a resposta volta em UTC.
+        Prefer: `outlook.timezone="${TIMEZONE}"`,
+      },
       body: JSON.stringify(body),
     },
     deps.fetch,
