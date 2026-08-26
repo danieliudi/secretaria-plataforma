@@ -148,7 +148,7 @@ export async function POST(request: Request) {
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
     .select(
-      "id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number, teams_authorized_user_id, aprovado_em, avisado_em",
+      "id, slug, telegram_bot_token_secret_id, telegram_webhook_secret_id, whatsapp_authorized_number, whatsapp_link_code, whatsapp_link_code_expires_at, teams_authorized_user_id, teams_link_code, teams_link_code_expires_at, aprovado_em, avisado_em",
     )
     .eq("auth_user_id", user.id)
     .maybeSingle();
@@ -191,24 +191,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 
-  // Gera um código novo (substituindo qualquer pendente) toda vez que o passo
-  // é concluído pedindo um canal por-código que ainda não está vinculado —
-  // mesma regra de createWhatsAppLinkCode/createTeamsLinkCode no backend.
+  // Reaproveita o código pendente se ainda for válido — só gera um novo
+  // quando não existe nenhum ou o que existia já venceu. Antes disto, todo
+  // reenvio do passo (ex: só pra trocar o token do Telegram, ou o botão
+  // "já mandei, verificar" no wizard) trocava o código por baixo do pé de
+  // quem já tinha acabado de mandar o antigo pro WhatsApp/Teams — achado de
+  // fricção real, 26/08/2026.
   const whatsappAlreadyAuthorized = Boolean(tenant.whatsapp_authorized_number);
   const teamsAlreadyAuthorized = Boolean(tenant.teams_authorized_user_id);
+
+  function reaproveitaOuGeraCodigo(
+    codigoAtual: string | null,
+    expiraAtual: string | null,
+  ): { code: string; expiresAt: string } {
+    const aindaValido = codigoAtual && expiraAtual && new Date(expiraAtual).getTime() > Date.now();
+    if (aindaValido) return { code: codigoAtual!, expiresAt: expiraAtual! };
+    return {
+      code: generateLinkCode(),
+      expiresAt: new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString(),
+    };
+  }
 
   let whatsappLinkCode: string | null = null;
   let whatsappLinkCodeExpiresAt: string | null = null;
   if (wantsWhatsapp && !whatsappAlreadyAuthorized) {
-    whatsappLinkCode = generateLinkCode();
-    whatsappLinkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
+    const resolved = reaproveitaOuGeraCodigo(tenant.whatsapp_link_code, tenant.whatsapp_link_code_expires_at);
+    whatsappLinkCode = resolved.code;
+    whatsappLinkCodeExpiresAt = resolved.expiresAt;
   }
 
   let teamsLinkCode: string | null = null;
   let teamsLinkCodeExpiresAt: string | null = null;
   if (wantsTeams && !teamsAlreadyAuthorized) {
-    teamsLinkCode = generateLinkCode();
-    teamsLinkCodeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MIN * 60_000).toISOString();
+    const resolved = reaproveitaOuGeraCodigo(tenant.teams_link_code, tenant.teams_link_code_expires_at);
+    teamsLinkCode = resolved.code;
+    teamsLinkCodeExpiresAt = resolved.expiresAt;
   }
 
   const { error } = await admin
