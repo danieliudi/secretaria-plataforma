@@ -199,6 +199,10 @@ export default function OnboardingWizard(props: {
   googleEmail: string | null;
   outlookEmail: string | null;
   linkError: string | null;
+  /** E-mail e provider que acabaram de conectar (vem do /auth/callback) —
+   * pra mostrar na hora, não só quando a pessoa reparar no cartão abaixo. */
+  linkedEmail: string | null;
+  linkedProvider: OAuthProviderId | null;
   initialChannels: Channel[];
   telegramConnected: boolean;
   trelloApiKeyConfigured: boolean;
@@ -251,6 +255,7 @@ export default function OnboardingWizard(props: {
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [connectingProvider, setConnectingProvider] = useState<OAuthProviderId | null>(null);
+  const [avisoContaFechado, setAvisoContaFechado] = useState(false);
 
   const providerInfo = PROVIDER_OPTIONS.find((p) => p.value === provider)!;
   const wantsTelegram = channels.has("telegram");
@@ -508,6 +513,33 @@ export default function OnboardingWizard(props: {
           <div className="mt-4 flex flex-col gap-4">
             <section className="flex flex-col gap-3 rounded-[16px] border border-aurora-line bg-aurora-surface p-5">
               <h2 className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted-2">Contas conectadas</h2>
+              {props.linkedEmail && props.linkedProvider && !avisoContaFechado && (
+                <div className="flex items-start gap-2 rounded-lg border border-aurora-ok/35 bg-aurora-ok/10 px-3 py-2.5 text-[12.5px] text-aurora-fg">
+                  <span className="mt-px">✅</span>
+                  <div className="flex-1">
+                    Conectado com <b>{OAUTH_PROVIDERS[props.linkedProvider].label}</b>: <b>{props.linkedEmail}</b>
+                    <div className="mt-1.5 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAvisoContaFechado(true);
+                          handleSwitchProvider(props.linkedProvider!);
+                        }}
+                        className="text-[11.5px] font-bold text-aurora-accent-text underline underline-offset-2 hover:text-aurora-fg"
+                      >
+                        Não era essa — trocar conta
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAvisoContaFechado(true)}
+                        className="text-[11.5px] font-semibold text-aurora-muted hover:text-aurora-muted-2"
+                      >
+                        ✕ ok, era essa mesmo
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {props.linkError && (
                 <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
                   {LINK_ERROR_MESSAGES[props.linkError] ?? "Não conseguimos conectar essa conta agora. Tenta de novo?"}

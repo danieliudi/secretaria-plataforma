@@ -16,9 +16,10 @@ function primeiroNome(nomeCompleto: string): string {
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ link_error?: string; step?: string }>;
+  searchParams: Promise<{ link_error?: string; step?: string; linked_provider?: string }>;
 }) {
-  const { link_error: linkError, step: stepParam } = await searchParams;
+  const { link_error: linkError, step: stepParam, linked_provider: linkedProviderRaw } = await searchParams;
+  const linkedProvider = linkedProviderRaw === "google" || linkedProviderRaw === "azure" ? linkedProviderRaw : null;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
@@ -133,6 +134,8 @@ export default async function OnboardingPage({
       googleEmail={identityEmails.get("google") ?? null}
       outlookEmail={identityEmails.get("azure") ?? null}
       linkError={linkError ?? null}
+      linkedEmail={linkedProvider ? identityEmails.get(linkedProvider) ?? null : null}
+      linkedProvider={linkedProvider}
       initialChannels={initialChannels as ("whatsapp" | "telegram" | "teams")[]}
       telegramConnected={Boolean(tenant.telegram_bot_token_secret_id)}
       trelloApiKeyConfigured={Boolean(tenant.trello_api_key_secret_id)}
