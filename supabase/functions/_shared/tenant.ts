@@ -557,6 +557,17 @@ export async function buildTenantEnv(
   if (googleClientSecret) overrides.set("GOOGLE_CLIENT_SECRET", googleClientSecret);
   if (googleRefreshToken) overrides.set("GOOGLE_REFRESH_TOKEN", googleRefreshToken);
   if (outlookRefreshToken) overrides.set("MICROSOFT_REFRESH_TOKEN", outlookRefreshToken);
+  // Quando os DOIS estão conectados, decide qual vira Calendar/E-mail da
+  // conversa (fast/index.ts) — Google continua o padrão pra todo o resto da
+  // base (zero mudança de comportamento pra quem já tinha só Google
+  // conectado, ou conectou o Outlook por outro motivo, ex: só Tasks). Daniel
+  // é a ÚNICA exceção hoje (decisão explícita de 26/08/2026: ele consolidou
+  // e-mail real — Gmail + IMAP da Sanwey — dentro do Outlook, então só o
+  // Outlook enxerga tudo). Se outro tenant precisar do mesmo no futuro, isto
+  // vira uma coluna de preferência de verdade em vez de checar is_platform_owner.
+  if (outlookRefreshToken && tenant.is_platform_owner) {
+    overrides.set("CALENDAR_MAIL_PROVIDER", "outlook");
+  }
   if (Object.keys(tenant.ga4_property_map ?? {}).length > 0) {
     overrides.set("GA4_PROPERTY_MAP", JSON.stringify(tenant.ga4_property_map));
   }
