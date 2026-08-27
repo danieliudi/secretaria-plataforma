@@ -43,6 +43,12 @@ import {
   saveQuickCapture as defaultSaveQuickCapture,
 } from "./tools/quick-capture.ts";
 import {
+  buscarNoHistorico as defaultBuscarNoHistorico,
+  type BuscarHistoricoInput,
+  type BuscarHistoricoResult,
+  defaultBuscarHistoricoDeps,
+} from "./tools/historico-busca.ts";
+import {
   type EmailMessage,
   type ListEmailsInput,
   listRecentEmails as defaultListRecentEmails,
@@ -429,6 +435,25 @@ const TOOLS = [
         },
       },
       required: ["category", "key", "value"],
+    },
+  },
+  {
+    name: "buscar_no_historico",
+    description:
+      "Busca por assunto no histórico de conversa ANTIGO do usuário — além da janela recente que você já vê nesta conversa (só os últimos turnos). Use quando ele perguntar algo como 'o que eu tinha falado sobre X', 'lembra quando eu comentei Y', 'já discutimos Z antes?', 'o que ficou combinado sobre W mês passado' — qualquer pergunta sobre algo dito em conversa passada que não está mais no seu contexto atual. Retorna resumos de dias diferentes, mais relevantes primeiro — cite a data ao responder (ex: 'em 12/07 você comentou...'). NÃO use pra agenda (get_next_events/get_events_by_date), tasks (list_tasks) ou despesas (listar_despesas) — cada uma tem tool própria com dado estruturado; esta é só pra conversa não-estruturada. Se não vier nada relevante, diga que não achou — NUNCA invente uma conversa que não veio no resultado.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "O assunto buscado, em linguagem natural (ex: 'proposta pro cliente X', 'decisão sobre o fornecedor Y').",
+        },
+        limite: {
+          type: "integer",
+          description: "(opcional) Quantos dias diferentes retornar (1-10). Padrão 5.",
+        },
+      },
+      required: ["query"],
     },
   },
   {
@@ -1030,6 +1055,12 @@ export interface FastWithToolsDeps {
       key: string,
       value: string,
     ) => Promise<ProfileFact>;
+    /** `userId` chega na chamada (igual saveProfileFact): a busca é por usuário,
+     *  não pelo tenant inteiro — cada dono de conversa só acha o próprio histórico. */
+    buscarNoHistorico: (
+      input: BuscarHistoricoInput,
+      userId?: string,
+    ) => Promise<BuscarHistoricoResult>;
     scheduleReminder: (
       userId: string,
       input: CreateReminderInput,
@@ -1213,6 +1244,8 @@ export function defaultFastWithToolsDeps(
       // semanal varre por tenant, e fato sem dono nunca seria revisado.
       saveProfileFact: (userId, category, key, value) =>
         defaultSaveProfileFact(userId, category, key, value, tenantId ?? undefined),
+      buscarNoHistorico: (input, userId) =>
+        defaultBuscarNoHistorico(input, defaultBuscarHistoricoDeps(tenantId, userId, env)),
       scheduleReminder: (userId, input) => {
         if (!tenantId) {
           throw new Error(
@@ -1371,6 +1404,22 @@ async function executeTool(
         String(input.value),
       );
       return { fact };
+    }
+    if (name === "buscar_no_historico") {
+      // Mesmo motivo do save_profile_fact: sem user_id não há de quem
+      // buscar o histórico — devolve erro pro modelo seguir sem quebrar,
+      // em vez de deixar o construtor das deps lançar sem contexto.
+      if (!userId) {
+        return { error: "Sem user_id no contexto — não dá pra buscar o histórico." };
+      }
+      const result = await deps.tools.buscarNoHistorico(
+        {
+          query: String(input.query),
+          limite: input.limite !== undefined ? Number(input.limite) : undefined,
+        },
+        userId,
+      );
+      return result;
     }
     if (name === "schedule_reminder") {
       if (!userId) {

@@ -505,6 +505,9 @@ const SHARED_INFRA_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "GROQ_API_KEY",
   "GOOGLE_TTS_API_KEY",
+  // Conta de embeddings da plataforma (resumo diário / busca no histórico,
+  // "Ask Mia") — mesma key pra todo tenant, nenhum tem a própria.
+  "VOYAGE_API_KEY",
   // Infra do próprio Supabase
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",
