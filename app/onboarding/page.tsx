@@ -6,6 +6,17 @@ import { semDadoPessoal } from "@/lib/log-seguro";
 import { normalizaPersonalidade } from "@/lib/personalidade";
 import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
 
+// Força renderização e leitura de dados 100% dinâmicas, sem cache — achado do
+// incidente de login de 28/08/2026: mesmo com sessão e tenant corretos no
+// banco (confirmado repetidas vezes, direto via SQL e via PostgREST), a
+// página seguia mostrando "não encontramos sua configuração" depois de
+// deploys novos. `cookies()` já deveria opt-ar a rota inteira pra dinâmico,
+// mas a suspeita é que o Data Cache do runtime Next.js na Netlify (que
+// sobrevive a deploy, ao contrário do cache de build) reteve uma resposta
+// antiga da consulta de tenant. Estas duas flags fecham essa brecha de vez.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 function primeiroNome(nomeCompleto: string): string {
   return nomeCompleto.trim().split(/\s+/)[0] ?? "";
 }
