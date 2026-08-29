@@ -43,3 +43,15 @@ select cron.schedule(
   );
   $$
 );
+
+-- ATENÇÃO (29/08/2026): os dois jobs foram criados e imediatamente
+-- DESATIVADOS (cron.alter_job ... active := false).
+--
+-- Motivo: o CI só publica as edge functions em push pra `main`, então entre
+-- aplicar esta migration e o merge existe uma janela em que o /cron ainda não
+-- conhece as tasks 'reunioes'/'reuniao_retencao' e responde 400. Ativo, o job
+-- de 5 minutos encheria o log de falha e esconderia falha de verdade.
+--
+-- Reativar DEPOIS do deploy:
+--   select cron.alter_job(jobid, active := true)
+--   from cron.job where jobname in ('reunioes', 'reuniao-retencao');
