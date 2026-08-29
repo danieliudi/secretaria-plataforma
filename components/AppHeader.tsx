@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AccountMenu } from "@/components/AccountMenu";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { LogoLockup } from "@/components/Logo";
-import { NovidadesLink } from "@/components/NovidadesLink";
+import { NovidadesPainel } from "@/components/NovidadesPainel";
 
 // Cabeçalho compartilhado por /app, /admin e /onboarding.
 //
@@ -77,7 +77,7 @@ export function AppHeader({
       )}
 
       <div className="ml-auto flex items-center gap-3 sm:gap-[18px]">
-        <NovidadesLink />
+        <NovidadesPainel />
         <FeedbackButton />
         <span aria-hidden="true" className="hidden h-5 w-px bg-aurora-line sm:block" />
         <AccountMenu userLabel={userLabel} />
