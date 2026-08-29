@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -75,9 +74,19 @@ export function NovidadesLink() {
     }
   }
 
+  // Aba nova pelo mesmo motivo dos Termos (ver AccountMenu.tsx): /novidades é
+  // página do SITE — cabeçalho público, sem volta pro app. Abrindo fora, o
+  // changelog não custa a sessão de trabalho de ninguém.
+  //
+  // Anotado como próximo passo: dar ao changelog uma versão DENTRO do app
+  // (mesmo conteúdo da tabela `atualizacoes`, no cabeçalho do produto). É o
+  // item de navegação que os usuários mais vão abrir, e abrir fora é a
+  // solução simples, não a melhor.
   return (
-    <Link
+    <a
       href="/novidades"
+      target="_blank"
+      rel="noopener noreferrer"
       onClick={marcaComoVisto}
       className="relative whitespace-nowrap text-[12.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
     >
@@ -88,6 +97,6 @@ export function NovidadesLink() {
           className="absolute -right-[9px] -top-[3px] h-1.5 w-1.5 rounded-full bg-aurora-accent ring-2 ring-aurora-header-bg"
         />
       )}
-    </Link>
+    </a>
   );
 }

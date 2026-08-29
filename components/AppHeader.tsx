@@ -80,7 +80,7 @@ export function AppHeader({
         <NovidadesLink />
         <FeedbackButton />
         <span aria-hidden="true" className="hidden h-5 w-px bg-aurora-line sm:block" />
-        <AccountMenu userLabel={userLabel} isPlatformOwner={isPlatformOwner} />
+        <AccountMenu userLabel={userLabel} />
       </div>
     </header>
   );
