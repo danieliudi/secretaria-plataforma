@@ -17,28 +17,29 @@ import { createClient } from "@/lib/supabase/client";
 // montado em 3 lugares (app, admin, onboarding) e só um deles já tinha o
 // e-mail em mãos — plumbing nos outros dois só pra isso não se paga. Falha na
 // leitura degrada pro nome sozinho, nunca quebra o menu.
+// Revisão de navegação de 29/08/2026 — o menu caiu de 5 itens pra 3, e o
+// motivo não foi estética: dos 5, um era LINK MORTO e três te tiravam do
+// produto sem volta.
+//
+//  - "Configurar minha secretária" apontava pra `/onboarding` cru. Só que o
+//    onboarding devolve quem já foi aprovado pra `/app`
+//    (`if (aprovado_em && !step) redirect("/app")`) — clicar não abria nada,
+//    voltava pra mesma tela. Agora vai com `?step=1`, que é o que realmente
+//    abre o wizard.
+//
+//  - "Funcionalidades" e "Preços" saíram: são páginas do SITE (cabeçalho
+//    público, botão "Entrar", logo apontando pra landing). Abertas de dentro
+//    do app, jogavam a pessoa no mundo de marketing sem nenhum caminho de
+//    volta. Preços ainda por cima mostra número ilustrativo de um modelo de
+//    cobrança que não foi decidido — fora do menu até existir preço real.
+//
+// Sobrou o que um menu de conta é pra ser: quem sou eu, minha configuração,
+// e sair.
 const ITENS = [
-  { href: "/onboarding", label: "Configurar minha secretária", icone: "⚙" },
-  { href: "/funcionalidades", label: "Funcionalidades", icone: "✦" },
+  { href: "/onboarding?step=1", label: "Configurar minha secretária", icone: "⚙" },
 ] as const;
 
-// "Meu plano" do mockup NÃO entra pra todo mundo, e o rótulo mudou — os dois
-// por causa do que /precos realmente é hoje: prévia interna de uma página não
-// lançada, com `notFound()` deliberado pra quem não é dono (mesmo padrão do
-// /admin), preços ilustrativos e modelo de cobrança ainda não decidido.
-// Linkar pra todos daria 404 no cliente; tirar o guard publicaria preço
-// não-final — decisão de produto, não ajuste de navegação. Então: só o dono
-// vê, e com nome honesto ("prévia"), já que não existe plano nem cobrança
-// rodando pra chamar de "meu plano".
-const ITEM_PRECOS = { href: "/precos", label: "Preços (prévia)", icone: "◈" } as const;
-
-export function AccountMenu({
-  userLabel,
-  isPlatformOwner = false,
-}: {
-  userLabel: string;
-  isPlatformOwner?: boolean;
-}) {
+export function AccountMenu({ userLabel }: { userLabel: string }) {
   const [aberto, setAberto] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [saindo, setSaindo] = useState(false);
@@ -125,7 +126,7 @@ export function AccountMenu({
             {email && <p className="mt-0.5 truncate text-[11.5px] text-aurora-muted">{email}</p>}
           </div>
 
-          {[...ITENS, ...(isPlatformOwner ? [ITEM_PRECOS] : [])].map((item) => (
+          {ITENS.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -142,8 +143,16 @@ export function AccountMenu({
 
           <div className="mx-[7px] my-1.5 h-px bg-aurora-line-soft" />
 
-          <Link
+          {/* Aba nova de propósito: termos e privacidade PRECISAM estar
+              alcançáveis de dentro do produto (expectativa legal), mas são
+              páginas do site — com cabeçalho público e nenhum caminho de
+              volta pro app. Abrindo fora, a pessoa lê e o app continua
+              aberto atrás. `noopener` porque a aba nova não tem motivo
+              nenhum pra manter referência a esta janela. */}
+          <a
             href="/termos"
+            target="_blank"
+            rel="noopener noreferrer"
             role="menuitem"
             onClick={() => setAberto(false)}
             className="flex items-center gap-[9px] rounded-[7px] px-[11px] py-2 text-[12.5px] font-semibold text-aurora-muted-2 transition hover:bg-aurora-surface-2"
@@ -152,7 +161,10 @@ export function AccountMenu({
               §
             </span>
             Termos e privacidade
-          </Link>
+            <span aria-label="abre em outra aba" className="ml-auto text-[10px] text-aurora-muted">
+              ↗
+            </span>
+          </a>
 
           <div className="mx-[7px] my-1.5 h-px bg-aurora-line-soft" />
 

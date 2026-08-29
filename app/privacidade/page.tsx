@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
+import { BotaoEntrar } from "@/components/BotaoEntrar";
 
 // Página pública e estática — texto legal, sem dado dinâmico. Conteúdo
 // aprovado por mockup (ver conversa) antes de virar rota real, seguindo o
@@ -15,12 +16,7 @@ export default function PrivacidadePage() {
           </Link>
           <div className="flex items-center gap-6">
             <span className="text-[13.5px] font-semibold text-aurora-fg">Privacidade</span>
-            <Link
-              href="/login"
-              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-            >
-              Entrar
-            </Link>
+            <BotaoEntrar />
           </div>
         </div>
       </header>

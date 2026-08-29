@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Logo } from "@/components/Logo";
 import { EXEMPLOS } from "@/lib/exemplos";
+import { BotaoEntrar } from "@/components/BotaoEntrar";
 
 // Quem já entrou vai direto pro wizard — a landing é pra quem ainda não
 // conhece. Antes desta página o "/" redirecionava direto pro /login, e a
@@ -49,12 +50,7 @@ export default async function Home() {
             >
               Funcionalidades
             </Link>
-            <Link
-              href="/login"
-              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-            >
-              Entrar
-            </Link>
+            <BotaoEntrar />
           </div>
         </div>
       </header>

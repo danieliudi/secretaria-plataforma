@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Logo } from "@/components/Logo";
+import { BotaoEntrar } from "@/components/BotaoEntrar";
 
 // Página pública (sem login) — mesmo lugar que o link "Novidades" na landing
 // aponta. Lê com o client anon (RLS: "atualizacoes: leitura pública"), não o
@@ -57,12 +58,7 @@ export default async function NovidadesPage() {
           </Link>
           <div className="flex items-center gap-6">
             <span className="text-[13.5px] font-semibold text-aurora-fg">Novidades</span>
-            <Link
-              href="/login"
-              className="rounded-lg border border-aurora-line px-4 py-2 text-[13.5px] font-semibold text-aurora-fg transition hover:border-white/20"
-            >
-              Entrar
-            </Link>
+            <BotaoEntrar />
           </div>
         </div>
       </header>
