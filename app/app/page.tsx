@@ -113,6 +113,21 @@ export default async function AppPage() {
   const usoAutomatico = usoPorOrigem.cron ?? 0;
   const usoMaximo = Math.max(usoMensagens, usoImagens, usoDocumentos, usoAutomatico, 1);
 
+  // Reuniões: só a contagem — a lista mora em /app/reunioes. `head: true` não
+  // traz linha nenhuma, e nenhuma ata (conteúdo sensível) passa por esta tela.
+  const [{ count: reunioesProntas }, { count: reunioesEmAndamento }] = await Promise.all([
+    admin
+      .from("reunioes")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("status", "entregue"),
+    admin
+      .from("reunioes")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .in("status", ["enviando", "pendente", "transcrevendo"]),
+  ]);
+
   const envioOficialDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioAutomaticoAtivo = Boolean(tenant.envio_oficial) && envioOficialDisponivel;
 
@@ -200,6 +215,31 @@ export default async function AppPage() {
             )}
           </div>
         </section>
+
+        {/* reuniões — entrada pro recurso mais novo. Fica logo abaixo da
+            manchete porque é a única coisa do produto que começa FORA do
+            WhatsApp: se ninguém souber que existe, ninguém compartilha nada. */}
+        <Link
+          href="/app/reunioes"
+          className="mb-[68px] flex items-center gap-4 rounded-[18px] border border-aurora-line bg-aurora-surface px-6 py-5 transition hover:bg-aurora-surface-2"
+        >
+          <span className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-aurora-surface-2 text-aurora-accent-text">
+            <MicrofoneIcon />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-bold text-aurora-fg">Reuniões</span>
+            <span className="block text-[13px] leading-relaxed text-aurora-muted">
+              {reunioesEmAndamento
+                ? `Estou escutando ${reunioesEmAndamento} gravação${reunioesEmAndamento > 1 ? "ões" : ""} agora.`
+                : reunioesProntas
+                  ? `${reunioesProntas} ata${reunioesProntas > 1 ? "s" : ""} pronta${reunioesProntas > 1 ? "s" : ""}.`
+                  : "Compartilhe a gravação de uma reunião e eu devolvo a ata com quem falou o quê."}
+            </span>
+          </span>
+          <span aria-hidden="true" className="flex-none text-[15px] text-aurora-muted">
+            →
+          </span>
+        </Link>
 
         {/* uso — o que puxou a Mia esse mês, sem valor em R$ (preço ainda não existe) */}
         <div className="mb-1.5 flex items-center gap-4">
@@ -418,6 +458,16 @@ function MensagensIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 5.5h14v8H8l-3.5 3v-3H3z" />
+    </svg>
+  );
+}
+
+function MicrofoneIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="7.5" y="2" width="5" height="9.5" rx="2.5" />
+      <path d="M4.5 9.5a5.5 5.5 0 0 0 11 0" />
+      <path d="M10 15v3" />
     </svg>
   );
 }

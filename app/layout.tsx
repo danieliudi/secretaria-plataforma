@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { EB_Garamond, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
+import { RegistraServiceWorker } from "@/components/RegistraServiceWorker";
 
 // Rebrand 20/08/2026: Instrument Sans + Fraunces → Hanken Grotesk + Eb
 // Garamond, junto da troca de paleta pra slate+ouro (ver globals.css) — as
@@ -24,6 +25,17 @@ export const metadata: Metadata = {
   title: "Mia — sua secretária no WhatsApp",
   description:
     "Uma secretária que cuida da sua agenda, do seu e-mail e das suas tarefas pelo WhatsApp. Você fala como falaria com uma pessoa.",
+  // PWA: o manifest é o que faz o Android oferecer "instalar" e, com o
+  // share_target declarado lá dentro, listar a Mia no menu de compartilhar do
+  // sistema quando a pessoa termina de gravar uma reunião.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Mia", statusBarStyle: "default" },
+};
+
+// Cor da barra do sistema quando o app roda instalado — mesmo tom do cabeçalho
+// (--aurora-header-bg), pra não aparecer uma faixa branca por cima dele.
+export const viewport: Viewport = {
+  themeColor: "#e9edf3",
 };
 
 export default function RootLayout({
@@ -33,7 +45,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR" className={`${bodyFont.variable} ${displayFont.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <RegistraServiceWorker />
+        {children}
+      </body>
     </html>
   );
 }

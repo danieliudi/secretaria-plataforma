@@ -1,0 +1,46 @@
+{
+  "name": "Mia — sua secretária",
+  "short_name": "Mia",
+  "description": "Sua secretária de IA. Compartilhe a gravação de uma reunião e receba a ata com quem falou o quê.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#e9edf3",
+  "icons": [
+    { "src": "/icons/mia-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/mia-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/mia-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "/app/reunioes/receber",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "files": [
+        {
+          "name": "audio",
+          "accept": [
+            "audio/*",
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/m4a",
+            "audio/x-m4a",
+            "audio/aac",
+            "audio/ogg",
+            "audio/opus",
+            "audio/wav",
+            "audio/webm",
+            "audio/3gpp",
+            "audio/amr"
+          ]
+        }
+      ]
+    }
+  }
+}
