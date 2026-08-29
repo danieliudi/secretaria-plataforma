@@ -14,6 +14,10 @@ export interface UsoAdmin {
   conversas: number;
   proativos: number;
   tokens: number;
+  /** Reuniões transcritas no mês. Custa por HORA DE ÁUDIO, não por token —
+   *  por isso conta separada, e não somada em `tokens`. */
+  reunioes: number;
+  /** Custo total: modelos (tokens) + transcrição de reunião (hora de áudio). */
   usd: number;
 }
 
@@ -234,6 +238,12 @@ export default function AdminLista({
                       <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
                         Proativos
                       </th>
+                      {/* Reuniões não somam em Tokens: são cobradas por hora
+                          de áudio, não por token. Coluna própria pra não
+                          esconder de onde veio o custo. */}
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Reuniões
+                      </th>
                       <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
                         Tokens
                       </th>
@@ -285,6 +295,9 @@ export default function AdminLista({
                             {u.proativos.toLocaleString("pt-BR")}
                           </td>
                           <td className="px-4 py-3 text-right text-[13px] tabular-nums text-aurora-muted-2">
+                            {u.reunioes ? u.reunioes.toLocaleString("pt-BR") : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right text-[13px] tabular-nums text-aurora-muted-2">
                             {u.tokens.toLocaleString("pt-BR")}
                           </td>
                           <td className="px-4 py-3">
@@ -320,6 +333,9 @@ export default function AdminLista({
                       <td className="px-4 py-3 text-right">{mensagensNoMes.toLocaleString("pt-BR")}</td>
                       <td className="px-4 py-3 text-right">
                         {uso.reduce((s, u) => s + u.proativos, 0).toLocaleString("pt-BR")}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {uso.reduce((s, u) => s + u.reunioes, 0).toLocaleString("pt-BR")}
                       </td>
                       <td className="px-4 py-3 text-right">
                         {uso.reduce((s, u) => s + u.tokens, 0).toLocaleString("pt-BR")}

@@ -508,6 +508,9 @@ const SHARED_INFRA_KEYS = new Set([
   // Conta de embeddings da plataforma (resumo diário / busca no histórico,
   // "Ask Mia") — mesma key pra todo tenant, nenhum tem a própria.
   "VOYAGE_API_KEY",
+  // Conta de transcrição com separação de vozes (ata de reunião) — mesma
+  // lógica: é conta PAGA PELA PLATAFORMA, não credencial pessoal de ninguém.
+  "ASSEMBLYAI_API_KEY",
   // Infra do próprio Supabase
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",

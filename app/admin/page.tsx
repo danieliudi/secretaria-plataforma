@@ -77,6 +77,17 @@ export default async function AdminPage() {
     console.error(`[admin] uso_por_tenant falhou: ${semDadoPessoal(usoErro.message)}`);
   }
 
+  // Reuniões transcritas no mês. Fonte SEPARADA de uso_modelo de propósito:
+  // transcrição é cobrada por hora de áudio, não por token, e forçar isso nas
+  // colunas de token mentiria no significado. As duas somas se encontram aqui,
+  // no painel — que é onde a pergunta "quanto esse usuário custou" é feita.
+  const { data: reuniaoRows, error: reuniaoErro } = await admin.rpc("custo_reunioes_por_tenant", {
+    p_desde: inicioDoMes,
+  });
+  if (reuniaoErro) {
+    console.error(`[admin] custo_reunioes_por_tenant falhou: ${semDadoPessoal(reuniaoErro.message)}`);
+  }
+
   type LinhaUso = {
     tenant_id: string | null;
     modelo: string;
@@ -121,6 +132,7 @@ export default async function AdminPage() {
       conversas: 0,
       proativos: 0,
       tokens: 0,
+      reunioes: 0,
       usd: 0,
     };
 
@@ -137,6 +149,35 @@ export default async function AdminPage() {
     }
 
     porTenant.set(chave, atual);
+  }
+
+  // Dobra o custo de reunião nas mesmas linhas. Um tenant que só gravou
+  // reunião e nunca conversou não aparece em uso_modelo — por isso a linha é
+  // CRIADA aqui quando não existe, em vez de só somada.
+  type LinhaReuniao = { tenant_id: string | null; reunioes: number; custo_usd: number };
+  let custoReunioes = 0;
+  for (const l of (reuniaoRows ?? []) as LinhaReuniao[]) {
+    const chave = l.tenant_id ?? "__plataforma__";
+    const quem = l.tenant_id ? identidade.get(l.tenant_id) : undefined;
+    const atual = porTenant.get(chave) ?? {
+      slug: quem?.slug ?? "",
+      nome: quem?.nome || (l.tenant_id ? "(cadastro removido)" : "Plataforma"),
+      dono: quem?.dono ?? false,
+      sistema: l.tenant_id === null,
+      conversas: 0,
+      proativos: 0,
+      tokens: 0,
+      reunioes: 0,
+      usd: 0,
+    };
+    const usd = Number(l.custo_usd) || 0;
+    atual.reunioes += Number(l.reunioes) || 0;
+    atual.usd += usd;
+    custoReunioes += usd;
+    porTenant.set(chave, atual);
+  }
+  if (custoReunioes > 0) {
+    custoPorModelo.set("Transcrição de reunião", custoReunioes);
   }
 
   const uso = [...porTenant.values()].sort((a, b) => b.usd - a.usd);

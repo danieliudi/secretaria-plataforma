@@ -76,7 +76,14 @@ function gravaVisto(valor: string): void {
 
 export function NovidadesPainel() {
   const [aberto, setAberto] = useState(false);
-  const [visto, setVisto] = useState<string | null>(null);
+  // Lido no INICIALIZADOR, não num efeito: chamar setState de forma síncrona
+  // dentro de um useEffect encadeia render à toa (react-hooks/set-state-in-effect).
+  // No servidor não existe localStorage, então lá vale null — o que não causa
+  // divergência de hidratação porque `maisRecente` também é null no primeiro
+  // render dos dois lados, e o ponto depende dos dois.
+  const [visto, setVisto] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : leVisto(),
+  );
   const [maisRecente, setMaisRecente] = useState<string | null>(null);
   const [entradas, setEntradas] = useState<Atualizacao[] | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -90,7 +97,6 @@ export function NovidadesPainel() {
   useEffect(() => {
     let cancelado = false;
     const marcado = leVisto();
-    setVisto(marcado);
 
     createClient()
       .from("atualizacoes")
