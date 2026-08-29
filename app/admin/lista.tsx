@@ -3,6 +3,19 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { COTACAO_USD_BRL, formataBrl, formataUsd } from "@/lib/precos-modelo";
+
+/** Uso + custo de um tenant no mês. `sistema` é a linha da plataforma (sem dono). */
+export interface UsoAdmin {
+  slug: string;
+  nome: string;
+  dono: boolean;
+  sistema: boolean;
+  conversas: number;
+  proativos: number;
+  tokens: number;
+  usd: number;
+}
 
 export interface CadastroAdmin {
   slug: string;
@@ -47,10 +60,16 @@ export default function AdminLista({
   cadastros,
   userLabel,
   mensagensNoMes,
+  uso,
+  custoPorModelo,
+  modelosSemPreco,
 }: {
   cadastros: CadastroAdmin[];
   userLabel: string;
   mensagensNoMes: number;
+  uso: UsoAdmin[];
+  custoPorModelo: Array<{ rotulo: string; usd: number }>;
+  modelosSemPreco: string[];
 }) {
   const router = useRouter();
   const [emCurso, setEmCurso] = useState<string | null>(null);
@@ -61,6 +80,12 @@ export default function AdminLista({
   const aguardando = cadastros.filter((c) => !c.aprovadoEm && !c.recusadoEm);
   const rodando = cadastros.filter((c) => c.aprovadoEm);
   const recusados = cadastros.filter((c) => c.recusadoEm);
+
+  const custoTotal = uso.reduce((s, u) => s + u.usd, 0);
+  // Média SÓ entre quem é gente: a linha da plataforma (classificador) não é
+  // usuário, e incluí-la puxaria a média pra baixo fingindo mais usuários.
+  const pessoas = uso.filter((u) => !u.sistema);
+  const mediaPorPessoa = pessoas.length > 0 ? custoTotal / pessoas.length : 0;
 
   const travado = emCurso !== null || emLote;
 
@@ -143,7 +168,7 @@ export default function AdminLista({
           <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">{erro}</p>
         )}
 
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-line-soft bg-aurora-surface p-4">
             <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Aguardando</span>
             <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{aguardando.length}</span>
@@ -160,6 +185,166 @@ export default function AdminLista({
             <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Mensagens no mês</span>
             <span className="text-[22px] font-extrabold tracking-tight text-aurora-fg">{mensagensNoMes.toLocaleString("pt-BR")}</span>
           </div>
+          <div className="aurora-card flex flex-col gap-1 rounded-[14px] border border-aurora-accent/50 bg-aurora-surface p-4">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-aurora-muted">Custo no mês</span>
+            <span className="text-[22px] font-extrabold tracking-tight text-aurora-accent-text">
+              {formataBrl(custoTotal)}
+            </span>
+            <span className="text-[11px] text-aurora-muted">
+              {formataUsd(custoTotal)}
+              {pessoas.length > 0 && ` · média ${formataBrl(mediaPorPessoa)}/usuário`}
+            </span>
+          </div>
+        </section>
+
+        {/* ── Custo por usuário ──────────────────────────────────────────
+            Existe pra responder três perguntas de administração que a
+            contagem de mensagens sozinha não responde: quanto custa CADA
+            pessoa, quanto do gasto é proativo (roda sem ninguém pedir) e
+            quanto custa uma conversa — que é o número pra projetar preço
+            de assinatura. */}
+        <section className="flex flex-col gap-2.5">
+          <h2 className="text-[11px] font-bold uppercase tracking-[0.09em] text-aurora-muted-2">
+            Custo por usuário <span className="text-aurora-accent-text">(mês corrente)</span>
+          </h2>
+
+          {modelosSemPreco.length > 0 && (
+            <p className="rounded-lg border border-aurora-warn/40 bg-aurora-warn/10 px-4 py-2 text-[12.5px] text-aurora-warn">
+              Sem preço cadastrado para {modelosSemPreco.join(", ")} — o custo abaixo está
+              INCOMPLETO. Cadastre em <code className="font-mono">lib/precos-modelo.ts</code>.
+            </p>
+          )}
+
+          {uso.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-aurora-line px-5 py-6 text-center text-[13px] text-aurora-muted-2">
+              Nenhum uso registrado neste mês.
+            </p>
+          ) : (
+            <div className="aurora-card overflow-hidden rounded-[14px] border border-aurora-line bg-aurora-surface">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-aurora-line-soft">
+                      <th className="px-4 py-2.5 text-left text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Usuário
+                      </th>
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Conversas
+                      </th>
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Proativos
+                      </th>
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Tokens
+                      </th>
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Fatia
+                      </th>
+                      <th className="whitespace-nowrap px-4 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-aurora-muted">
+                        Custo
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uso.map((u) => {
+                      const fatia = custoTotal > 0 ? (u.usd / custoTotal) * 100 : 0;
+                      const porConversa = u.conversas > 0 ? u.usd / u.conversas : null;
+                      return (
+                        <tr key={u.slug || u.nome} className="border-b border-aurora-line-soft last:border-none">
+                          <td className="px-4 py-3">
+                            <span className="flex items-center gap-2.5">
+                              <span
+                                className={`text-[13.5px] font-bold ${u.sistema ? "text-aurora-muted-2" : "text-aurora-fg"}`}
+                              >
+                                {u.nome}
+                              </span>
+                              <span
+                                className={`rounded-full px-[8px] py-px text-[10px] font-bold uppercase tracking-wide ${
+                                  u.sistema
+                                    ? "bg-aurora-surface-2 text-aurora-muted"
+                                    : u.dono
+                                      ? "bg-aurora-accent/[0.14] text-aurora-accent-text"
+                                      : "bg-aurora-surface-2 text-aurora-muted-2"
+                                }`}
+                              >
+                                {u.sistema ? "sistema" : u.dono ? "dono" : "usuário"}
+                              </span>
+                            </span>
+                            <span className="mt-0.5 block text-[11.5px] text-aurora-muted">
+                              {u.sistema
+                                ? "classificador — roda antes de saber de quem é a mensagem"
+                                : [u.slug, porConversa !== null && `${formataBrl(porConversa)} por conversa`]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-[13px] tabular-nums text-aurora-muted-2">
+                            {u.sistema ? "—" : u.conversas.toLocaleString("pt-BR")}
+                          </td>
+                          <td className="px-4 py-3 text-right text-[13px] tabular-nums text-aurora-muted-2">
+                            {u.proativos.toLocaleString("pt-BR")}
+                          </td>
+                          <td className="px-4 py-3 text-right text-[13px] tabular-nums text-aurora-muted-2">
+                            {u.tokens.toLocaleString("pt-BR")}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="flex items-center justify-end gap-2">
+                              <span className="h-[5px] w-[68px] overflow-hidden rounded-[3px] bg-aurora-surface-2">
+                                <span
+                                  className={`block h-full ${u.sistema ? "bg-aurora-muted/40" : "bg-aurora-accent"}`}
+                                  style={{ width: `${Math.max(fatia, 0.5)}%` }}
+                                />
+                              </span>
+                              <span className="min-w-[36px] text-right text-[11.5px] tabular-nums text-aurora-muted">
+                                {fatia.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%
+                              </span>
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <span
+                              className={`text-[14px] font-bold tabular-nums ${u.sistema ? "text-aurora-muted-2" : "text-aurora-fg"}`}
+                            >
+                              {formataBrl(u.usd)}
+                            </span>
+                            <span className="mt-0.5 block text-[11.5px] tabular-nums text-aurora-muted">
+                              {formataUsd(u.usd)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-aurora-surface-2 text-[12.5px] font-bold tabular-nums text-aurora-muted-2">
+                      <td className="px-4 py-3 text-left">Total do mês</td>
+                      <td className="px-4 py-3 text-right">{mensagensNoMes.toLocaleString("pt-BR")}</td>
+                      <td className="px-4 py-3 text-right">
+                        {uso.reduce((s, u) => s + u.proativos, 0).toLocaleString("pt-BR")}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {uso.reduce((s, u) => s + u.tokens, 0).toLocaleString("pt-BR")}
+                      </td>
+                      <td />
+                      <td className="px-4 py-3 text-right">
+                        {formataBrl(custoTotal)}{" "}
+                        <span className="font-medium text-aurora-muted">· {formataUsd(custoTotal)}</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="flex flex-wrap gap-x-3.5 gap-y-1 border-t border-aurora-line-soft px-4 py-2.5 text-[11.5px] text-aurora-muted">
+                {custoPorModelo.map((m) => (
+                  <span key={m.rotulo}>
+                    {m.rotulo} · {formataUsd(m.usd)}
+                  </span>
+                ))}
+                <span className="ml-auto">
+                  Cotação usada: US$ 1 = {COTACAO_USD_BRL.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </span>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="flex flex-col gap-2.5">
