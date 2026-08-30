@@ -31,6 +31,15 @@ export const OAUTH_PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
       "https://www.googleapis.com/auth/calendar",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/tasks",
+      // GA4. ESTAVA FALTANDO (achado em 30/08/2026): o cron de marketing lê o
+      // Analytics com este mesmo refresh token, então qualquer tenant que
+      // conectasse o Google DEPOIS desta lista existir ficaria com GA4 quebrado
+      // sem motivo aparente. Não afeta quem já conectou — token existente
+      // mantém os escopos que recebeu na época.
+      "https://www.googleapis.com/auth/analytics.readonly",
+      // Google Ads. Só o escopo não basta: a API também exige um developer
+      // token com Basic Access, que o Google analisa (ver _shared/google-ads.ts).
+      "https://www.googleapis.com/auth/adwords",
     ].join(" "),
     queryParams: { access_type: "offline", prompt: "consent" },
     secretColumn: "google_refresh_token_secret_id",

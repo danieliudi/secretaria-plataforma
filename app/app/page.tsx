@@ -38,7 +38,7 @@ export default async function AppPage() {
   const { data: tenant, error } = await admin
     .from("tenants")
     .select(
-      "id, nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, teams_authorized_user_id, envio_oficial, aprovado_em, is_platform_owner",
+      "id, nome, cargo, frentes, personalidade, task_provider, task_provider_token_secret_id, google_refresh_token_secret_id, outlook_refresh_token_secret_id, channel_preference, whatsapp_authorized_number, telegram_authorized_chat_id, teams_authorized_user_id, envio_oficial, aprovado_em, is_platform_owner, google_ads_ativo, google_ads_customer_map",
     )
     .eq("auth_user_id", user.id)
     .maybeSingle();
@@ -127,6 +127,12 @@ export default async function AppPage() {
       .eq("tenant_id", tenant.id)
       .in("status", ["enviando", "pendente", "transcrevendo"]),
   ]);
+
+  // Google Ads. Só aparece na tela pra quem LIGOU — a esmagadora maioria dos
+  // usuários não roda anúncio, e mostrar "desligado" pra todo mundo seria
+  // ruído sobre uma funcionalidade que não lhes diz respeito.
+  const adsAtivo = Boolean(tenant.google_ads_ativo);
+  const adsFrentes = Object.keys((tenant.google_ads_customer_map ?? {}) as Record<string, unknown>);
 
   const envioOficialDisponivel = Boolean(process.env.ENVIO_OFICIAL_DISPONIVEL);
   const envioAutomaticoAtivo = Boolean(tenant.envio_oficial) && envioOficialDisponivel;
@@ -240,6 +246,29 @@ export default async function AppPage() {
             →
           </span>
         </Link>
+
+        {/* Google Ads — faixa de estado, não link: não tem tela própria, o
+            resultado sai no review semanal e nos avisos. Existe pra ninguém
+            ficar esperando dado que nunca vem, que foi o erro que custou caro
+            no lançamento das reuniões (30/08/2026). */}
+        {adsAtivo && (
+          <div className="mb-[68px] flex items-start gap-3 rounded-[14px] border border-aurora-line bg-aurora-surface px-5 py-4">
+            <span
+              aria-hidden="true"
+              className={`mt-[5px] h-2 w-2 flex-none rounded-full ${
+                adsFrentes.length > 0 ? "bg-aurora-ok" : "bg-aurora-warn"
+              }`}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13.5px] font-bold text-aurora-fg">Google Ads</span>
+              <span className="block text-[12.5px] leading-relaxed text-aurora-muted">
+                {adsFrentes.length > 0
+                  ? `Acompanhando ${juntaComE(adsFrentes)}. O gasto entra no review semanal, e eu aviso se uma campanha atingir o orçamento do dia.`
+                  : "Ligado, mas nenhuma frente tem conta de anúncio vinculada ainda — sem isso eu não consigo ler nada."}
+              </span>
+            </span>
+          </div>
+        )}
 
         {/* uso — o que puxou a Mia esse mês, sem valor em R$ (preço ainda não existe) */}
         <div className="mb-1.5 flex items-center gap-4">
