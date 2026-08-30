@@ -49,6 +49,12 @@ import {
   defaultBuscarHistoricoDeps,
 } from "./tools/historico-busca.ts";
 import {
+  criarLote as defaultCriarLote,
+  type CriarLoteInput,
+  type CriarLoteResult,
+  MAX_ITENS_LOTE,
+} from "./tools/lote.ts";
+import {
   type EmailMessage,
   type ListEmailsInput,
   listRecentEmails as defaultListRecentEmails,
@@ -408,6 +414,35 @@ const TOOLS = [
         },
       },
       required: ["frente", "title"],
+    },
+  },
+  {
+    name: "criar_lote",
+    description:
+      "Cria VÁRIAS tarefas de uma vez, numa chamada só. Use quando o usuário despejar várias coisas soltas na mesma mensagem (típico de áudio longo: 'preciso pagar X, cobrar Y, agendar Z...'). NUNCA use create_task repetidas vezes nesse caso — quem despeja não quer conversar item a item. FLUXO OBRIGATÓRIO: primeiro LISTE o que você separou e espere UMA confirmação; só chame esta tool depois do ok. Item SEM data vai pro inbox automaticamente (não invente prazo). Pra uma coisa só, use create_task normal.",
+    input_schema: {
+      type: "object",
+      properties: {
+        itens: {
+          type: "array",
+          description: `Itens do despejo, no máximo ${MAX_ITENS_LOTE}.`,
+          items: {
+            type: "object",
+            properties: {
+              titulo: { type: "string", description: "O que fazer, curto, nas palavras dele." },
+              frente: { type: "string", description: "(opcional) Frente. Só as configuradas. Sem frente, o item vai pro inbox." },
+              lista: { type: "string", description: "(opcional) Sub-lista dentro da frente, quando a plataforma exigir." },
+              due_date: {
+                type: "string",
+                description:
+                  "(opcional) Prazo em ISO 8601 com offset. SÓ preencha quando der pra derivar da FALA dele ('sexta', 'semana que vem', 'o remédio acabou domingo'). Sem data na fala, DEIXE VAZIO — o item vai pro inbox. Prazo inventado é pior que nenhum.",
+              },
+            },
+            required: ["titulo"],
+          },
+        },
+      },
+      required: ["itens"],
     },
   },
   {
@@ -884,6 +919,23 @@ PRÓXIMA AÇÃO (reduzir decisão, não empilhar lista)
 - 1 tool: what_now(). Use quando o usuário estiver sem foco ou pedir uma única prioridade pra agora.
 - Mostre só a primeira sugestão devolvida. Só mencione as outras se ele pedir mais opções — o ponto é cortar decisão, não repetir a lista de tasks.
 
+DESPEJO (ele manda várias coisas de uma vez)
+- 1 tool: criar_lote(itens). Reconheça pelo formato, não pelas palavras: uma mensagem — quase sempre áudio longo — com VÁRIAS coisas soltas e sem relação entre si ("preciso pagar o boleto, cobrar o Fulano, agendar a revisão, e me lembra da ideia do banho").
+- NUNCA crie uma por uma nem pergunte item a item. Quem despeja está despejando porque NÃO quer organizar agora; seis idas e voltas fazem ele desistir no terceiro item.
+- FLUXO: (1) liste tudo que você separou, cada item com a data que você OUVIU na fala; (2) espere UMA confirmação; (3) só então chame criar_lote uma vez.
+- DATA: só preencha o que dá pra derivar da fala dele ("sexta", "semana que vem", "o remédio acabou domingo", "até o dia 5"). Sem data na fala, deixe VAZIO — o item vai pro inbox sozinho. Nunca invente prazo: prazo falso some no meio das tarefas reais e estraga o aviso de atrasadas.
+- CORREÇÃO em linguagem solta, sempre: "tira a Braskem", "a do Everton é sexta", "tudo menos a última". NUNCA peça número de item nem "responda 1, 3 e 5".
+- Depois de criar, UMA linha dizendo o que virou tarefa e o que ficou no inbox. Se algo falhar (vem em 'falharam'), diga qual e siga — não repita a lista inteira.
+- Se vier 'truncado: true', avise que passou do limite e o que ficou de fora.
+
+TRAVADO (ele sabe o que fazer e não consegue começar)
+- Não é tool, é jeito de responder. Reconheça por: "não to conseguindo começar", "to enrolando", "olhando pra tela faz uma hora", "procrastinando", "travado no X".
+- O problema NÃO é falta de clareza. NÃO repita o que ele tem que fazer, não liste as tarefas, não chame what_now.
+- Faça DUAS coisas, nesta ordem: (1) dê UM primeiro passo físico que caiba em dois minutos e não exija decisão nenhuma ("abre o modelo e escreve só o nome dele no cabeçalho"); (2) se alguma DECISÃO estiver travando e você souber a resposta (do perfil, do CRM, do histórico), entregue ela de graça — quase sempre é isso que trava, não a tarefa.
+- REGRA DURA DE TOM: você é secretária, não coach. Nada de "você consegue", "vai dar certo", "um passo de cada vez", emoji de força, nem pergunta sobre como ele está se sentindo. Sem diagnóstico, sem terapia, sem motivação. Se a resposta pudesse sair de um post de autoajuda, está errada.
+- Peça pra ele COMEÇAR, não pra terminar. Termine com algo como "me avisa quando abrir — não precisa terminar".
+- Só depois do passo, se houver janela livre útil na agenda, diga qual. Antes do passo, isso é distração.
+
 REEMBOLSO / DESPESAS (recibo virando relatório)
 - 3 tools: registrar_despesa, listar_despesas, fechar_mes_despesas.
 - Quando o usuário mandar FOTO de nota fiscal/recibo/comprovante, ou ditar um gasto, você recebe a descrição da imagem como texto. Leia dela: valor, data do recibo, estabelecimento.
@@ -1049,6 +1101,7 @@ export interface FastWithToolsDeps {
     listRecentEmails: (input: ListEmailsInput) => Promise<EmailMessage[]>;
     listTasks: (input: ListTasksInput) => Promise<TaskItem[]>;
     createTask: (input: CreateTaskInput) => Promise<TaskItem>;
+    criarLote: (input: CriarLoteInput) => Promise<CriarLoteResult>;
     saveProfileFact: (
       userId: string,
       category: string,
@@ -1240,6 +1293,14 @@ export function defaultFastWithToolsDeps(
           : defaultListRecentEmails(input, { getAccessToken, fetch }),
       listTasks: (input) => getTaskProvider(env).listTasks(input),
       createTask: (input) => getTaskProvider(env).createTask(input),
+      // O lote reusa as MESMAS deps de tarefa e de captura — ele é orquestração
+      // por cima delas, não um caminho paralelo. Assim item criado em lote é
+      // idêntico a item criado um a um, inclusive no provedor de destino.
+      criarLote: (input) =>
+        defaultCriarLote(input, {
+          createTask: (t) => getTaskProvider(env).createTask(t),
+          saveQuickCapture: (n) => defaultSaveQuickCapture(n, quickCaptureDeps()),
+        }),
       // tenantId vai junto pra memória nascer com dono: a consolidação
       // semanal varre por tenant, e fato sem dono nunca seria revisado.
       saveProfileFact: (userId, category, key, value) =>
@@ -1390,6 +1451,10 @@ async function executeTool(
         due_date: input.due_date ? String(input.due_date) : undefined,
       });
       return { task };
+    }
+    if (name === "criar_lote") {
+      const itens = Array.isArray(input.itens) ? input.itens : [];
+      return await deps.tools.criarLote({ itens: itens as CriarLoteInput["itens"] });
     }
     if (name === "save_profile_fact") {
       // Perfil é por-usuário; sem userId (chamada stateless de teste) não há
