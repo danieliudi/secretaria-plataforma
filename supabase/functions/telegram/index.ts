@@ -30,6 +30,10 @@ import {
 
 const FAST_BG_TIMEOUT_MS = 90_000;
 
+/** Teto do corpo. Update do Telegram é pequeno (texto cabe em 4096 chars);
+ * o excedente é ruído ou abuso. Ver _shared/corpo-limitado.ts. */
+const MAX_CORPO = 256 * 1024;
+
 // Comparação em tempo constante — mesmo padrão de comparaSeguro em
 // _shared/internal-auth.ts, duplicado aqui pra não acoplar os dois módulos
 // por uma função de 8 linhas.
@@ -190,12 +194,13 @@ async function deriveInput(
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
 
-  let body: TelegramUpdate;
-  try {
-    body = await req.json();
-  } catch {
-    return resp({ error: "Invalid JSON" }, 400);
+  const corpo = await leCorpoJsonLimitado<TelegramUpdate>(req, MAX_CORPO);
+  if (!corpo.ok) {
+    return corpo.motivo === "grande_demais"
+      ? resp({ error: "payload too large" }, 413)
+      : resp({ error: "Invalid JSON" }, 400);
   }
+  const body = corpo.valor;
 
   const message = body.message;
   if (!message?.chat?.id) return resp({ ok: true, ignored: "no_chat" }, 200);

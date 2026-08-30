@@ -49,9 +49,6 @@ export interface ScheduledReminderDeps {
   insert: (
     row: InsertRow,
   ) => Promise<{ data: { id: string } | null; error: { message: string } | null }>;
-  loadPending: (
-    nowISO: string,
-  ) => Promise<ScheduledReminder[]>;
   loadSimilarPending: (
     userId: string,
     fromISO: string,
@@ -63,6 +60,11 @@ export interface ScheduledReminderDeps {
   ) => Promise<{ error: { message: string } | null }>;
 }
 
+// NOTA (auditoria 28/08/2026): existia aqui um `loadPending(nowISO)` que
+// varria scheduled_reminders SEM filtro de tenant. Estava morto — o cron usa a
+// própria consulta, com `.eq("tenant_id", tenant.id)` e envio pelo env do
+// tenant certo. Removido em vez de mantido: código morto que já nasce sem
+// isolamento é armadilha pra quem for ligar isso depois achando que está pronto.
 export function defaultScheduledReminderDeps(): ScheduledReminderDeps {
   return {
     insert: async (row) => {
@@ -75,17 +77,6 @@ export function defaultScheduledReminderDeps(): ScheduledReminderDeps {
         data: (data as { id: string } | null),
         error: error as { message: string } | null,
       };
-    },
-    loadPending: async (nowISO) => {
-      const { data, error } = await getSupabaseClient()
-        .from("scheduled_reminders")
-        .select("id, user_id, fire_at, text, recurrence")
-        .lte("fire_at", nowISO)
-        .is("sent_at", null)
-        .order("fire_at", { ascending: true })
-        .limit(50);
-      if (error) throw new Error(error.message);
-      return (data ?? []) as ScheduledReminder[];
     },
     loadSimilarPending: async (userId, fromISO, toISO) => {
       const { data, error } = await getSupabaseClient()

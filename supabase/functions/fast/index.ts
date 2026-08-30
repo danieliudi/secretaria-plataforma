@@ -170,7 +170,7 @@ import {
 import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
-import { LIMITE_OBSERVACAO_POR_HORA, registraChamadaJanela } from "../_shared/rate-limit.ts";
+import { LIMITE_BLOQUEIO_POR_HORA, LIMITE_OBSERVACAO_POR_HORA, registraChamadaJanela } from "../_shared/rate-limit.ts";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -1765,15 +1765,23 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // MODO OBSERVAÇÃO (ver _shared/rate-limit.ts): só mede e loga quando
-  // passaria do teto — nunca bloqueia a chamada. Sem dado real de uso ainda
-  // pra calibrar um teto de bloqueio de verdade.
+  // Taxa por tenant, em dois patamares (ver _shared/rate-limit.ts): acima de
+  // LIMITE_OBSERVACAO_POR_HORA só registra; acima de LIMITE_BLOQUEIO_POR_HORA
+  // recusa. O disjuntor existe desde 28/08/2026 — o /fast é o ponto onde uma
+  // chamada vira custo de token de verdade, então é aqui que ele mora.
   const chamadasNaJanela = await registraChamadaJanela(tenantId);
   if (chamadasNaJanela !== null && chamadasNaJanela > LIMITE_OBSERVACAO_POR_HORA) {
     await getSupabaseClient().from("async_debug").insert({
-      step: "rate_limit_observe",
+      step: chamadasNaJanela > LIMITE_BLOQUEIO_POR_HORA ? "rate_limit_bloqueio" : "rate_limit_observe",
       detail: `tenant_slug=${tenantSlugRaw || "?"} chamadas_na_hora=${chamadasNaJanela}`,
     });
+  }
+  if (chamadasNaJanela !== null && chamadasNaJanela > LIMITE_BLOQUEIO_POR_HORA) {
+    console.error(
+      `[fast] tenant '${tenantSlugRaw || "?"}' passou do teto horário ` +
+        `(${chamadasNaJanela} > ${LIMITE_BLOQUEIO_POR_HORA}) — recusando`,
+    );
+    return resp({ error: "limite de chamadas por hora atingido" }, 429);
   }
 
   try {
