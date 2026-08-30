@@ -23,6 +23,16 @@ export interface Tenant {
   google_refresh_token_secret_id: string | null;
   outlook_refresh_token_secret_id: string | null;
   ga4_property_map: Record<string, unknown>;
+  /**
+   * Google Ads. DESLIGADO por padrão de propósito: a maioria dos tenants não
+   * roda anúncio, e funcionalidade que assume que todo mundo tem vira erro no
+   * relatório de quem não tem.
+   */
+  google_ads_ativo: boolean;
+  /** frente → customer id (só dígitos). Mesmo formato do ga4_property_map. */
+  google_ads_customer_map: Record<string, unknown>;
+  /** Conta gerenciadora (MCC), usada no header login-customer-id. */
+  google_ads_login_customer_id: string | null;
   whatsapp_evolution_instance: string | null;
   whatsapp_evolution_api_key_secret_id: string | null;
   telegram_bot_token_secret_id: string | null;
@@ -65,7 +75,7 @@ const TENANT_COLUMNS = `
   trello_api_key_secret_id,
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
   outlook_refresh_token_secret_id,
-  ga4_property_map,
+  ga4_property_map, google_ads_ativo, google_ads_customer_map, google_ads_login_customer_id,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
@@ -511,6 +521,11 @@ const SHARED_INFRA_KEYS = new Set([
   // Conta de transcrição com separação de vozes (ata de reunião) — mesma
   // lógica: é conta PAGA PELA PLATAFORMA, não credencial pessoal de ninguém.
   "ASSEMBLYAI_API_KEY",
+  // Developer token do Google Ads: é UM por plataforma (sai da nossa conta de
+  // administrador e o Google analisa antes de liberar), enquanto o customer id
+  // e o refresh token continuam sendo de cada tenant. Mesma lógica do
+  // GOOGLE_CLIENT_ID/SECRET logo abaixo.
+  "GOOGLE_ADS_DEVELOPER_TOKEN",
   // Infra do próprio Supabase
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",
@@ -578,6 +593,19 @@ export async function buildTenantEnv(
   }
   if (Object.keys(tenant.ga4_property_map ?? {}).length > 0) {
     overrides.set("GA4_PROPERTY_MAP", JSON.stringify(tenant.ga4_property_map));
+  }
+
+  // Google Ads. O "1"/ausente (em vez de "true"/"false") é de propósito: o env
+  // é sempre string, e comparar com "1" não tem o caso traiçoeiro de a string
+  // "false" ser verdadeira em teste booleano.
+  if (tenant.google_ads_ativo) {
+    overrides.set("GOOGLE_ADS_ATIVO", "1");
+    if (Object.keys(tenant.google_ads_customer_map ?? {}).length > 0) {
+      overrides.set("GOOGLE_ADS_CUSTOMER_MAP", JSON.stringify(tenant.google_ads_customer_map));
+    }
+    if (tenant.google_ads_login_customer_id) {
+      overrides.set("GOOGLE_ADS_LOGIN_CUSTOMER_ID", tenant.google_ads_login_customer_id);
+    }
   }
 
   overrides.set("TASK_PROVIDER", tenant.task_provider);
