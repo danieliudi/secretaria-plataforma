@@ -35,7 +35,18 @@ export const TIPOS_AUDIO: Record<string, string> = {
   "video/mp4": "m4a",
 };
 
-/** Igual ao file_size_limit do bucket. Uma hora de gravação dá 30-60 MB. */
+/**
+ * Teto de tamanho. Precisa bater com DOIS lugares no Supabase, e os dois
+ * valem — o menor ganha:
+ *   1. `file_size_limit` do bucket (migration 20260829_reunioes.sql);
+ *   2. o teto GLOBAL do projeto (Dashboard → Storage → Settings), que vem
+ *      com 50 MB de fábrica.
+ *
+ * O (2) foi o que derrubou o primeiro teste real (30/08/2026): uma gravação
+ * de 59 min tinha 59 MB e o Storage devolveu 400 depois de 11 segundos
+ * subindo. Uma hora de gravação de celular dá 30-60 MB, então 50 MB não
+ * cobre nem uma reunião normal — o global foi subido pra 200 MB.
+ */
 export const MAX_BYTES = 200 * 1024 * 1024;
 /** Abaixo disso não é reunião — é toque acidental no botão de compartilhar. */
 export const MIN_BYTES = 8 * 1024;
@@ -48,8 +59,19 @@ export const MIN_BYTES = 8 * 1024;
  */
 export const MAX_REUNIOES_POR_DIA = 20;
 
+/**
+ * Content-type sem parâmetro: 'audio/mp4; codecs="mp4a.40.2"' → 'audio/mp4'.
+ *
+ * Precisa existir porque o valor é comparado com `allowed_mime_types` do
+ * bucket, que casa exato — mandar o tipo com o parâmetro de codec junto faz o
+ * Storage recusar um arquivo perfeitamente válido.
+ */
+export function tipoLimpo(tipo: string): string {
+  return tipo.toLowerCase().split(";")[0].trim();
+}
+
 export function extensaoDoTipo(tipo: string): string | null {
-  return TIPOS_AUDIO[tipo.toLowerCase().split(";")[0].trim()] ?? null;
+  return TIPOS_AUDIO[tipoLimpo(tipo)] ?? null;
 }
 
 /**

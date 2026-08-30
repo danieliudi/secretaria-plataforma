@@ -2429,6 +2429,8 @@ const REUNIAO_MAX_TENTATIVAS_SUBMETER = 5;
 const REUNIAO_MAX_TENTATIVAS_CONSULTAR = 60;
 /** Dias que o áudio ORIGINAL fica guardado antes de ser apagado. */
 const REUNIAO_RETENCAO_DIAS = 7;
+/** Depois disto, um upload que não terminou é dado como perdido (ver runReuniaoRetencao). */
+const REUNIAO_ENVIO_TIMEOUT_MIN = 120;
 
 interface LinhaReuniao {
   id: string;
@@ -2677,9 +2679,26 @@ async function falhouReuniao(
  * caminho de arquivo. Rodar por tenant só multiplicaria invocação pra
  * encontrar zero linha na imensa maioria dos dias.
  */
-async function runReuniaoRetencao(): Promise<{ apagados: number; falhas: number }> {
+async function runReuniaoRetencao(): Promise<{ apagados: number; falhas: number; travadas: number }> {
   const sb = getSupabaseClient();
   const limite = new Date(Date.now() - REUNIAO_RETENCAO_DIAS * 24 * 60 * 60_000).toISOString();
+
+  // Linhas travadas em 'enviando': a rota criou o registro mas o upload do
+  // navegador nunca terminou (conexão caiu, arquivo maior que o teto do
+  // Storage, aba fechada no meio). Sem isto elas ficam pra sempre na lista
+  // dizendo "enviando", como se ainda houvesse algo acontecendo — foi o que
+  // aconteceu no primeiro teste real (30/08/2026).
+  const limiteEnvio = new Date(Date.now() - REUNIAO_ENVIO_TIMEOUT_MIN * 60_000).toISOString();
+  const { data: travadasRows } = await sb
+    .from("reunioes")
+    .update({
+      status: "erro",
+      erro: "o envio do áudio não terminou — compartilhe a gravação de novo",
+    })
+    .eq("status", "enviando")
+    .lt("created_at", limiteEnvio)
+    .select("id");
+  const travadas = (travadasRows ?? []).length;
 
   const { data, error } = await sb
     .from("reunioes")
@@ -2690,14 +2709,14 @@ async function runReuniaoRetencao(): Promise<{ apagados: number; falhas: number 
   if (error) throw new Error(`reunioes retenção load: ${error.message}`);
 
   const linhas = (data ?? []) as Array<{ id: string; tenant_id: string; audio_path: string }>;
-  if (linhas.length === 0) return { apagados: 0, falhas: 0 };
+  if (linhas.length === 0) return { apagados: 0, falhas: 0, travadas };
 
   const { error: delErr } = await sb.storage.from("reunioes").remove(linhas.map((l) => l.audio_path));
   if (delErr) {
     // Não zera audio_path se o arquivo pode ter sobrado: perder o ponteiro
     // deixaria lixo pago no bucket pra sempre, sem ninguém pra apagar.
     console.error(`[cron] reuniao_retencao: remoção no storage falhou: ${semDadoPessoal(delErr)}`);
-    return { apagados: 0, falhas: linhas.length };
+    return { apagados: 0, falhas: linhas.length, travadas };
   }
 
   const agora = new Date().toISOString();
@@ -2707,7 +2726,7 @@ async function runReuniaoRetencao(): Promise<{ apagados: number; falhas: number 
     .in("id", linhas.map((l) => l.id));
   if (upErr) throw new Error(`reunioes retenção update: ${upErr.message}`);
 
-  return { apagados: linhas.length, falhas: 0 };
+  return { apagados: linhas.length, falhas: 0, travadas };
 }
 
 // ─── Dispatcher multi-tenant ─────────────────────────────────────────────────

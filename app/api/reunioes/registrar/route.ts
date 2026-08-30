@@ -14,6 +14,7 @@ import {
   MAX_BYTES,
   MAX_REUNIOES_POR_DIA,
   MIN_BYTES,
+  tipoLimpo,
   tituloDoNome,
 } from "@/lib/reunioes";
 
@@ -97,7 +98,7 @@ export async function POST(request: Request) {
       tenant_id: tenant.id,
       status: "enviando",
       titulo,
-      audio_tipo: tipo.toLowerCase().split(";")[0].trim(),
+      audio_tipo: tipoLimpo(tipo),
       audio_bytes: bytes,
     })
     .select("id")
