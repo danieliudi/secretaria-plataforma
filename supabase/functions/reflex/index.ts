@@ -1,6 +1,6 @@
 import { getAnthropicClient } from "../_shared/anthropic.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
-import { isInternalCall } from "../_shared/internal-auth.ts";
+import { isInternalCall, temSegredoDeWebhook } from "../_shared/internal-auth.ts";
 import type { Decision } from "../_shared/types.ts";
 import { classifyWithHaiku, checkRegexReflex } from "../_shared/router.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
@@ -25,6 +25,7 @@ import {
   getTenantByWhatsAppInstance,
   getTenantBySlug,
   normalizeWhatsAppJidToE164,
+  tenantElegivel,
   type Tenant,
 } from "../_shared/tenant.ts";
 
@@ -361,19 +362,47 @@ async function handleSharedNumberMessage(
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
 
-  // MODO OBSERVAÇÃO (10/08/2026) — passo intermediário antes de exigir chamada
-  // interna aqui como já se exige no /fast.
+  // Autenticação (28/08/2026 — fim do "modo observação" que durou 18 dias).
   //
-  // O n8n chama este endpoint com a credencial "Supabase service_role", mas não
-  // dá pra ler o valor dela pelo painel nem pela API — e o WhatsApp do dono é
-  // uso diário. Então: por enquanto só REGISTRA se bloquearia, e deixa passar.
-  // Com uma mensagem real, `auth_observe` no async_debug responde se a
-  // credencial bate. Sem linha nova = bate, e aí isto vira bloqueio de fato.
-  if (!isInternalCall(req)) {
+  // HISTÓRICO: de 10/08 a 28/08 este bloco só REGISTRAVA quem não passaria,
+  // esperando o dia em que `auth_observe` parasse de aparecer no async_debug
+  // pra então virar bloqueio. Nunca parou: 43 linhas, a última no próprio dia
+  // da auditoria. O motivo apareceu no print do n8n — o node "Call Edge
+  // Function" usa "Header Auth", e não o `Authorization: Bearer <service
+  // role>` que `isInternalCall` exige. A credencial se chamava "Supabase
+  // service_role", mas o FORMATO nunca ia bater. Ou seja: a espera não tinha
+  // fim possível, e o endpoint ficou aberto esse tempo todo.
+  //
+  // O QUE ESTAVA EXPOSTO: sem `from` nem `instance`, resolveTenant cai no
+  // tenant padrão (o dono da plataforma) e o caminho síncrono devolvia a
+  // resposta do modelo — com agenda, Gmail e CRM dele — no corpo HTTP. O
+  // `verify_jwt = true` do config.toml não segura isso: a chave publicável é
+  // um JWT válido do projeto e está no bundle do navegador por design (ver o
+  // cabeçalho de _shared/internal-auth.ts).
+  //
+  // POR QUE A TRAVA É CONDICIONADA a REFLEX_WEBHOOK_SECRET existir: ligar o
+  // bloqueio no mesmo deploy em que o segredo ainda não está configurado nos
+  // DOIS lados (secret da function + header no n8n) derrubaria o WhatsApp do
+  // dono, que é uso diário. Então: com o segredo configurado, recusa de
+  // verdade; sem ele, mantém o comportamento atual e GRITA no log. Isto é
+  // deliberadamente diferente do /wa-webhook (onde ausência de segredo recusa
+  // tudo): lá a ausência abriria uma porta nova, aqui ela apenas não fecha uma
+  // porta que já estava aberta. É um degrau de migração, não o estado final —
+  // assim que o segredo estiver nos dois lados, este ramo vira inalcançável.
+  const segredoWebhook = Deno.env.get("REFLEX_WEBHOOK_SECRET");
+  const chamadorConfiavel = isInternalCall(req) || temSegredoDeWebhook(req, segredoWebhook);
+  if (!chamadorConfiavel) {
+    if (segredoWebhook) {
+      return resp({ error: "não autorizado" }, 401);
+    }
+    console.error(
+      "[reflex] ATENÇÃO: chamador não autenticado e REFLEX_WEBHOOK_SECRET não configurado — " +
+        "requisição ACEITA por compatibilidade. Configure o segredo pra fechar isto.",
+    );
     try {
       await getSupabaseClient()
         .from("async_debug")
-        .insert({ step: "auth_observe", detail: "reflex: chamador NAO passaria na trava interna" });
+        .insert({ step: "auth_observe", detail: "reflex: aceito sem auth (segredo nao configurado)" });
     } catch { /* observabilidade não pode derrubar o request */ }
   }
 
@@ -431,6 +460,18 @@ Deno.serve(async (req: Request) => {
     // "prompt mestre", 21/08/2026), e os 3 usos abaixo (reflex, fast síncrono,
     // fast assíncrono) reconsultavam o mesmo tenant cada um por conta própria.
     const tenant = await resolveTenant(instance);
+
+    // Portão de acesso (achado da auditoria de 28/08/2026). O comentário do
+    // /fast afirmava que "/reflex, /telegram e o cron já barram tenant não
+    // aprovado" — /telegram e cron barram, o /reflex NÃO barrava: não havia
+    // nenhuma checagem de `aprovado_em` neste arquivo. O tier "fast" ficava
+    // coberto de carona (o /fast barra por conta própria), mas o tier "reflex"
+    // chama orchestrateReflex direto e gravava saúde/medicação/hábito de quem
+    // estava pausado.
+    if (tenant && !tenantElegivel(tenant)) {
+      console.warn(`[reflex] tenant '${tenant.slug}' sem acesso liberado — recusando`);
+      return resp({ error: "tenant sem acesso liberado" }, 403);
+    }
 
     // Sempre classifica no servidor — nunca aceita `decision` do corpo. O
     // campo existia pra permitir pular a chamada do classificador, mas isso
@@ -531,6 +572,17 @@ Deno.serve(async (req: Request) => {
       // Passa o tenant também aqui — sem ele, o /fast montava o prompt com a
       // persona default e as tools caíam no ambiente global. Era um caminho de
       // PRODUÇÃO, não só de teste.
+      //
+      // MAS: sem `from` não se sabe QUEM está perguntando, e resolveTenant já
+      // caiu no tenant padrão (o dono da plataforma). Devolver o resultado no
+      // corpo HTTP nesse estado era o vazamento da auditoria de 28/08/2026 —
+      // agenda, Gmail e CRM do dono na resposta de uma chamada que não
+      // identificou ninguém. Recusa explícita, mesmo critério que o tier
+      // reflex já usava logo acima (409 "não foi possível identificar").
+      if (!from) {
+        console.warn("[reflex] chamada sem 'from' no caminho síncrono — recusando em vez de responder pelo tenant padrão");
+        return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
+      }
       const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenant?.slug });
       return resp(result, 200);
     }

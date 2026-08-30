@@ -22,6 +22,11 @@ import { consumeTeamsLinkCode, getTenantByAuthorizedTeamsUserId, type Tenant } f
 import { splitMessages } from "../_shared/whatsapp.ts";
 import type { Decision } from "../_shared/types.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
+import { leCorpoJsonLimitado } from "../_shared/corpo-limitado.ts";
+
+/** Teto do corpo. Activity do Bot Framework é pequena; o excedente é ruído ou
+ * abuso. Ver _shared/corpo-limitado.ts. */
+const MAX_CORPO = 256 * 1024;
 
 const FAST_BG_TIMEOUT_MS = 90_000;
 
@@ -61,12 +66,13 @@ function resp(data: unknown, status: number): Response {
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
 
-  let activity: TeamsActivity;
-  try {
-    activity = await req.json();
-  } catch {
-    return resp({ error: "Invalid JSON" }, 400);
+  const corpo = await leCorpoJsonLimitado<TeamsActivity>(req, MAX_CORPO);
+  if (!corpo.ok) {
+    return corpo.motivo === "grande_demais"
+      ? resp({ error: "payload too large" }, 413)
+      : resp({ error: "Invalid JSON" }, 400);
   }
+  const activity = corpo.valor;
 
   const serviceUrl = activity.serviceUrl;
   const conversationId = activity.conversation?.id;

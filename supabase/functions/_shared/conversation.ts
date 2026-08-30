@@ -36,6 +36,17 @@ type InsertRow = {
   // mas toda chamada que TEM o tenant precisa passá-lo — sem isso a linha cai
   // fora do ON DELETE CASCADE por tenant e nenhuma exclusão a alcança depois.
   tenant_id?: string | null;
+
+  // ARMADILHA CONHECIDA (auditoria 28/08/2026), pra quem for ler estas tabelas
+  // do lado do cliente algum dia: as policies de RLS de conversation_history,
+  // user_profile, health_log e scheduled_reminders são
+  // `auth.uid()::text = user_id`. Isso NUNCA casa — `user_id` aqui é o
+  // TELEFONE E.164 (ou "tg:<chat_id>"), e `auth.uid()` é o UUID do Supabase
+  // Auth. Hoje é inofensivo: tudo passa por service_role dentro das edge
+  // functions, que ignora RLS, e a policy que nunca casa nega — falha pro lado
+  // seguro. Mas uma leitura futura pelo browser vai voltar vazia sem erro
+  // nenhum, e o motivo não é óbvio. Consertar é ligar user_id ao auth_user_id
+  // do tenant, não afrouxar a policy.
 };
 
 export interface ConversationDeps {

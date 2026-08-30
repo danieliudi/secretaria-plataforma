@@ -40,3 +40,35 @@ export function respostaNaoAutorizado(): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+// ─── Segredo dedicado de webhook (chamador externo confiável) ───────────────
+//
+// Existe porque `isInternalCall` exige `Authorization: Bearer <service role>`,
+// e nem todo chamador legítimo consegue mandar exatamente isso. O n8n, por
+// exemplo, usa "Header Auth" (nome e valor de header livres) — a credencial
+// dele se chamava "Supabase service_role" mas não chegava no formato que
+// `isInternalCall` reconhece, e por isso a trava do /reflex ficou 18 dias em
+// modo observação sem nunca poder ser ligada (43 linhas de `auth_observe`).
+//
+// Em vez de afrouxar `isInternalCall` (que protege as chamadas entre edge
+// functions e não deve virar "aceita qualquer formato"), este é um segundo
+// fator, separado e específico: um segredo próprio, num header próprio.
+
+/** Header onde o segredo dedicado é esperado. */
+export const HEADER_SEGREDO_WEBHOOK = "X-Webhook-Secret";
+
+/**
+ * true quando o chamador provou ser confiável — por chamada interna
+ * (service role) OU pelo segredo dedicado do webhook.
+ *
+ * `segredoEsperado` ausente/vazio devolve `false`: falta de segredo NUNCA
+ * vira permissão. Quem chama decide o que fazer com isso (ver o /reflex, que
+ * distingue "sem segredo configurado" de "segredo errado" pra não derrubar a
+ * produção antes do segredo existir nos dois lados).
+ */
+export function temSegredoDeWebhook(req: Request, segredoEsperado: string | undefined): boolean {
+  if (!segredoEsperado) return false;
+  const recebido = req.headers.get(HEADER_SEGREDO_WEBHOOK) ?? "";
+  if (!recebido) return false;
+  return comparaSeguro(recebido, segredoEsperado);
+}
