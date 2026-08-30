@@ -2509,10 +2509,32 @@ async function runReunioes(env: EnvFn, tenant: Tenant): Promise<{ submetidas: nu
   let entregues = 0;
   let erros = 0;
 
-  // Sem a chave configurada não há o que fazer — sai em silêncio em vez de
-  // marcar erro em toda reunião da fila (a chave pode estar só faltando ser
-  // colada, e as linhas devem sobreviver a isso).
-  if (!env("ASSEMBLYAI_API_KEY")) return { submetidas, entregues, erros };
+  // Sem a chave configurada não dá pra transcrever. As linhas CONTINUAM
+  // 'pendente' de propósito — a chave pode estar só faltando ser colada, e
+  // quando ela chegar a fila é retomada sozinha no tique seguinte, sem
+  // ninguém precisar compartilhar de novo.
+  //
+  // Mas silêncio total aqui foi um erro de desenho, achado no primeiro teste
+  // real (30/08/2026): a tela dizia "Recebi, já vou escutar", a linha ficava
+  // parada pra sempre e não havia NADA em lugar nenhum explicando por quê —
+  // nem erro, nem tentativa, nem log. Agora o motivo fica gravado na própria
+  // linha, pra tela poder contar. Só na primeira vez (`is("erro", null)`),
+  // senão seria uma escrita por linha a cada 5 minutos.
+  if (!env("ASSEMBLYAI_API_KEY")) {
+    const { data: paradas } = await sb
+      .from("reunioes")
+      .update({ erro: "esperando a chave de transcrição ser configurada — retomo sozinha quando ela chegar" })
+      .eq("tenant_id", tenant.id)
+      .eq("status", "pendente")
+      .is("erro", null)
+      .select("id");
+    if ((paradas ?? []).length > 0) {
+      console.error(
+        `[cron] reunioes tenant=${tenant.id}: ASSEMBLYAI_API_KEY não configurada — ${(paradas ?? []).length} reunião(ões) em espera`,
+      );
+    }
+    return { submetidas, entregues, erros };
+  }
 
   const provedor = getProvedorDiarizacao(env);
 
@@ -2544,7 +2566,15 @@ async function runReunioes(env: EnvFn, tenant: Tenant): Promise<{ submetidas: nu
           .from("reunioes")
           // `tentativas: 0` porque o orçamento da etapa de consulta é outro
           // (ver as duas constantes lá em cima).
-          .update({ status: "transcrevendo", provider: provedor.nome, provider_job_id: jobId, tentativas: 0 })
+          .update({
+            status: "transcrevendo",
+            provider: provedor.nome,
+            provider_job_id: jobId,
+            tentativas: 0,
+            // Limpa qualquer aviso de espera (ex.: "faltando a chave") — a
+            // reunião destravou, o texto velho não pode continuar na tela.
+            erro: null,
+          })
           .eq("id", linha.id)
           .eq("tenant_id", tenant.id);
         submetidas++;

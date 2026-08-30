@@ -113,12 +113,17 @@ export default async function ReunioesPage() {
                       {dataTexto(r.created_at)}
                     </span>
                   </div>
+                  {/* O `erro` também aparece quando a reunião NÃO está em
+                      estado de erro: é ali que fica o motivo de ela estar
+                      parada (ex.: esperando a chave de transcrição). Sem isto,
+                      uma fila travada mostrava "ainda estou trabalhando nessa"
+                      pra sempre, sem nunca dizer o quê estava faltando. */}
                   <p className="mt-1 text-[12.5px] leading-relaxed text-aurora-muted">
                     {r.status === "erro"
                       ? (r.erro ?? "Não consegui processar essa gravação.")
                       : pronta
                         ? `Ata pronta${r.duracao_seg ? ` · ${duracaoTexto(r.duracao_seg)} de áudio` : ""}`
-                        : "Ainda estou trabalhando nessa."}
+                        : (r.erro ?? "Ainda estou trabalhando nessa.")}
                   </p>
                 </>
               );
