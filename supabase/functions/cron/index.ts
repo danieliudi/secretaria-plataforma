@@ -447,8 +447,6 @@ const RELACAO_MAX_CARDS_POR_EXECUCAO = 3; // resto fica pra fila do dia seguinte
 const SCHEDULED_MAX_TENTATIVAS = 10; // teto antes de desistir de um lembrete que não consegue entregar
 const TZ = "America/Sao_Paulo";
 
-const CALENDAR_BASE =
-  "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
 
@@ -512,37 +510,33 @@ interface UpcomingEvent {
   location: string | null;
 }
 
-async function getUpcoming(aheadMin: number, env: EnvFn): Promise<UpcomingEvent[]> {
-  const token = await getGoogleAccessToken({ env, fetch });
-  const now = new Date();
-  const url = new URL(CALENDAR_BASE);
-  url.searchParams.set("timeMin", now.toISOString());
-  url.searchParams.set(
-    "timeMax",
-    new Date(now.getTime() + aheadMin * 60_000).toISOString(),
-  );
-  url.searchParams.set("singleEvents", "true");
-  url.searchParams.set("orderBy", "startTime");
+/** Deps do leitor de Calendar compartilhado, pro tenant já resolvido no `env`. */
+function calendarDeps(env: EnvFn) {
+  return { getAccessToken: () => getGoogleAccessToken({ env, fetch }), fetch, now: () => new Date() };
+}
 
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`Calendar list ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  }
-  const data = (await res.json()) as {
-    items?: Array<
-      { id?: string; summary?: string; location?: string; start?: { dateTime?: string } }
-    >;
-  };
-  return (data.items ?? [])
-    .filter((e) => e.start?.dateTime)
-    .map((e) => ({
-      id: e.id ?? crypto.randomUUID(),
-      title: e.summary ?? "(sem título)",
-      startISO: e.start!.dateTime!,
-      location: e.location ?? null,
-    }));
+/**
+ * Eventos COM HORÁRIO nos próximos `aheadMin` minutos.
+ *
+ * Antes isto era um fetch cru contra a Calendar API, duplicando o que
+ * fast/tools/calendar-read.ts já fazia. Duas consequências reais, não só
+ * feiura: a versão daqui NÃO paginava (uma janela com mais de 250 eventos
+ * perdia o excedente em silêncio) e não trazia os convidados, então qualquer
+ * proativo que quisesse saber quem estava na reunião precisava de outra
+ * chamada. Agora é uma casca fina sobre o leitor compartilhado.
+ */
+async function getUpcoming(aheadMin: number, env: EnvFn): Promise<UpcomingEvent[]> {
+  const agora = new Date();
+  const eventos = await getEventsBetween(
+    agora.toISOString(),
+    new Date(agora.getTime() + aheadMin * 60_000).toISOString(),
+    calendarDeps(env),
+  );
+  // `time !== null` é o mesmo filtro de antes ("só evento com horário"), agora
+  // expresso pelo campo que o leitor compartilhado já calcula.
+  return eventos
+    .filter((e) => e.time !== null)
+    .map((e) => ({ id: e.id, title: e.title, startISO: e.startISO, location: e.location }));
 }
 
 // ─── Tasks proativas ─────────────────────────────────────────────────────────
@@ -1749,27 +1743,18 @@ async function runEveningRecap(env: EnvFn, tenant: Tenant): Promise<{ len: numbe
 // deu a hora ("são 9h, manda o brief"). Este só fala quando ENCONTRA algo —
 // uma sequência de reuniões coladas amanhã. Silêncio é o resultado normal.
 
-/** Eventos com hora marcada (ignora dia-inteiro) num intervalo. */
+/**
+ * Eventos com hora marcada (ignora dia-inteiro) num intervalo, no formato que
+ * a análise de carga usa.
+ *
+ * Mesma história do getUpcoming: era fetch cru duplicado, sem paginação. O
+ * `endISO` que isto precisa passou a existir no leitor compartilhado.
+ */
 async function getEventosEntre(deISO: string, ateISO: string, env: EnvFn): Promise<EventoAgenda[]> {
-  const token = await getGoogleAccessToken({ env, fetch });
-  const url = new URL(CALENDAR_BASE);
-  url.searchParams.set("timeMin", deISO);
-  url.searchParams.set("timeMax", ateISO);
-  url.searchParams.set("singleEvents", "true");
-  url.searchParams.set("orderBy", "startTime");
-
-  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`Calendar list ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as {
-    items?: Array<{ summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }>;
-  };
-  return (data.items ?? [])
-    .filter((e) => e.start?.dateTime && e.end?.dateTime)
-    .map((e) => ({
-      titulo: e.summary ?? "(sem título)",
-      inicio: new Date(e.start!.dateTime!),
-      fim: new Date(e.end!.dateTime!),
-    }));
+  const eventos = await getEventsBetween(deISO, ateISO, calendarDeps(env));
+  return eventos
+    .filter((e) => e.time !== null && e.endISO !== null)
+    .map((e) => ({ titulo: e.title, inicio: new Date(e.startISO), fim: new Date(e.endISO!) }));
 }
 
 // `dryRun` renderiza o card e devolve o tamanho SEM enviar nada. Existe pra

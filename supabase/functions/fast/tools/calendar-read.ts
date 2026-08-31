@@ -35,6 +35,14 @@ export interface CalendarEvent {
    * com alguém, dentro de uma janela que olha meses pra trás).
    */
   startISO: string;
+  /**
+   * Fim em ISO, quando o evento tem horário. `null` em evento de dia inteiro.
+   *
+   * Existe pra análise de CARGA de agenda (maratona de reuniões, dia pesado) —
+   * ver _shared/agenda-analise.ts. Sem o fim não dá pra saber quanto tempo o
+   * dia realmente consome.
+   */
+  endISO: string | null;
   title: string;
   location: string | null;
   /**
@@ -139,6 +147,7 @@ function mapEvent(e: GCalEvent): CalendarEvent {
     id: e.id,
     time: e.start.dateTime ? formatTimeInSP(e.start.dateTime) : null,
     startISO: e.start.dateTime ?? `${e.start.date}T00:00:00${SP_OFFSET}`,
+    endISO: e.end?.dateTime ?? null,
     title: e.summary ?? "(sem título)",
     location: e.location ?? null,
     attendees: mapAttendees(e.attendees),
