@@ -29,7 +29,19 @@ function ev(
   time: string | null,
   attendees: CalendarAttendee[],
 ): CalendarEvent {
-  return { id, title, time, location: null, attendees };
+  // startISO/endISO não são usados por pendentesDeConfirmacao, mas fazem parte
+  // do contrato do CalendarEvent — preencher aqui mantém o typecheck honesto
+  // em vez de depender do --no-check pra rodar.
+  const dia = "2026-08-31";
+  return {
+    id,
+    title,
+    time,
+    startISO: time ? `${dia}T${time}:00-03:00` : `${dia}T00:00:00-03:00`,
+    endISO: time ? `${dia}T${time}:00-03:00` : null,
+    location: null,
+    attendees,
+  };
 }
 
 // ─── o caso que motivou tudo ────────────────────────────────────────────────
