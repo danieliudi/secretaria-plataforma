@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { EXEMPLOS } from "@/lib/exemplos";
 import { BotaoEntrar } from "@/components/BotaoEntrar";
+import { SecaoNovidades } from "@/components/SecaoNovidades";
 
 // Página pública — antes isso só existia resumido na Home ("Como se fala
 // com ela"). Aqui cada categoria ganha descrição própria; os EXEMPLOS
@@ -16,6 +17,11 @@ export const metadata = {
   title: "Funcionalidades — Mia",
 };
 
+// A seção de novidades lê do banco, mas o conteúdo muda uma vez por semana e
+// esta é a página de marketing. ISR de 10 min: entrada nova aparece sozinha,
+// sem deploy, e sem uma ida ao banco por visitante.
+export const revalidate = 600;
+
 export default function FuncionalidadesPage() {
   return (
     <main className="aurora-bg flex min-h-screen flex-col">
@@ -25,12 +31,10 @@ export default function FuncionalidadesPage() {
             <Logo variant="header" />
           </Link>
           <div className="flex items-center gap-6">
-            <Link
-              href="/novidades"
-              className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
-            >
-              Novidades
-            </Link>
+            {/* "Novidades" saiu do menu: virou a última seção desta página. A
+                rota /novidades continua existindo e redireciona pra âncora —
+                o painel de dentro do app e os links dos termos apontam pra
+                ela, e link salvo por alguém não pode quebrar. */}
             <span className="text-[13.5px] font-semibold text-aurora-fg">Funcionalidades</span>
             <BotaoEntrar />
           </div>
@@ -47,7 +51,7 @@ export default function FuncionalidadesPage() {
         </p>
       </section>
 
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-16 px-6 pb-24 pt-4 md:gap-24">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-16 px-6 pb-20 pt-4 md:gap-24">
         {EXEMPLOS.map((grupo, i) => {
           const par = i % 2 === 1;
           return (
@@ -80,6 +84,8 @@ export default function FuncionalidadesPage() {
           );
         })}
       </div>
+
+      <SecaoNovidades />
 
       <section className="border-t border-aurora-line-soft">
         <div className="mx-auto flex w-full max-w-5xl flex-col items-start gap-5 px-6 py-20">

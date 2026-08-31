@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { BUCKET_REUNIOES, extensaoDoTipo, tipoPorExtensao } from "@/lib/reunioes";
+import { BUCKET_REUNIOES, extensaoDoTipo, tipoLimpo, tipoPorExtensao } from "@/lib/reunioes";
 
 // Precisa bater com o sw.js.
 const CACHE_COMPARTILHADO = "mia-compartilhado-v1";
@@ -58,7 +58,12 @@ export function ReceberReuniao() {
     // "application/octet-stream" (acontece em alguns gravadores de Android),
     // cai pra dedução pela extensão do nome — que só serve pra ESCOLHER um
     // tipo conhecido, nunca pra montar caminho.
-    const tipo = extensaoDoTipo(blob.type) ? blob.type : (tipoPorExtensao(nomeArquivo) ?? blob.type);
+    // `tipoLimpo` é obrigatório aqui: o Storage compara o content-type com a
+    // lista do bucket de forma EXATA, e um 'audio/mp4; codecs="..."' seria
+    // recusado mesmo sendo um tipo que aceitamos.
+    const tipo = extensaoDoTipo(blob.type)
+      ? tipoLimpo(blob.type)
+      : (tipoPorExtensao(nomeArquivo) ?? tipoLimpo(blob.type));
 
     setNome(nomeArquivo);
     setTamanho(blob.size);
@@ -83,7 +88,18 @@ export function ReceberReuniao() {
       .from(BUCKET_REUNIOES)
       .upload(path, blob, { contentType: tipo, upsert: false });
     if (upErr) {
-      throw new Error("O envio do áudio falhou no meio do caminho. Tenta compartilhar de novo?");
+      // O MOTIVO REAL vai pra tela. A primeira versão disto trocava qualquer
+      // falha por "falhou no meio do caminho", e no primeiro teste de verdade
+      // essa frase escondeu um estouro de tamanho — quem estava testando não
+      // tinha como saber o que fazer. Mensagem amigável só quando dá pra
+      // reconhecer a causa; fora isso, o texto do Storage cru.
+      const bruto = upErr.message ?? "";
+      const tamanho = /exceed|maximum allowed size|too large|payload/i.test(bruto);
+      throw new Error(
+        tamanho
+          ? `Essa gravação (${formataTamanho(blob.size)}) passou do limite de upload do servidor.`
+          : `O envio do áudio falhou: ${bruto || "motivo não informado pelo servidor"}`,
+      );
     }
 
     const fechar = await fetch("/api/reunioes/enviado", {

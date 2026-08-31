@@ -1,8 +1,18 @@
-// "Ask Mia" — busca semântica no histórico de conversa ALÉM da janela recente
-// que o /fast já carrega (HISTORY_LIMIT=14 em _shared/conversation.ts). Busca
-// nos resumos diários (cron/index.ts runResumoDiario) via embedding da Voyage
-// AI, filtrado por tenant + usuário (ver migration
-// 20260827_resumos_diarios.sql e a RPC buscar_resumos_diarios).
+// "Ask Mia" — busca semântica no histórico ALÉM da janela recente que o /fast
+// já carrega (HISTORY_LIMIT=14 em _shared/conversation.ts).
+//
+// DUAS FONTES, uma busca só (fase 3 das reuniões, 31/08/2026):
+//   - resumos diários de CONVERSA (cron runResumoDiario);
+//   - ATAS DE REUNIÃO (cron runReunioes).
+// Antes só a primeira existia, e isso deixava de fora justamente o dado mais
+// denso que a Mia tem: uma hora de reunião transcrita e resumida.
+//
+// A `origem` volta junto e NÃO é decoração: "você me contou no dia 12" e
+// "ficou decidido na reunião do dia 12" são afirmações diferentes. Sem isso a
+// Mia diria "você me disse" sobre algo que outra pessoa falou numa reunião —
+// o mesmo erro de atribuição que já blindamos nos turnos de fala.
+//
+// Ver 20260827_resumos_diarios.sql e 20260831_reuniao_na_busca.sql.
 
 import { embedText } from "../../_shared/voyage.ts";
 import { getSupabaseClient } from "../../_shared/supabase.ts";
@@ -17,6 +27,10 @@ export interface BuscarHistoricoInput {
 export interface ResumoEncontrado {
   data: string; // YYYY-MM-DD
   resumo: string;
+  /** De onde veio: conversa com a Mia, ou ata de uma reunião gravada. */
+  origem: "conversa" | "reuniao";
+  /** Só em reunião: o nome da gravação, pra Mia poder citar qual foi. */
+  titulo?: string;
 }
 
 export interface BuscarHistoricoResult {
@@ -54,9 +68,14 @@ export function defaultBuscarHistoricoDeps(
         p_limite: limite,
       });
       if (error) throw new Error(`buscar_resumos_diarios falhou: ${error.message}`);
-      return ((data ?? []) as Array<{ data: string; resumo: string }>).map((r) => ({
+      type Linha = { data: string; resumo: string; origem?: string; titulo?: string | null };
+      return ((data ?? []) as Linha[]).map((r) => ({
         data: r.data,
         resumo: r.resumo,
+        // Default "conversa": se algum dia a RPC voltar sem a coluna, o pior
+        // caso é a Mia não citar a reunião — nunca atribuir errado.
+        origem: r.origem === "reuniao" ? "reuniao" as const : "conversa" as const,
+        ...(r.titulo ? { titulo: r.titulo } : {}),
       }));
     },
   };

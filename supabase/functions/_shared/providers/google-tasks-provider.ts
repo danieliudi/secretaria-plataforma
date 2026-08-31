@@ -29,6 +29,8 @@ import type {
   CreateTaskInput as PCreateTaskInput,
   ListTasksInput as PListTasksInput,
   OpenTaskWithDue,
+  RescheduleTaskInput as PRescheduleTaskInput,
+  RescheduleTaskResult as PRescheduleTaskResult,
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
@@ -71,7 +73,21 @@ export interface CompleteTaskInput {
   list?: string;
 }
 
+export interface RescheduleTaskInput {
+  frente: string;
+  /** Trecho do nome da task (case-insensitive) pra identificar qual remarcar. */
+  query: string;
+  /** Novo prazo, YYYY-MM-DD. */
+  due_date: string;
+  /** Ignorado — Google Tasks não tem sub-lista dentro da frente. */
+  list?: string;
+}
+
 export type CompleteTaskResult =
+  | { matched: GoogleTaskItem }
+  | { candidates: GoogleTaskItem[] };
+
+export type RescheduleTaskResult =
   | { matched: GoogleTaskItem }
   | { candidates: GoogleTaskItem[] };
 
@@ -313,6 +329,47 @@ export async function completeTask(
   return { matched: mapTask(data) };
 }
 
+/**
+ * Muda só o prazo (`due`) da task que casa com `query` — status intocado.
+ * Igual ao create: a Tasks API honra só a PARTE DA DATA de `due`, então
+ * mandar YYYY-MM-DD já basta e o horário seria ignorado de qualquer jeito.
+ */
+export async function rescheduleTask(
+  input: RescheduleTaskInput,
+  deps: GoogleTasksDeps = defaultGoogleTasksDeps(),
+): Promise<RescheduleTaskResult> {
+  const map = loadMap(deps.env);
+  const tasklistId = resolveTasklistId(map, input.frente);
+  const tasks = await listTasks({ frente: input.frente }, deps);
+
+  const q = input.query.trim().toLowerCase();
+  const matches = tasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    throw new Error(
+      `Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`,
+    );
+  }
+  if (matches.length > 1) return { candidates: matches };
+
+  const [task] = matches;
+  const headers = await getAuthHeaders(deps);
+  const res = await deps.fetch(
+    `${GOOGLE_TASKS_BASE}/lists/${tasklistId}/tasks/${task.id}`,
+    {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ due: `${input.due_date}T00:00:00.000Z` }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Google Tasks update due failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as GTaskItem;
+  return { matched: mapTask(data) };
+}
+
 // ─── "O que eu faço agora": tasks com prazo, cross-frente ───────────────────
 
 /** Agrega tasks abertas COM prazo de todas as frentes configuradas. */
@@ -391,6 +448,12 @@ export function createGoogleTasksProvider(env?: (key: string) => string | undefi
 
     completeTask: (input: PCompleteTaskInput): Promise<PCompleteTaskResult> =>
       completeTask({ frente: input.frente, query: input.query }, deps),
+
+    rescheduleTask: (input: PRescheduleTaskInput): Promise<PRescheduleTaskResult> =>
+      rescheduleTask(
+        { frente: input.frente, query: input.query, due_date: input.due_date },
+        deps,
+      ),
 
     listAllOpenTasksWithDue: (): Promise<OpenTaskWithDue[]> =>
       listAllOpenTasksWithDue(deps),

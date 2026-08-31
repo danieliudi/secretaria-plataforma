@@ -39,12 +39,6 @@ export default async function Home() {
           <Logo variant="header" />
           <div className="flex items-center gap-6">
             <Link
-              href="/novidades"
-              className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
-            >
-              Novidades
-            </Link>
-            <Link
               href="/funcionalidades"
               className="text-[13.5px] font-semibold text-aurora-muted transition hover:text-aurora-fg"
             >

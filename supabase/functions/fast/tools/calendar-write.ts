@@ -110,27 +110,65 @@ export async function createEvent(
   };
 }
 
+/** O que sumiu, confirmado. `titulo` é null quando o evento já não existia. */
+export interface EventoRemovido {
+  id: string;
+  titulo: string | null;
+}
+
 /**
- * Remove um evento do calendar primário do tenant (mesmo token tenant-scoped
- * de createEvent).
- * 410 (evento já removido antes) é tratado como sucesso — idempotente, pra
- * não travar numa mensagem de erro por algo que já aconteceu.
+ * Remove um evento do calendar primário do tenant e CONFIRMA que sumiu.
+ *
+ * Por que a confirmação existe (erro real de 31/08/2026): a secretária
+ * respondeu "Cancelado 👍" e o evento continuou na agenda. Ela não mentiu por
+ * conta própria — esta função devolvia `void`, o executeTool traduzia em
+ * `{ ok: true }`, e "ok" era a única coisa que o modelo tinha pra ir. Um
+ * resultado que diz "deu certo" sem ter olhado é pior que um erro: o usuário
+ * confia e só descobre dias depois, olhando a agenda.
+ *
+ * Então agora: lê o evento ANTES (pra saber o título de verdade, e poder
+ * confirmar pelo nome em vez de pelo id), apaga, e lê DE NOVO. Só devolve
+ * sucesso se a segunda leitura disser que não está mais lá.
+ *
+ * 410 e 404 na hora do DELETE continuam sendo sucesso — evento que já não
+ * existe é o estado que o usuário pediu. O que mudou é que isso agora é
+ * VERIFICADO, não presumido.
  */
 export async function deleteEvent(
   eventId: string,
   deps: CalendarWriteDeps = defaultCalendarWriteDeps(),
-): Promise<void> {
+): Promise<EventoRemovido> {
   const token = await deps.getAccessToken();
+  const url = `${CALENDAR_EVENTS_URL}/${encodeURIComponent(eventId)}`;
+  const auth = { "Authorization": `Bearer ${token}` };
 
-  const res = await deps.fetch(`${CALENDAR_EVENTS_URL}/${encodeURIComponent(eventId)}`, {
-    method: "DELETE",
-    headers: { "Authorization": `Bearer ${token}` },
-  });
+  // Título de antes: é o que a secretária vai repetir pro usuário. Confirmar
+  // com o nome ("Cancelei o alinhamento diário") em vez de um "ok" genérico é
+  // o que deixa ele perceber na hora se ela pegou o evento errado.
+  const antes = await deps.fetch(url, { headers: auth });
+  const titulo = antes.ok
+    ? ((await antes.json()) as { summary?: string }).summary ?? "(sem título)"
+    : null;
 
-  if (res.ok || res.status === 410) return;
+  const res = await deps.fetch(url, { method: "DELETE", headers: auth });
+  if (!res.ok && res.status !== 410 && res.status !== 404) {
+    const errBody = await res.text();
+    throw new Error(`Calendar delete failed: ${res.status} ${errBody}`);
+  }
 
-  const errBody = await res.text();
-  throw new Error(`Calendar delete failed: ${res.status} ${errBody}`);
+  // A verificação. Google responde 404/410 pra evento apagado, e status
+  // "cancelled" pra ocorrência de série que foi cancelada.
+  const depois = await deps.fetch(url, { headers: auth });
+  if (depois.ok) {
+    const corpo = (await depois.json()) as { status?: string };
+    if (corpo.status !== "cancelled") {
+      throw new Error(
+        `O evento continua na agenda depois do delete (id ${eventId}). NÃO diga que cancelou.`,
+      );
+    }
+  }
+
+  return { id: eventId, titulo };
 }
 
 /**
