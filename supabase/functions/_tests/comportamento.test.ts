@@ -92,6 +92,8 @@ interface Opcoes {
   historico?: { role: "user" | "assistant"; content: string }[];
   /** ENV_COMUM (default) ou ENV_DONO. */
   env?: Record<string, string>;
+  /** Índice de instruções editáveis do tenant (nome + quando usar). Default: vazio. */
+  instrucoes?: { slug: string; nome: string; quando_usar: string }[];
 }
 
 async function conversa(mensagem: string, opcoes: Opcoes = {}): Promise<Resultado> {
@@ -128,7 +130,7 @@ async function conversa(mensagem: string, opcoes: Opcoes = {}): Promise<Resultad
       getNextEvents: reg("getNextEvents", [evento]),
       getEventsByDate: reg("getEventsByDate", [evento]),
       createEvent: reg("createEvent", { ...evento, id: "evt_novo" }),
-      deleteEvent: reg("deleteEvent", undefined),
+      deleteEvent: reg("deleteEvent", { removido: true, titulo: "Alinhamento Acme" }),
       updateEvent: reg("updateEvent", evento),
       saveQuickCapture: reg("saveQuickCapture", { id: "qc_1" }),
       archiveQuickCaptures: reg("archiveQuickCaptures", { arquivadas: 0 }),
@@ -158,6 +160,13 @@ async function conversa(mensagem: string, opcoes: Opcoes = {}): Promise<Resultad
       consultarImportacao: reg("consultarImportacao", { encontrou: false }),
       ignorarRelacionamento: reg("ignorarRelacionamento", { ok: true }),
       reportarFeedback: reg("reportarFeedback", { id: "fb_1" }),
+      // Chegaram no main em 31/08 (lote, instruções editáveis, remarcar tarefa).
+      // Sem stub, o caso em que a Mia escolhe uma delas estoura com
+      // "não é função" em vez de falhar dizendo o que ela fez.
+      criarLote: reg("criarLote", { criadas: 0 }),
+      abrirInstrucao: reg("abrirInstrucao", null),
+      proporInstrucao: reg("proporInstrucao", { slug: "proposta-1" }),
+      rescheduleTask: reg("rescheduleTask", { remarcada: true }),
       // O objeto inteiro é stub: os tipos de retorno de cada integração não
       // acrescentam nada ao que está sob teste, e escrevê-los por extenso
       // faria a suíte quebrar a cada campo novo numa integração.
@@ -165,6 +174,9 @@ async function conversa(mensagem: string, opcoes: Opcoes = {}): Promise<Resultad
     loadHistory: () => Promise.resolve(opcoes.historico ?? []),
     saveTurn: () => Promise.resolve(),
     loadProfile: () => Promise.resolve([]),
+    // Sem este stub o spread de `base` traz a implementação real, que vai no
+    // Supabase — inexistente aqui — e derruba todo caso antes do modelo.
+    loadInstrucoes: () => Promise.resolve(opcoes.instrucoes ?? []),
   };
 
   const r = await handleFastWithTools(
