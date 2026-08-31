@@ -623,6 +623,70 @@ interface DespesaResumo {
  * gasto relacionado não gera card, pra não virar ruído (mesmo princípio do
  * conflito de agenda — card é exceção, não rotina).
  */
+/** Quantos trechos do histórico entram na preparação. Mais que isso vira parede de texto. */
+const PREP_HISTORICO_MAX = 2;
+
+/**
+ * Piso de similaridade pra um trecho ser considerado relacionado à reunião.
+ *
+ * PRECISA existir porque a busca vetorial SEMPRE devolve os N mais próximos —
+ * mesmo quando nada tem a ver. Sem o piso, uma reunião sobre logística viria
+ * acompanhada do assunto mais parecido que existisse no histórico, ainda que
+ * fosse completamente irrelevante, e a Mia pareceria confusa.
+ *
+ * VALOR NÃO CALIBRADO (31/08/2026): 0.5 é chute conservador — prefiro não
+ * dizer nada a dizer algo fora de contexto. Ajustar com uso real.
+ */
+const PREP_HISTORICO_SIMILARIDADE_MIN = 0.5;
+
+/**
+ * Fase 4: o que já se sabe sobre o assunto desta reunião — ata de uma reunião
+ * anterior sobre o mesmo tema, ou algo que a pessoa contou em conversa.
+ *
+ * Reusa a mesma busca semântica da fase 3, o que é o ponto: em vez de tentar
+ * casar participantes por nome (frágil — na primeira reunião real só UM dos
+ * dois falantes foi identificado), casa por ASSUNTO, usando o título do evento
+ * como consulta.
+ *
+ * Nunca lança: preparação é um extra. Se a Voyage estiver fora do ar, o aviso
+ * de reunião sai do mesmo jeito, só sem esta parte.
+ */
+async function historicoRelevantePraReuniao(
+  tenantId: string,
+  userId: string,
+  tituloEvento: string,
+  env: EnvFn,
+): Promise<string[]> {
+  try {
+    const { embedText } = await import("../_shared/voyage.ts");
+    const embedding = await embedText(tituloEvento.slice(0, 300), "query", env);
+    const { data, error } = await getSupabaseClient().rpc("buscar_resumos_diarios", {
+      p_tenant_id: tenantId,
+      p_user_id: userId,
+      p_embedding: embedding,
+      p_limite: 5,
+    });
+    if (error) throw new Error(error.message);
+
+    type Linha = { data: string; resumo: string; similaridade: number; origem?: string; titulo?: string | null };
+    return ((data ?? []) as Linha[])
+      .filter((r) => Number(r.similaridade) >= PREP_HISTORICO_SIMILARIDADE_MIN)
+      .slice(0, PREP_HISTORICO_MAX)
+      .map((r) => {
+        const quando = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" })
+          .format(new Date(`${r.data}T12:00:00`));
+        // A ORIGEM importa: "você me contou" e "ficou decidido numa reunião"
+        // são afirmações diferentes, e a segunda pode ter sido outra pessoa
+        // falando. Mesmo cuidado de atribuição dos turnos de fala.
+        const rotulo = r.origem === "reuniao" ? `Na reunião de ${quando}` : `Você me contou em ${quando}`;
+        return `${rotulo}: ${linhaSegura(r.resumo, 260)}`;
+      });
+  } catch (err) {
+    console.error(`[cron] prep_reuniao tenant=${tenantId}: histórico indisponível: ${semDadoPessoal(err)}`);
+    return [];
+  }
+}
+
 async function runPrepReuniao(
   env: EnvFn,
   tenant: Tenant,
@@ -717,16 +781,31 @@ async function runPrepReuniao(
       .order("data_despesa", { ascending: false })
       .limit(10);
     const despesas = (despesasData ?? []) as DespesaResumo[];
-    if (despesas.length === 0) {
-      // Sem despesa AGORA não é "nunca" — libera o claim pra próxima
-      // varredura tentar de novo quando uma despesa aparecer.
+
+    // Fase 4: o gasto deixou de ser a ÚNICA razão pra preparar alguém pra uma
+    // reunião. "Só te aviso se tiver despesa" sempre foi um portão estranho —
+    // agora o que ficou decidido da última vez também conta.
+    const historico = await historicoRelevantePraReuniao(tenant.id, entrega.destino.userId, ev.title, env);
+
+    if (despesas.length === 0 && historico.length === 0) {
+      // Nada AGORA não é "nunca" — libera o claim pra próxima varredura tentar
+      // de novo quando surgir despesa ou quando uma ata nova ficar pronta.
       await desfazAviso(tenant.id, "prep_reuniao", chave);
       continue;
     }
 
+    const blocoHistorico = historico.length > 0 ? `\n\n${historico.join("\n\n")}` : "";
+
     try {
-      const { png, texto } = await montaCard(frente, ev.title, fmtTime(ev.startISO), despesas);
-      await enviarCardTenant(entrega, png, "prep-reuniao.png", texto, tenant.id);
+      if (despesas.length > 0) {
+        const { png, texto } = await montaCard(frente, ev.title, fmtTime(ev.startISO), despesas);
+        await enviarCardTenant(entrega, png, "prep-reuniao.png", texto + blocoHistorico, tenant.id);
+      } else {
+        // Sem despesa não há card pra renderizar — o histórico vai como texto.
+        const texto = `Sua próxima reunião é "${linhaSegura(ev.title, 120)}" (${fmtTime(ev.startISO)}).` +
+          blocoHistorico;
+        await enviarTextoTenant(entrega, texto, tenant.id);
+      }
     } catch (err) {
       await desfazAviso(tenant.id, "prep_reuniao", chave);
       throw err;
