@@ -22,6 +22,17 @@ export const EXEMPLOS: Exemplo[] = [
     ],
   },
   {
+    titulo: "Reuniões",
+    eyebrow: "Reunião que não se perde",
+    descricao:
+      "Grave no gravador do celular, toque em compartilhar e escolha a Mia. Ela transcreve, separa quem falou o quê e devolve a ata no WhatsApp. Semanas depois, o que ficou decidido volta quando você pergunta — sem você procurar em lugar nenhum.",
+    frases: [
+      "(compartilha a gravação da reunião pelo celular)",
+      "o que ficou decidido com o fornecedor?",
+      "cria as tarefas que saíram daquela reunião",
+    ],
+  },
+  {
     titulo: "E-mail",
     eyebrow: "E-mail e comunicação",
     descricao:
@@ -46,9 +57,9 @@ export const EXEMPLOS: Exemplo[] = [
   },
   {
     titulo: "Memória",
-    eyebrow: "Ela lembra por você",
+    eyebrow: "Ela lembra, e você escreve",
     descricao:
-      "Guarda o que você conta que vale a pena lembrar depois — preferências, rotina, gente que você menciona sempre — e usa isso pra responder melhor, sem você repetir contexto toda vez.",
+      "Ela guarda o que você conta que vale lembrar — preferências, rotina, gente que você menciona sempre. E agora você também escreve: como você redige pra cliente, o que faz um lead valer a pena. Ela lê quando a situação bate, e você vê numa tela tudo que ela aprendeu sozinha.",
     frases: [
       "anota que o fornecedor novo cobra 12% a mais",
       "o que eu tinha anotado sobre o contrato?",
@@ -64,6 +75,31 @@ export const EXEMPLOS: Exemplo[] = [
       "me lembra de ligar pro João amanhã às 14h",
       "todo dia 5 me avisa do fechamento",
       "me cutuca em 1h",
+    ],
+  },
+  {
+    titulo: "Ela empurra o dia",
+    eyebrow: "Nos dias em que não flui",
+    descricao:
+      "Despeje tudo de uma vez num áudio e ela separa. Às 19h ela pergunta o que andou e remarca o que sobrou — olhando antes se o dia novo cabe. E quando você trava, ela dá um passo físico de dois minutos em vez de repetir a lista.",
+    frases: [
+      "(áudio) preciso pagar o boleto, cobrar o Fulano, agendar a revisão…",
+      "fiz a proposta e a call. o resto não deu",
+      "não to conseguindo começar",
+    ],
+  },
+  {
+    titulo: "Avisos que chegam sozinhos",
+    eyebrow: "Ela fala primeiro",
+    descricao:
+      "Dois compromissos no mesmo horário. Uma semana que já nasceu cheia. Um endereço onde você nunca esteve. Uma despesa fora do seu padrão. Ela avisa antes — e fica quieta quando não tem o que dizer.",
+    // Exceção deliberada ao padrão: aqui as frases são DELA, não suas. É a
+    // única categoria em que a pessoa não pede nada — a mensagem chega sozinha,
+    // e mostrar um pedido do usuário descreveria errado o que a categoria é.
+    frases: [
+      "⚠️ Duas coisas às 09:00. Empurro o alinhamento?",
+      "📍 Lugar novo amanhã — planta industrial costuma pedir sapato fechado.",
+      "🔴 Prazo — o certificado digital venceu ontem",
     ],
   },
   {
