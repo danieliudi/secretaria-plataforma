@@ -3,6 +3,8 @@
 
 import type {
   CompleteTaskResult as PCompleteTaskResult,
+  RescheduleTaskInput as PRescheduleTaskInput,
+  RescheduleTaskResult as PRescheduleTaskResult,
   CreateTaskInput as PCreateTaskInput,
   ListTasksInput as PListTasksInput,
   OpenTaskWithDue,
@@ -16,6 +18,7 @@ import {
   defaultClickUpDeps,
   listAllOpenTasksWithDue,
   listTasks,
+  rescheduleTask,
   tryLoadClickUpMap,
 } from "../../fast/tools/clickup.ts";
 import { frentesDoEnv } from "../tenant.ts";
@@ -49,6 +52,12 @@ export function createClickUpProvider(env?: (key: string) => string | undefined)
 
     completeTask: (input): Promise<PCompleteTaskResult> =>
       completeTask({ frente: input.frente, query: input.query, list: input.list }, deps),
+
+    rescheduleTask: (input: PRescheduleTaskInput): Promise<PRescheduleTaskResult> =>
+      rescheduleTask(
+        { frente: input.frente, query: input.query, due_date: input.due_date, list: input.list },
+        deps,
+      ),
 
     listAllOpenTasksWithDue: (): Promise<OpenTaskWithDue[]> => listAllOpenTasksWithDue(deps),
 

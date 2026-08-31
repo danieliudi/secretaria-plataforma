@@ -316,6 +316,61 @@ export async function completeTask(
   return { matched: mapTask(data, listName) };
 }
 
+export interface RescheduleTaskInput {
+  frente: string;
+  /** Trecho do nome da task (case-insensitive) pra identificar qual remarcar. */
+  query: string;
+  /** Novo prazo, YYYY-MM-DD. */
+  due_date: string;
+  list?: string;
+}
+
+export type RescheduleTaskResult =
+  | { matched: ClickUpTask }
+  | { candidates: ClickUpTask[] };
+
+/**
+ * Muda só o prazo da task que casa com `query` — status intocado.
+ * ClickUp guarda `due_date` em epoch ms; a data chega como YYYY-MM-DD e vira
+ * o fim daquele dia em SP, mesma leitura de prazo do resto da plataforma.
+ */
+export async function rescheduleTask(
+  input: RescheduleTaskInput,
+  deps: ClickUpDeps = defaultClickUpDeps(),
+): Promise<RescheduleTaskResult> {
+  const token = getApiToken(deps.env);
+  const tasks = await listTasks({ frente: input.frente, list: input.list }, deps);
+
+  const q = input.query.trim().toLowerCase();
+  const matches = tasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    throw new Error(`Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`);
+  }
+  if (matches.length > 1) return { candidates: matches };
+
+  const [task] = matches;
+  const listName = task.list ?? input.list;
+
+  // NaN aqui vira `null` no JSON e o ClickUp APAGA o prazo — falha silenciosa
+  // com o efeito oposto ao pedido. O /fast já valida antes (validaDueDate),
+  // isto é a segunda tranca pra quem chamar direto.
+  const dueMs = new Date(`${input.due_date}T23:59:00-03:00`).getTime();
+  if (Number.isNaN(dueMs)) {
+    throw new Error(`Prazo inválido pro ClickUp: '${input.due_date}' (esperado AAAA-MM-DD)`);
+  }
+
+  const res = await fetchComRetry(`${CLICKUP_BASE}/task/${task.id}`, {
+    method: "PUT",
+    headers: { Authorization: token, "Content-Type": "application/json" },
+    body: JSON.stringify({ due_date: dueMs, due_date_time: true }),
+  }, deps.fetch);
+  if (!res.ok) {
+    throw new Error(`ClickUp update due failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as GTask;
+  return { matched: mapTask(data, listName ?? "") };
+}
+
 // ─── "O que eu faço agora": tasks com prazo, cross-frente ───────────────────
 
 export interface OpenTaskWithDue extends ClickUpTask {

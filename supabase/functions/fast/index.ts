@@ -30,6 +30,7 @@ import {
   type CreateEventInput,
   createEvent as defaultCreateEvent,
   deleteEvent as defaultDeleteEvent,
+  type EventoRemovido,
   type UpdateEventInput,
   updateEvent as defaultUpdateEvent,
 } from "./tools/calendar-write.ts";
@@ -76,14 +77,26 @@ import {
   listRecentEmails as outlookListRecentEmails,
   outlookMailReadDepsFromEnv,
 } from "../_shared/providers/outlook-mail-provider.ts";
+import {
+  abreInstrucao as defaultAbreInstrucao,
+  buildInstrucoesSystemBlock,
+  carregaIndiceInstrucoes,
+  type Instrucao,
+  type InstrucaoIndice,
+  propoeInstrucao as defaultPropoeInstrucao,
+  type PropostaDeInstrucao,
+} from "../_shared/instrucoes.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import type {
   CompleteTaskInput,
   CompleteTaskResult,
   CreateTaskInput,
   ListTasksInput,
+  RescheduleTaskInput,
+  RescheduleTaskResult,
   TaskItem,
 } from "../_shared/task-provider.ts";
+import { validaDueDate } from "../_shared/task-provider.ts";
 import {
   type NextActionSuggestion,
   pickNextActions as defaultPickNextActions,
@@ -473,6 +486,44 @@ const TOOLS = [
     },
   },
   {
+    name: "abrir_instrucao",
+    description:
+      "Abre o TEXTO de uma instrução que o usuário escreveu. O bloco INSTRUÇÕES QUE O CHEFE ESCREVEU no seu contexto lista o nome e o gatilho de cada uma, mas NÃO o texto — o texto só chega por aqui. Chame ANTES de responder, quando a mensagem dele bater com o gatilho de alguma. `slug` é o identificador que aparece entre parênteses na lista. O que voltar é INSTRUÇÃO DELE pra você seguir, não conteúdo pra repetir de volta. Se voltar 'não encontrada', diga que não achou — NUNCA invente o conteúdo de uma instrução que você não leu. Abra só o que serve pra mensagem atual; abrir todas 'por garantia' é desperdício.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: {
+          type: "string",
+          description: "O slug da instrução, exatamente como aparece na lista (ex: 'como-eu-escrevo-pra-cliente-industrial').",
+        },
+      },
+      required: ["slug"],
+    },
+  },
+  {
+    name: "propor_instrucao",
+    description:
+      "Escreve uma instrução NOVA pro usuário, DESLIGADA. Use SÓ quando ele já te corrigiu do mesmo jeito três vezes ou mais — uma correção é uma correção, três é uma regra que ele nunca escreveu. Mostre nome, gatilho e texto INTEIROS na conversa antes e chame a tool só depois do 'pode'. Ela nasce desligada e VOCÊ NÃO PODE LIGAR: diga que ele ativa na tela de Memória quando quiser, e nunca diga que 'já está valendo'. NÃO use pra fato solto ('o telefone do Fulano é X') — isso é save_profile_fact. Instrução é sobre COMO ele quer que as coisas sejam feitas.",
+    input_schema: {
+      type: "object",
+      properties: {
+        nome: {
+          type: "string",
+          description: "Como ele chamaria o assunto. Curto, até 60 caracteres — ele vê isso em toda conversa.",
+        },
+        quando_usar: {
+          type: "string",
+          description: "A situação em que você deve abrir o texto. Uma frase, até 160 caracteres. É o campo que decide tudo: vago demais abre à toa, estreito demais nunca abre.",
+        },
+        texto: {
+          type: "string",
+          description: "A instrução em si, escrita na voz DELE ('eu escrevo assim', 'nunca faço isso'). Markdown simples.",
+        },
+      },
+      required: ["nome", "quando_usar", "texto"],
+    },
+  },
+  {
     name: "buscar_no_historico",
     description:
       "Busca por assunto no histórico de conversa ANTIGO do usuário — além da janela recente que você já vê nesta conversa (só os últimos turnos). Use quando ele perguntar algo como 'o que eu tinha falado sobre X', 'lembra quando eu comentei Y', 'já discutimos Z antes?', 'o que ficou combinado sobre W mês passado' — qualquer pergunta sobre algo dito em conversa passada que não está mais no seu contexto atual. Retorna resumos de dias diferentes, mais relevantes primeiro — cite a data ao responder (ex: 'em 12/07 você comentou...'). NÃO use pra agenda (get_next_events/get_events_by_date), tasks (list_tasks) ou despesas (listar_despesas) — cada uma tem tool própria com dado estruturado; esta é só pra conversa não-estruturada. Se não vier nada relevante, diga que não achou — NUNCA invente uma conversa que não veio no resultado. As fontes são DUAS: conversas suas com ele (resumo do dia) e ATAS DE REUNIÃO gravadas. Cada resultado vem com 'origem': 'conversa' (ele te contou) ou 'reuniao' (ficou decidido numa reunião, e vem o 'titulo' da gravação). CITE A ORIGEM CERTA — nunca diga 'você me disse' sobre algo que veio de uma ata, porque pode ter sido outra pessoa que falou.",
@@ -787,6 +838,33 @@ const TOOLS = [
     },
   },
   {
+    name: "remarcar_tarefa",
+    description:
+      "Muda o PRAZO de uma task que já existe (não cria outra, não conclui). Use quando o usuário disser que algo não deu e precisa ficar pra outro dia — 'o certificado deixa pra quinta', 'empurra a Locaweb pra segunda', 'não deu tempo, joga pra semana que vem'. `query` é um trecho do nome da task; `due_date` é o dia novo em YYYY-MM-DD (resolva 'quinta', 'semana que vem' pra data concreta você mesmo, com base na data de hoje). Se vier `candidates`, NÃO remarque nenhuma sozinho — pergunte qual. ANTES de escolher o dia novo, olhe se ele cabe: chame get_events_by_date do dia que você pensou em usar. Empurrar quatro coisas pra uma manhã que já tem 5h de reunião é lista nova pra não cumprir também, não replanejamento.",
+    input_schema: {
+      type: "object",
+      properties: {
+        frente: {
+          type: "string",
+          description: "Frente configurada (ex: 'frente-x').",
+        },
+        query: {
+          type: "string",
+          description: "Trecho do nome da task, do jeito que o usuário descreveu.",
+        },
+        due_date: {
+          type: "string",
+          description: "Novo prazo em YYYY-MM-DD.",
+        },
+        list: {
+          type: "string",
+          description: "(opcional) Restringe a busca a uma sub-lista específica, se a plataforma suportar.",
+        },
+      },
+      required: ["frente", "query", "due_date"],
+    },
+  },
+  {
     name: "what_now",
     description:
       "Escolhe a PRÓXIMA AÇÃO mais urgente entre as tasks com prazo de TODAS as frentes com gerenciador de tarefas configurado. Use quando o usuário perguntar 'o que eu faço agora?', 'no que eu foco?', 'qual a prioridade?', 'tô perdido, me dá uma tarefa'. Retorna até 3 candidatas ordenadas por prazo (vencidas primeiro, depois mais próximas). Mostre SÓ a primeira na resposta — as outras 2 só se o usuário pedir 'e depois?' ou 'mais opções'. O objetivo é reduzir decisão, não virar outra lista.",
@@ -936,6 +1014,15 @@ TRAVADO (ele sabe o que fazer e não consegue começar)
 - Peça pra ele COMEÇAR, não pra terminar. Termine com algo como "me avisa quando abrir — não precisa terminar".
 - Só depois do passo, se houver janela livre útil na agenda, diga qual. Antes do passo, isso é distração.
 
+FECHAR O DIA (a resposta ao recap de fim de dia)
+- 1 tool nova: remarcar_tarefa(frente, query, due_date). Junto com complete_task e get_events_by_date, é isso que transforma o recap das 19h em replanejamento de verdade.
+- Reconheça pelo contexto: você mandou o recap listando o que tinha prazo hoje, e ele respondeu o que andou — quase sempre em uma frase solta ("fiz a proposta e a call. o resto não deu", "só consegui a primeira", "nada, dia perdido").
+- FLUXO, nesta ordem: (1) marque como feito o que ele disse que fez (complete_task, uma por uma que ele citou); (2) para o que sobrou, ESCOLHA um dia novo — e antes de escolher, chame get_events_by_date do dia que você pensou em usar; (3) mostre o plano inteiro de uma vez e pergunte UMA vez se pode aplicar; (4) só depois do "pode", chame remarcar_tarefa.
+- OLHE SE CABE ANTES DE PROMETER. Empilhar tudo na manhã seguinte é o erro clássico: se o dia que você escolheu já está cheio de reunião, diga isso e espalhe ("segunda já tem 5h40 de reunião — não cabe"). Replanejamento que ignora a agenda é lista nova pra ele não cumprir também.
+- O QUE VOCÊ NÃO MEXE SOZINHA: evento de agenda com OUTRAS PESSOAS convidadas (o campo attendees de get_events_by_date vem com mais alguém além dele). Remarcar dispara notificação pra gente de fora, no nome dele, por causa de uma conversa de fim de dia. Diga qual é e devolva a decisão: tarefa é dele, reunião com terceiro é combinado. Evento SÓ dele (sem convidado) você pode propor mexer junto com o resto.
+- UMA confirmação, nunca item a item. Quem está fechando o dia às 19h não responde quatro perguntas. Aceite correção solta depois — "o certificado deixa pra quinta", "a Locaweb pode ser terça" — sem pedir número de item.
+- Não cobre, não comente o que não foi feito, não pergunte por quê. Ele já sabe. "Anotado." e o plano.
+
 REEMBOLSO / DESPESAS (recibo virando relatório)
 - 3 tools: registrar_despesa, listar_despesas, fechar_mes_despesas.
 - Quando o usuário mandar FOTO de nota fiscal/recibo/comprovante, ou ditar um gasto, você recebe a descrição da imagem como texto. Leia dela: valor, data do recibo, estabelecimento.
@@ -1010,6 +1097,9 @@ export function buildCalendarEmailSystemBlock(usaOutlook: boolean): string {
 - create_event(title, start, end, ...): cria um evento. Use offset -03:00 (SP fixo).
 - delete_event(event_id): remove um evento. update_event(event_id, ...): muda horário/título/local sem recriar.
 - delete_event e update_event exigem o event_id de verdade (campo 'id' de get_next_events/get_events_by_date) — se não tiver vindo numa chamada recente desta conversa, busque antes. NUNCA invente um id.
+- EVENTO QUE SE REPETE: quando o evento tem 'recurringEventId' preenchido, ele é UMA OCORRÊNCIA de uma série. "cancela o alinhamento" aí tem duas leituras — só aquele dia, ou a série toda — e as duas são irreversíveis. PERGUNTE antes ("só a de quarta, ou todas daqui pra frente?"). Passar o 'id' apaga só aquela ocorrência; passar o 'recurringEventId' apaga a série inteira, até o fim. Na dúvida, apague só a ocorrência e diga que fez isso.
+- CONFIRMAR CANCELAMENTO: delete_event devolve o 'titulo' do que sumiu de verdade, já verificado na agenda. Confirme CITANDO esse título ("Cancelei o alinhamento diário de quarta"), nunca um "Cancelado 👍" sozinho — é o título que faz ele perceber na hora se você pegou o evento errado. Se vier 'titulo': null, o evento já não estava lá: diga isso, não diga que você cancelou agora.
+- Se delete_event ou update_event devolver 'error', a agenda NÃO mudou. Diga que não conseguiu e por quê. NUNCA responda como se tivesse dado certo — ele confia e só descobre dias depois, olhando a agenda.
 - Se uma tool falhar ou não existir pro que o usuário pediu, diga isso claramente. NUNCA invente motivo técnico (ex: "problema de autenticação", "sistema fora do ar") pra disfarçar erro ou capacidade que não existe — isso é pior que admitir o limite.
 
 ACESSO AO EMAIL (${email}, somente leitura)
@@ -1094,7 +1184,7 @@ export interface FastWithToolsDeps {
     getNextEvents: (n: number) => Promise<CalendarEvent[]>;
     getEventsByDate: (date: string) => Promise<CalendarEvent[]>;
     createEvent: (input: CreateEventInput) => Promise<CreatedEvent>;
-    deleteEvent: (eventId: string) => Promise<void>;
+    deleteEvent: (eventId: string) => Promise<EventoRemovido>;
     updateEvent: (eventId: string, input: UpdateEventInput) => Promise<CreatedEvent>;
     saveQuickCapture: (input: QuickCaptureInput) => Promise<QuickCaptureResult>;
     archiveQuickCaptures: (input: ArchiveQuickCapturesInput) => Promise<ArchiveQuickCapturesResult>;
@@ -1138,6 +1228,9 @@ export interface FastWithToolsDeps {
     listMarketingDeliverables: (input: ListCrmDeliverablesInput) => Promise<CrmDeliverable[]>;
     listSupplierQuotes: (input: ListSupplierQuotesInput) => Promise<CrmSupplierQuote[]>;
     completeTask: (input: CompleteTaskInput) => Promise<CompleteTaskResult>;
+    abrirInstrucao: (slug: string) => Promise<Instrucao | null>;
+    proporInstrucao: (proposta: PropostaDeInstrucao) => Promise<{ slug: string }>;
+    rescheduleTask: (input: RescheduleTaskInput) => Promise<RescheduleTaskResult>;
     pickNextActions: () => Promise<NextActionSuggestion[]>;
     /**
      * `userId` chega na chamada (igual registrarDespesa): as deps pertencem ao
@@ -1162,6 +1255,8 @@ export interface FastWithToolsDeps {
   ) => Promise<void>;
   /** Memória de preferências (2F). Default usa a tabela user_profile. */
   loadProfile: (userId: string) => Promise<ProfileFact[]>;
+  /** Índice das instruções ativas — só nome e gatilho, nunca o texto. */
+  loadInstrucoes: () => Promise<InstrucaoIndice[]>;
 }
 
 /**
@@ -1334,6 +1429,30 @@ export function defaultFastWithToolsDeps(
       listMarketingDeliverables: (input) => defaultListCrmDeliverables(input, { env }),
       listSupplierQuotes: (input) => defaultListSupplierQuotes(input, { env }),
       completeTask: (input) => getTaskProvider(env).completeTask(input),
+      abrirInstrucao: (slug) => {
+        if (!tenantId) {
+          throw new Error("Sem conta identificada — não consigo abrir instrução.");
+        }
+        return defaultAbreInstrucao(tenantId, slug);
+      },
+      proporInstrucao: (proposta) => {
+        if (!tenantId) {
+          throw new Error("Sem conta identificada — não consigo escrever instrução.");
+        }
+        return defaultPropoeInstrucao(tenantId, proposta);
+      },
+      rescheduleTask: (input) => {
+        const provider = getTaskProvider(env);
+        // Único método opcional da interface: provider que não implementa
+        // devolve erro explicativo em vez de estourar TypeError. O modelo lê
+        // esse texto e avisa o usuário, em vez de dizer que remarcou.
+        if (!provider.rescheduleTask) {
+          throw new Error(
+            `O gerenciador de tarefas configurado (${provider.name}) não permite mudar prazo por aqui — dá pra concluir e criar, mas remarcar tem que ser na tela dele.`,
+          );
+        }
+        return provider.rescheduleTask(input);
+      },
       pickNextActions: () => defaultPickNextActions(getTaskProvider(env)),
       montarLinkWhatsapp: (input, userId) => {
         // Mesmo portão de despesas: sem tenant identificado não existe agenda
@@ -1368,6 +1487,10 @@ export function defaultFastWithToolsDeps(
     saveTurn: (userId, userText, assistantText) =>
       appendConversationTurn(userId, userText, assistantText, tenantId),
     loadProfile: (userId) => loadUserProfile(userId),
+    // Sem tenant resolvido não existe memória de ninguém — devolve vazio em vez
+    // de cair numa pilha global compartilhada entre contas. Mesmo portão de
+    // quick_capture e despesas.
+    loadInstrucoes: () => tenantId ? carregaIndiceInstrucoes(tenantId) : Promise.resolve([]),
   };
 }
 
@@ -1401,8 +1524,18 @@ async function executeTool(
       return { event };
     }
     if (name === "delete_event") {
-      await deps.tools.deleteEvent(String(input.event_id));
-      return { ok: true };
+      // Devolve o TÍTULO confirmado, não um `{ok:true}` genérico. Um "ok" sem
+      // conteúdo foi exatamente o que deixou a secretária responder
+      // "Cancelado 👍" sobre um evento que continuou na agenda (31/08/2026):
+      // não havia nada no resultado que a obrigasse a olhar o que sumiu.
+      const removido = await deps.tools.deleteEvent(String(input.event_id));
+      return {
+        removido: true,
+        titulo: removido.titulo,
+        aviso: removido.titulo === null
+          ? "O id não existia mais na agenda. Diga que ele JÁ não estava lá — não diga que você cancelou agora."
+          : "Confirme citando o título acima, pra ele perceber na hora se você pegou o evento errado.",
+      };
     }
     if (name === "update_event") {
       const event = await deps.tools.updateEvent(String(input.event_id), {
@@ -1587,6 +1720,43 @@ async function executeTool(
       });
       return result;
     }
+    if (name === "remarcar_tarefa") {
+      // A data vem do MODELO, que resolveu "quinta"/"semana que vem" sozinho —
+      // é entrada não confiável como qualquer outra. Validar aqui, antes do
+      // provider, evita entre outras coisas o ClickUp receber NaN e APAGAR o
+      // prazo em silêncio (ver validaDueDate).
+      const result = await deps.tools.rescheduleTask({
+        frente: String(input.frente),
+        query: String(input.query),
+        due_date: validaDueDate(String(input.due_date), todayISOInSP(new Date())),
+        list: input.list ? String(input.list) : undefined,
+      });
+      return result;
+    }
+    if (name === "abrir_instrucao") {
+      const inst = await deps.tools.abrirInstrucao(String(input.slug));
+      if (!inst) {
+        return {
+          error: "Instrução não encontrada ou desligada. Não invente o conteúdo — diga que não achou.",
+        };
+      }
+      return { nome: inst.nome, texto: inst.texto };
+    }
+    if (name === "propor_instrucao") {
+      const { slug } = await deps.tools.proporInstrucao({
+        nome: String(input.nome ?? ""),
+        quando_usar: String(input.quando_usar ?? ""),
+        texto: String(input.texto ?? ""),
+      });
+      // `ativo: false` explícito na resposta: sem isso o modelo tende a
+      // anunciar que a instrução já está valendo, que é exatamente o que ela
+      // não está.
+      return {
+        slug,
+        ativo: false,
+        aviso: "Criada DESLIGADA. Diga que ele ativa na tela de Memória — nunca diga que já está valendo.",
+      };
+    }
     if (name === "registrar_despesa") {
       const result = await deps.tools.registrarDespesa({
         valor: input.valor,
@@ -1661,12 +1831,21 @@ export async function handleFastWithTools(
 
   // Memória (2E + 2F): com userId, carrega histórico recente e perfil acumulado
   // em paralelo. O histórico vira mensagens; o perfil é injetado no system prompt.
-  const [history, profile] = userId
-    ? await Promise.all([deps.loadHistory(userId), deps.loadProfile(userId)])
-    : [[] as ConversationMessage[], [] as ProfileFact[]];
+  // As instruções não dependem de userId (são do tenant, editadas na web),
+  // então carregam sempre — inclusive numa chamada sem usuário resolvido, onde
+  // o loadInstrucoes já devolve vazio se não houver tenant.
+  const [history, profile, instrucoes] = userId
+    ? await Promise.all([deps.loadHistory(userId), deps.loadProfile(userId), deps.loadInstrucoes()])
+    : [[] as ConversationMessage[], [] as ProfileFact[], await deps.loadInstrucoes()];
 
   const profileBlock = buildProfileSystemBlock(profile);
   if (profileBlock) system = `${system}\n\n${profileBlock}`;
+
+  // Só o ÍNDICE (nome + gatilho). O texto de cada instrução entra depois, via
+  // abrir_instrucao, e só quando servir — é isso que deixa a memória crescer
+  // sem multiplicar o cache write de toda conversa.
+  const instrucoesBlock = buildInstrucoesSystemBlock(instrucoes);
+  if (instrucoesBlock) system = `${system}\n\n${instrucoesBlock}`;
 
   const messages: MessageParam[] = [
     ...history.map((m): MessageParam => ({ role: m.role, content: m.content })),

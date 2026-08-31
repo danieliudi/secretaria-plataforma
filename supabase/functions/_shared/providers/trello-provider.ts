@@ -19,6 +19,8 @@
 // dueComplete=true no card, sem precisar mover ele entre lists tipo "Done".
 
 import type {
+  RescheduleTaskInput as PRescheduleTaskInput,
+  RescheduleTaskResult as PRescheduleTaskResult,
   CompleteTaskInput as PCompleteTaskInput,
   CompleteTaskResult as PCompleteTaskResult,
   CreateTaskInput as PCreateTaskInput,
@@ -254,6 +256,40 @@ export async function completeTask(
   return { matched: mapCard(data, task.list) };
 }
 
+/**
+ * Muda só o `due` do card que casa com `query` — `dueComplete` intocado.
+ * A data chega como YYYY-MM-DD; o Trello guarda instante, então vira o fim do
+ * dia em SP (mesma leitura de "prazo é até o fim daquele dia" que o resto
+ * da plataforma usa).
+ */
+export async function rescheduleTask(
+  input: PRescheduleTaskInput,
+  deps: TrelloDeps = defaultTrelloDeps(),
+): Promise<PRescheduleTaskResult> {
+  const { key, token } = getAuth(deps.env);
+  const tasks = await listTasks({ frente: input.frente, list: input.list }, deps);
+  const openTasks = tasks.filter((t) => t.status === "open");
+
+  const q = input.query.trim().toLowerCase();
+  const matches = openTasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    throw new Error(`Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`);
+  }
+  if (matches.length > 1) return { candidates: matches };
+
+  const [task] = matches;
+  const url = new URL(`${TRELLO_BASE}/cards/${task.id}`);
+  url.searchParams.set("due", `${input.due_date}T23:59:00-03:00`);
+  authParams(url, key, token);
+
+  const res = await fetchComRetry(url.toString(), { method: "PUT" }, deps.fetch);
+  if (!res.ok) {
+    throw new Error(`Trello update due failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as TCard;
+  return { matched: mapCard(data, task.list) };
+}
+
 // ─── "O que eu faço agora": tasks com prazo, cross-frente ───────────────────
 
 /** Agrega cards abertos COM prazo de todas as frentes/lists configuradas. */
@@ -339,6 +375,9 @@ export function createTrelloProvider(env?: (key: string) => string | undefined):
 
     completeTask: (input: PCompleteTaskInput): Promise<PCompleteTaskResult> =>
       completeTask(input, deps),
+
+    rescheduleTask: (input: PRescheduleTaskInput): Promise<PRescheduleTaskResult> =>
+      rescheduleTask(input, deps),
 
     listAllOpenTasksWithDue: (): Promise<OpenTaskWithDue[]> =>
       listAllOpenTasksWithDue(deps),

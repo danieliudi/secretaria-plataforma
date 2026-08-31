@@ -115,7 +115,14 @@ export default async function AppPage() {
 
   // Reuniões: só a contagem — a lista mora em /app/reunioes. `head: true` não
   // traz linha nenhuma, e nenhuma ata (conteúdo sensível) passa por esta tela.
-  const [{ count: reunioesProntas }, { count: reunioesEmAndamento }] = await Promise.all([
+  // Memória: mesma disciplina — só contagem, nenhum texto de instrução passa
+  // por esta tela.
+  const [
+    { count: reunioesProntas },
+    { count: reunioesEmAndamento },
+    { count: instrucoesAtivasCount },
+    { count: instrucoesDesligadasCount },
+  ] = await Promise.all([
     admin
       .from("reunioes")
       .select("id", { count: "exact", head: true })
@@ -126,7 +133,19 @@ export default async function AppPage() {
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", tenant.id)
       .in("status", ["enviando", "pendente", "transcrevendo"]),
+    admin
+      .from("instrucoes")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("ativo", true),
+    admin
+      .from("instrucoes")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("ativo", false),
   ]);
+  const instrucoesAtivas = instrucoesAtivasCount ?? 0;
+  const instrucoesDesligadas = instrucoesDesligadasCount ?? 0;
 
   // Google Ads. Só aparece na tela pra quem LIGOU — a esmagadora maioria dos
   // usuários não roda anúncio, e mostrar "desligado" pra todo mundo seria
@@ -240,6 +259,28 @@ export default async function AppPage() {
                 : reunioesProntas
                   ? `${reunioesProntas} ata${reunioesProntas > 1 ? "s" : ""} pronta${reunioesProntas > 1 ? "s" : ""}.`
                   : "Compartilhe a gravação de uma reunião e eu devolvo a ata com quem falou o quê."}
+            </span>
+          </span>
+          <span aria-hidden="true" className="flex-none text-[15px] text-aurora-muted">
+            →
+          </span>
+        </Link>
+
+        <Link
+          href="/app/memoria"
+          className="mb-[68px] -mt-[52px] flex items-center gap-4 rounded-[18px] border border-aurora-line bg-aurora-surface px-6 py-5 transition hover:bg-aurora-surface-2"
+        >
+          <span className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-aurora-surface-2 text-aurora-accent-text">
+            <MemoriaIcon />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-bold text-aurora-fg">Memória</span>
+            <span className="block text-[13px] leading-relaxed text-aurora-muted">
+              {instrucoesAtivas > 0
+                ? `${instrucoesAtivas} instrução${instrucoesAtivas > 1 ? "ões" : ""} sua${instrucoesAtivas > 1 ? "s" : ""} valendo${instrucoesDesligadas > 0 ? ` · ${instrucoesDesligadas} esperando você ativar` : ""}.`
+                : instrucoesDesligadas > 0
+                  ? `${instrucoesDesligadas} instrução${instrucoesDesligadas > 1 ? "ões" : ""} desligada${instrucoesDesligadas > 1 ? "s" : ""}, esperando você ativar.`
+                  : "Escreva o que eu preciso saber fazer — e veja o que eu já aprendi sozinha."}
             </span>
           </span>
           <span aria-hidden="true" className="flex-none text-[15px] text-aurora-muted">
@@ -423,6 +464,15 @@ function PrefRow({
         <ChevronRightIcon />
       </Link>
     </div>
+  );
+}
+
+function MemoriaIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1.5 5.6V17a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2v-3.4A3 3 0 0 0 15 8a3 3 0 0 0-3-3Z" />
+      <path d="M12 8v11" />
+    </svg>
   );
 }
 
