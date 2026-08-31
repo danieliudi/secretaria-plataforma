@@ -126,3 +126,48 @@ export function parseFalantes(bloco: string): Record<string, string> {
 export function erroSeguroDeProvedor(motivo: string): string {
   return motivo.replace(/https?:\/\/\S+/gi, "[url removida]").slice(0, 500);
 }
+
+/** Compromisso que a ata identificou. Prazo em linguagem natural, como foi dito. */
+export interface TarefaSugerida {
+  titulo: string;
+  quem?: string;
+  quando?: string;
+}
+
+/** Teto de tarefas sugeridas por reunião — acima disso vira lista que ninguém lê. */
+export const MAX_TAREFAS_SUGERIDAS = 12;
+
+/**
+ * Lê o bloco TAREFAS que o modelo devolve junto da ata:
+ * `- o que fazer | quem | quando`.
+ *
+ * Tolerante como o parseFalantes, e pelo MESMO motivo: linha que não casa o
+ * formato é descartada, nunca adivinhada. Uma tarefa inventada a partir de uma
+ * linha malformada vira compromisso no nome de alguém — e depois cobrança.
+ *
+ * O prazo fica em linguagem natural de propósito ("sexta", "até o dia 5"):
+ * quem sabe que dia é sexta é o modelo conversacional, que tem a data de hoje
+ * no prompt e converte na hora de criar. Converter aqui congelaria uma data
+ * possivelmente errada num campo que ninguém revisa.
+ */
+export function parseTarefasDaAta(bloco: string): TarefaSugerida[] {
+  const out: TarefaSugerida[] = [];
+  for (const linha of bloco.split("\n")) {
+    const limpa = linha.replace(/^\s*[-•*]\s*/, "").trim();
+    if (!limpa || /^nenhuma\.?$/i.test(limpa)) continue;
+
+    const partes = limpa.split("|").map((x) => x.trim());
+    const titulo = partes[0]?.slice(0, 200);
+    // Título curto demais não é tarefa — é sobra de formatação.
+    if (!titulo || titulo.length < 4) continue;
+
+    const vazio = (v: string | undefined) => !v || v === "?" || /^(nao|não|n\/a|indefinido)$/i.test(v);
+    out.push({
+      titulo,
+      ...(vazio(partes[1]) ? {} : { quem: partes[1].slice(0, 60) }),
+      ...(vazio(partes[2]) ? {} : { quando: partes[2].slice(0, 60) }),
+    });
+    if (out.length >= MAX_TAREFAS_SUGERIDAS) break;
+  }
+  return out;
+}

@@ -23,6 +23,12 @@ interface Turno {
   fim_ms: number;
 }
 
+interface TarefaSugerida {
+  titulo: string;
+  quem?: string;
+  quando?: string;
+}
+
 interface TurnosSalvos {
   falantes?: Record<string, string>;
   turnos?: Turno[];
@@ -69,7 +75,7 @@ export default async function ReuniaoPage({ params }: { params: Promise<{ id: st
 
   const { data: reuniao } = await admin
     .from("reunioes")
-    .select("id, titulo, status, ata, turnos, duracao_seg, custo_usd, created_at, audio_path, audio_apagado_em")
+    .select("id, titulo, status, ata, turnos, tarefas_sugeridas, duracao_seg, custo_usd, created_at, audio_path, audio_apagado_em")
     .eq("id", id)
     .eq("tenant_id", tenant.id)
     .maybeSingle();
@@ -84,6 +90,10 @@ export default async function ReuniaoPage({ params }: { params: Promise<{ id: st
   const ordemFalantes = [...new Set(turnos.map((t) => t.falante))];
   const corDoFalante = (f: string) => CORES[Math.max(0, ordemFalantes.indexOf(f)) % CORES.length];
   const rotuloFalante = (f: string) => nomes[f] ?? `Falante ${f}`;
+
+  const tarefas = ((reuniao.tarefas_sugeridas ?? []) as TarefaSugerida[]).filter(
+    (t) => t && typeof t.titulo === "string" && t.titulo.trim(),
+  );
 
   const linhasAta = String(reuniao.ata ?? "")
     .split("\n")
@@ -142,6 +152,43 @@ export default async function ReuniaoPage({ params }: { params: Promise<{ id: st
                 ),
               )}
             </div>
+          </div>
+        )}
+
+        {tarefas.length > 0 && (
+          <div className="mt-6">
+            <h2 className="text-[11px] font-bold uppercase tracking-[0.09em] text-aurora-accent-text">
+              Tarefas que eu sugiro
+            </h2>
+            {/* Elas NÃO são criadas sozinhas. A Mia oferece no WhatsApp junto
+                com a ata, e só cria depois do "cria" — mesma regra do despejo
+                de voz: sugerir é barato, criar no nome de alguém não é. */}
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-aurora-muted">
+              Nada disso foi criado ainda. Responde “cria” pra Mia no WhatsApp e ela cria de uma vez.
+            </p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {tarefas.map((t, i) => (
+                <li
+                  key={i}
+                  className="flex gap-3 rounded-xl border border-aurora-line-soft bg-aurora-surface px-4 py-3"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-[3px] h-3 w-3 flex-none rounded-[3px] border-[1.5px] border-aurora-line"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-semibold leading-snug text-aurora-fg">
+                      {t.titulo}
+                    </span>
+                    {(t.quem || t.quando) && (
+                      <span className="mt-0.5 block text-[12px] text-aurora-muted">
+                        {[t.quem, t.quando].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
