@@ -22,6 +22,9 @@
 //   https://learn.microsoft.com/en-us/graph/api/event-delete
 
 import { defaultMicrosoftOAuthDeps, getMicrosoftAccessToken } from "../microsoft-oauth.ts";
+import type {
+  EventoRemovido,
+} from "../../fast/tools/calendar-write.ts";
 import type { MicrosoftOAuthDeps } from "../microsoft-oauth.ts";
 import { fetchComRetry } from "../http-retry.ts";
 import type { CalendarAttendee, CalendarEvent, RespostaConvite } from "../../fast/tools/calendar-read.ts";
@@ -179,6 +182,10 @@ function mapEvent(e: GraphEvent, meEmail: string): CalendarEvent {
     // que devolve null quando o evento não tem `end.dateTime`. Quem calcula
     // carga de agenda filtra por esse null.
     endISO: e.isAllDay ? null : toStartISO(e.end),
+    // O Graph tem `seriesMasterId`, mas o leitor de Outlook ainda não pede o
+    // campo — devolver null é honesto: quem consome trata como evento avulso e
+    // não promete distinguir ocorrência de série onde não sabe.
+    recurringEventId: null,
     title: e.subject ?? "(sem título)",
     location: e.location?.displayName ?? null,
     attendees: mapAttendees(e.attendees, meEmail),
@@ -331,20 +338,37 @@ export async function createEvent(
  * 404 (evento já removido antes) é tratado como sucesso — idempotente, mesmo
  * raciocínio do 410 no lado Google.
  */
+/**
+ * Mesma disciplina do lado Google (ver calendar-write.ts): lê o título antes,
+ * apaga, e CONFIRMA que sumiu. Um "ok" não verificado foi o que deixou a
+ * secretária dizer "Cancelado 👍" sobre um evento que continuou na agenda.
+ */
 export async function deleteEvent(
   eventId: string,
   deps: OutlookCalendarDeps = defaultOutlookCalendarDeps(),
-): Promise<void> {
+): Promise<EventoRemovido> {
   const token = await deps.getAccessToken();
+  const url = `${GRAPH_ME}/events/${encodeURIComponent(eventId)}`;
+  const auth = { Authorization: `Bearer ${token}` };
 
-  const res = await fetchComRetry(
-    `${GRAPH_ME}/events/${encodeURIComponent(eventId)}`,
-    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
-    deps.fetch,
-  );
-  if (res.ok || res.status === 404) return;
+  const antes = await fetchComRetry(url, { headers: auth }, deps.fetch);
+  const titulo = antes.ok
+    ? ((await antes.json()) as { subject?: string }).subject ?? "(sem título)"
+    : null;
 
-  throw new Error(`Outlook event delete failed: ${res.status} ${await res.text()}`);
+  const res = await fetchComRetry(url, { method: "DELETE", headers: auth }, deps.fetch);
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error(`Outlook event delete failed: ${res.status} ${await res.text()}`);
+  }
+
+  const depois = await fetchComRetry(url, { headers: auth }, deps.fetch);
+  if (depois.ok) {
+    throw new Error(
+      `O evento continua na agenda depois do delete (id ${eventId}). NÃO diga que cancelou.`,
+    );
+  }
+
+  return { id: eventId, titulo };
 }
 
 /**

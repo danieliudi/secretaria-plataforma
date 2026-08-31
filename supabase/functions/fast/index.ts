@@ -30,6 +30,7 @@ import {
   type CreateEventInput,
   createEvent as defaultCreateEvent,
   deleteEvent as defaultDeleteEvent,
+  type EventoRemovido,
   type UpdateEventInput,
   updateEvent as defaultUpdateEvent,
 } from "./tools/calendar-write.ts";
@@ -1096,6 +1097,9 @@ export function buildCalendarEmailSystemBlock(usaOutlook: boolean): string {
 - create_event(title, start, end, ...): cria um evento. Use offset -03:00 (SP fixo).
 - delete_event(event_id): remove um evento. update_event(event_id, ...): muda horário/título/local sem recriar.
 - delete_event e update_event exigem o event_id de verdade (campo 'id' de get_next_events/get_events_by_date) — se não tiver vindo numa chamada recente desta conversa, busque antes. NUNCA invente um id.
+- EVENTO QUE SE REPETE: quando o evento tem 'recurringEventId' preenchido, ele é UMA OCORRÊNCIA de uma série. "cancela o alinhamento" aí tem duas leituras — só aquele dia, ou a série toda — e as duas são irreversíveis. PERGUNTE antes ("só a de quarta, ou todas daqui pra frente?"). Passar o 'id' apaga só aquela ocorrência; passar o 'recurringEventId' apaga a série inteira, até o fim. Na dúvida, apague só a ocorrência e diga que fez isso.
+- CONFIRMAR CANCELAMENTO: delete_event devolve o 'titulo' do que sumiu de verdade, já verificado na agenda. Confirme CITANDO esse título ("Cancelei o alinhamento diário de quarta"), nunca um "Cancelado 👍" sozinho — é o título que faz ele perceber na hora se você pegou o evento errado. Se vier 'titulo': null, o evento já não estava lá: diga isso, não diga que você cancelou agora.
+- Se delete_event ou update_event devolver 'error', a agenda NÃO mudou. Diga que não conseguiu e por quê. NUNCA responda como se tivesse dado certo — ele confia e só descobre dias depois, olhando a agenda.
 - Se uma tool falhar ou não existir pro que o usuário pediu, diga isso claramente. NUNCA invente motivo técnico (ex: "problema de autenticação", "sistema fora do ar") pra disfarçar erro ou capacidade que não existe — isso é pior que admitir o limite.
 
 ACESSO AO EMAIL (${email}, somente leitura)
@@ -1180,7 +1184,7 @@ export interface FastWithToolsDeps {
     getNextEvents: (n: number) => Promise<CalendarEvent[]>;
     getEventsByDate: (date: string) => Promise<CalendarEvent[]>;
     createEvent: (input: CreateEventInput) => Promise<CreatedEvent>;
-    deleteEvent: (eventId: string) => Promise<void>;
+    deleteEvent: (eventId: string) => Promise<EventoRemovido>;
     updateEvent: (eventId: string, input: UpdateEventInput) => Promise<CreatedEvent>;
     saveQuickCapture: (input: QuickCaptureInput) => Promise<QuickCaptureResult>;
     archiveQuickCaptures: (input: ArchiveQuickCapturesInput) => Promise<ArchiveQuickCapturesResult>;
@@ -1520,8 +1524,18 @@ async function executeTool(
       return { event };
     }
     if (name === "delete_event") {
-      await deps.tools.deleteEvent(String(input.event_id));
-      return { ok: true };
+      // Devolve o TÍTULO confirmado, não um `{ok:true}` genérico. Um "ok" sem
+      // conteúdo foi exatamente o que deixou a secretária responder
+      // "Cancelado 👍" sobre um evento que continuou na agenda (31/08/2026):
+      // não havia nada no resultado que a obrigasse a olhar o que sumiu.
+      const removido = await deps.tools.deleteEvent(String(input.event_id));
+      return {
+        removido: true,
+        titulo: removido.titulo,
+        aviso: removido.titulo === null
+          ? "O id não existia mais na agenda. Diga que ele JÁ não estava lá — não diga que você cancelou agora."
+          : "Confirme citando o título acima, pra ele perceber na hora se você pegou o evento errado.",
+      };
     }
     if (name === "update_event") {
       const event = await deps.tools.updateEvent(String(input.event_id), {

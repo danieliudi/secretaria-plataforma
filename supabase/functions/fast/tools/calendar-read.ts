@@ -53,6 +53,20 @@ export interface CalendarEvent {
    * mandava isto e a gente descartava.
    */
   attendees: CalendarAttendee[];
+  /**
+   * Quando este evento é UMA OCORRÊNCIA de um evento repetido, o id da série.
+   * `null` em evento avulso.
+   *
+   * Existe por causa de um erro real (31/08/2026): o Daniel pediu "cancela o
+   * alinhamento" sobre uma reunião que se repetia todo dia útil até dezembro,
+   * e "o alinhamento" tinha duas leituras possíveis — aquela quarta, ou a
+   * série inteira. Sem este campo a secretária não tem nem como saber que a
+   * pergunta existe, e escolhe sozinha uma coisa irreversível.
+   *
+   * Vem de graça: o Google já manda `recurringEventId` quando a listagem usa
+   * `singleEvents=true`, que é o caso de todas as nossas.
+   */
+  recurringEventId: string | null;
 }
 
 export interface CalendarReadDeps {
@@ -92,6 +106,8 @@ interface GCalEvent {
   start: GCalEventTime;
   end: GCalEventTime;
   attendees?: GCalAttendee[];
+  /** Só presente quando o evento é ocorrência de uma série. */
+  recurringEventId?: string;
 }
 
 interface GCalListResponse {
@@ -151,6 +167,7 @@ function mapEvent(e: GCalEvent): CalendarEvent {
     title: e.summary ?? "(sem título)",
     location: e.location ?? null,
     attendees: mapAttendees(e.attendees),
+    recurringEventId: e.recurringEventId ?? null,
   };
 }
 

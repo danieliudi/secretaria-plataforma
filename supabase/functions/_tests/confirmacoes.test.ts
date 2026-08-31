@@ -41,6 +41,7 @@ function ev(
     endISO: time ? `${dia}T${time}:00-03:00` : null,
     location: null,
     attendees,
+    recurringEventId: null,
   };
 }
 
