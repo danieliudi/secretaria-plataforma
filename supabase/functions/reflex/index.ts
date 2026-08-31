@@ -13,6 +13,14 @@ import {
   type WhatsAppDeps,
 } from "../_shared/whatsapp.ts";
 import { deveResponderEmAudio } from "../_shared/audio-reply.ts";
+import { describeImage } from "../_shared/vision.ts";
+import {
+  decodeImagemBase64,
+  montaTextoDaImagem,
+  RECUSA_IMAGEM_GRANDE,
+  RECUSA_IMAGEM_FALHOU,
+  RECUSA_IMAGEM_INVALIDA,
+} from "../_shared/imagem-entrada.ts";
 import { synthesizeSpeech } from "../_shared/google-tts.ts";
 import { orchestrateReflex, type OrchestratorDeps, parseReflexIntent } from "./orchestrator.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
@@ -28,6 +36,20 @@ import {
   tenantElegivel,
   type Tenant,
 } from "../_shared/tenant.ts";
+
+// Teto de tamanho do texto que entra no fluxo. Sem ele, um corpo gigante vira
+// uma chamada de classificador cara E uma linha enorme persistida pra sempre em
+// conversation_history. 4000 chars é folgado pra qualquer mensagem humana de
+// WhatsApp (inclusive transcrição de áudio longa) — trunca em vez de recusar,
+// pra não quebrar o caso raro de mensagem legítima longa demais.
+//
+// Vale TAMBÉM depois da imagem virar texto: legenda (até 4000) + descrição do
+// modelo somavam acima do teto e passavam direto, que era o furo que o teto
+// existe pra fechar.
+const MAX_TEXT_LEN = 4000;
+function cortaTexto(t: string): string {
+  return t.length > MAX_TEXT_LEN ? t.slice(0, MAX_TEXT_LEN) : t;
+}
 
 // Ack imediato devolvido no fast-tier quando a entrega é assíncrona.
 const FAST_ACK = "Só um instante…";
@@ -259,11 +281,84 @@ async function entregarRespostaWhatsApp(
   await sendWhatsAppMessages(to, splitMessages(mensagem), deps);
 }
 
+/**
+ * Manda um aviso curto (recusa de imagem) pelo caminho normal de entrega. Erro
+ * aqui é logado e engolido: falhar em avisar não pode virar 500 pro n8n, que
+ * responderia com o fallback genérico por cima do aviso específico.
+ */
+async function entregaAvisoWhatsApp(
+  to: string | undefined,
+  mensagem: string,
+  tenant: Tenant | null,
+  entradaEraAudio: boolean,
+): Promise<void> {
+  if (!to || !hasEvolutionConfig()) return;
+  try {
+    if (tenant) {
+      const deps: WhatsAppDeps = { fetch, env: await buildTenantEnv(tenant) };
+      await entregarRespostaWhatsApp(
+        to,
+        mensagem,
+        deveResponderEmAudio(entradaEraAudio, tenant.resposta_audio_sempre),
+        deps,
+      );
+    } else {
+      await sendWhatsAppMessages(to, splitMessages(mensagem), undefined);
+    }
+  } catch (err) {
+    console.error(`[reflex] aviso ao usuário não chegou: ${semDadoPessoal(err)}`);
+  }
+}
+
+/** Imagem bruta como chega do canal, antes de virar texto. */
+interface EntradaImagem {
+  base64: string;
+  mime?: string;
+}
+
+/**
+ * Converte a imagem em texto, no ponto em que o tenant JÁ é conhecido — a
+ * descrição é uma chamada de modelo, e ela precisa entrar em `uso_modelo` com
+ * dono. Foi exatamente o que se perdia enquanto o n8n descrevia por fora.
+ *
+ * Devolve o texto pronto pra classificar, ou a recusa a enviar pro usuário.
+ */
+async function imagemViraTexto(
+  imagem: EntradaImagem,
+  legenda: string,
+  tenantId: string | null,
+): Promise<{ ok: true; text: string } | { ok: false; recusa: string }> {
+  const decodificada = decodeImagemBase64(imagem.base64, imagem.mime);
+  if (!decodificada.ok) {
+    // Só o MOTIVO no log — nunca os bytes nem o base64: é conteúdo que o
+    // usuário mandou, e esta linha fica retida.
+    console.warn(`[reflex] imagem recusada na entrada: ${decodificada.motivo}`);
+    return {
+      ok: false,
+      recusa: decodificada.motivo === "grande" ? RECUSA_IMAGEM_GRANDE : RECUSA_IMAGEM_INVALIDA,
+    };
+  }
+  try {
+    const descricao = await describeImage(
+      decodificada.bytes,
+      decodificada.mediaType,
+      legenda || undefined,
+      tenantId,
+    );
+    return { ok: true, text: montaTextoDaImagem(descricao, legenda) };
+  } catch (err) {
+    console.error(`[reflex] descrição de imagem falhou: ${semDadoPessoal(err)}`);
+    return { ok: false, recusa: RECUSA_IMAGEM_FALHOU };
+  }
+}
+
 async function handleSharedNumberMessage(
-  text: string,
+  textoOriginal: string,
   fromRaw: string | undefined,
   entradaEraAudio: boolean,
+  imagem: EntradaImagem | null,
 ): Promise<Response> {
+  let text = textoOriginal;
   if (!fromRaw) return resp({ ok: true }, 200);
   const fromE164 = normalizeWhatsAppJidToE164(fromRaw);
   if (!fromE164) return resp({ ok: true }, 200); // grupo ou remetente não-parseável — ignora, sem gerar dado nenhum
@@ -312,6 +407,21 @@ async function handleSharedNumberMessage(
       console.error(`[reflex] resposta de vínculo/recusa falhou: ${semDadoPessoal(err)}`);
     }
     return resp({ ok: true }, 200);
+  }
+
+  // Imagem vira texto AQUI: depois do tenant identificado (pro custo ter dono)
+  // e depois do portão de acesso (não se gasta modelo por quem não entrou).
+  if (imagem) {
+    const convertida = await imagemViraTexto(imagem, text, tenant.id);
+    if (!convertida.ok) {
+      try {
+        await replyOnSharedNumber(fromRaw, convertida.recusa);
+      } catch (err) {
+        console.error(`[reflex] recusa de imagem não chegou: ${semDadoPessoal(err)}`);
+      }
+      return resp({ ok: true }, 200);
+    }
+    text = cortaTexto(convertida.text);
   }
 
   // Autorizado — mesmo fluxo de sempre (classify → tier → /fast), com o
@@ -406,19 +516,35 @@ Deno.serve(async (req: Request) => {
     } catch { /* observabilidade não pode derrubar o request */ }
   }
 
-  let body: { text?: unknown; from?: unknown; instance?: unknown; kind?: unknown };
+  let body: {
+    text?: unknown;
+    from?: unknown;
+    instance?: unknown;
+    kind?: unknown;
+    image_base64?: unknown;
+    image_mime?: unknown;
+  };
   try { body = await req.json(); } catch { return resp({ error: "Invalid JSON" }, 400); }
 
-  if (!body.text || typeof body.text !== "string") {
+  // Imagem: o base64 vem cru do n8n (que só baixa da Evolution e repassa). A
+  // descrição é NOSSA — ver _shared/imagem-entrada.ts. Nada é decodificado
+  // aqui: só se registra que veio, porque a validação de tamanho e a chamada
+  // de modelo só podem acontecer depois do tenant resolvido.
+  const imagem: EntradaImagem | null =
+    typeof body.image_base64 === "string" && body.image_base64.length > 0
+      ? {
+        base64: body.image_base64,
+        mime: typeof body.image_mime === "string" ? body.image_mime : undefined,
+      }
+      : null;
+
+  // Com imagem, `text` é a LEGENDA e pode vir vazia — exigir texto aqui
+  // recusaria toda foto mandada sem comentário. Sem imagem, segue obrigatório:
+  // uma chamada sem nenhum dos dois não tem o que processar.
+  if (typeof body.text !== "string" || (!body.text && !imagem)) {
     return resp({ error: "Missing 'text' field" }, 400);
   }
-  // Teto de tamanho: sem ele, um payload gigante vira uma chamada de
-  // classificador cara E uma linha enorme persistida pra sempre em
-  // conversation_history. 4000 chars é folgado pra qualquer mensagem humana
-  // de WhatsApp (inclusive uma transcrição de áudio longa) — trunca em vez de
-  // recusar, pra não quebrar o caso raro de mensagem legítima longa demais.
-  const MAX_TEXT_LEN = 4000;
-  const text = body.text.length > MAX_TEXT_LEN ? body.text.slice(0, MAX_TEXT_LEN) : body.text;
+  let text = cortaTexto(body.text);
 
   // Trim defensivo — n8n já manda limpo, mas whitespace acidental não pode
   // virar um remetente distinto (memória) nem quebrar o número da Evolution.
@@ -447,7 +573,7 @@ Deno.serve(async (req: Request) => {
   const platformInstance = platformEvolutionInstance();
   if (platformInstance && instance === platformInstance) {
     try {
-      return await handleSharedNumberMessage(text, from, entradaEraAudio);
+      return await handleSharedNumberMessage(text, from, entradaEraAudio, imagem);
     } catch (err) {
       console.error(`[reflex] handleSharedNumberMessage falhou: ${semDadoPessoal(err)}`);
       return resp({ ok: true }, 200);
@@ -471,6 +597,23 @@ Deno.serve(async (req: Request) => {
     if (tenant && !tenantElegivel(tenant)) {
       console.warn(`[reflex] tenant '${tenant.slug}' sem acesso liberado — recusando`);
       return resp({ error: "tenant sem acesso liberado" }, 403);
+    }
+
+    // Imagem vira texto AQUI, e não lá em cima junto com o parse do corpo: a
+    // descrição custa uma chamada de modelo, e ela só pode acontecer depois de
+    // (a) saber de quem é a conta, pro custo entrar em `uso_modelo` com dono, e
+    // (b) o portão de acesso — quem está pausado não gasta modelo nenhum.
+    if (imagem) {
+      const convertida = await imagemViraTexto(imagem, text, tenant?.id ?? null);
+      if (!convertida.ok) {
+        // A recusa precisa CHEGAR na pessoa. O n8n descarta o corpo da
+        // resposta (o node "Respond to Webhook" devolve um "OK" fixo pra
+        // Evolution), então quem entrega é a gente, pelo mesmo caminho da
+        // resposta normal.
+        await entregaAvisoWhatsApp(from, convertida.recusa, tenant, entradaEraAudio);
+        return resp({ ok: true, message: convertida.recusa }, 200);
+      }
+      text = cortaTexto(convertida.text);
     }
 
     // Sempre classifica no servidor — nunca aceita `decision` do corpo. O
