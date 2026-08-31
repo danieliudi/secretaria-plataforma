@@ -82,8 +82,11 @@ import type {
   CompleteTaskResult,
   CreateTaskInput,
   ListTasksInput,
+  RescheduleTaskInput,
+  RescheduleTaskResult,
   TaskItem,
 } from "../_shared/task-provider.ts";
+import { validaDueDate } from "../_shared/task-provider.ts";
 import {
   type NextActionSuggestion,
   pickNextActions as defaultPickNextActions,
@@ -787,6 +790,33 @@ const TOOLS = [
     },
   },
   {
+    name: "remarcar_tarefa",
+    description:
+      "Muda o PRAZO de uma task que já existe (não cria outra, não conclui). Use quando o usuário disser que algo não deu e precisa ficar pra outro dia — 'o certificado deixa pra quinta', 'empurra a Locaweb pra segunda', 'não deu tempo, joga pra semana que vem'. `query` é um trecho do nome da task; `due_date` é o dia novo em YYYY-MM-DD (resolva 'quinta', 'semana que vem' pra data concreta você mesmo, com base na data de hoje). Se vier `candidates`, NÃO remarque nenhuma sozinho — pergunte qual. ANTES de escolher o dia novo, olhe se ele cabe: chame get_events_by_date do dia que você pensou em usar. Empurrar quatro coisas pra uma manhã que já tem 5h de reunião é lista nova pra não cumprir também, não replanejamento.",
+    input_schema: {
+      type: "object",
+      properties: {
+        frente: {
+          type: "string",
+          description: "Frente configurada (ex: 'frente-x').",
+        },
+        query: {
+          type: "string",
+          description: "Trecho do nome da task, do jeito que o usuário descreveu.",
+        },
+        due_date: {
+          type: "string",
+          description: "Novo prazo em YYYY-MM-DD.",
+        },
+        list: {
+          type: "string",
+          description: "(opcional) Restringe a busca a uma sub-lista específica, se a plataforma suportar.",
+        },
+      },
+      required: ["frente", "query", "due_date"],
+    },
+  },
+  {
     name: "what_now",
     description:
       "Escolhe a PRÓXIMA AÇÃO mais urgente entre as tasks com prazo de TODAS as frentes com gerenciador de tarefas configurado. Use quando o usuário perguntar 'o que eu faço agora?', 'no que eu foco?', 'qual a prioridade?', 'tô perdido, me dá uma tarefa'. Retorna até 3 candidatas ordenadas por prazo (vencidas primeiro, depois mais próximas). Mostre SÓ a primeira na resposta — as outras 2 só se o usuário pedir 'e depois?' ou 'mais opções'. O objetivo é reduzir decisão, não virar outra lista.",
@@ -935,6 +965,15 @@ TRAVADO (ele sabe o que fazer e não consegue começar)
 - REGRA DURA DE TOM: você é secretária, não coach. Nada de "você consegue", "vai dar certo", "um passo de cada vez", emoji de força, nem pergunta sobre como ele está se sentindo. Sem diagnóstico, sem terapia, sem motivação. Se a resposta pudesse sair de um post de autoajuda, está errada.
 - Peça pra ele COMEÇAR, não pra terminar. Termine com algo como "me avisa quando abrir — não precisa terminar".
 - Só depois do passo, se houver janela livre útil na agenda, diga qual. Antes do passo, isso é distração.
+
+FECHAR O DIA (a resposta ao recap de fim de dia)
+- 1 tool nova: remarcar_tarefa(frente, query, due_date). Junto com complete_task e get_events_by_date, é isso que transforma o recap das 19h em replanejamento de verdade.
+- Reconheça pelo contexto: você mandou o recap listando o que tinha prazo hoje, e ele respondeu o que andou — quase sempre em uma frase solta ("fiz a proposta e a call. o resto não deu", "só consegui a primeira", "nada, dia perdido").
+- FLUXO, nesta ordem: (1) marque como feito o que ele disse que fez (complete_task, uma por uma que ele citou); (2) para o que sobrou, ESCOLHA um dia novo — e antes de escolher, chame get_events_by_date do dia que você pensou em usar; (3) mostre o plano inteiro de uma vez e pergunte UMA vez se pode aplicar; (4) só depois do "pode", chame remarcar_tarefa.
+- OLHE SE CABE ANTES DE PROMETER. Empilhar tudo na manhã seguinte é o erro clássico: se o dia que você escolheu já está cheio de reunião, diga isso e espalhe ("segunda já tem 5h40 de reunião — não cabe"). Replanejamento que ignora a agenda é lista nova pra ele não cumprir também.
+- O QUE VOCÊ NÃO MEXE SOZINHA: evento de agenda com OUTRAS PESSOAS convidadas (o campo attendees de get_events_by_date vem com mais alguém além dele). Remarcar dispara notificação pra gente de fora, no nome dele, por causa de uma conversa de fim de dia. Diga qual é e devolva a decisão: tarefa é dele, reunião com terceiro é combinado. Evento SÓ dele (sem convidado) você pode propor mexer junto com o resto.
+- UMA confirmação, nunca item a item. Quem está fechando o dia às 19h não responde quatro perguntas. Aceite correção solta depois — "o certificado deixa pra quinta", "a Locaweb pode ser terça" — sem pedir número de item.
+- Não cobre, não comente o que não foi feito, não pergunte por quê. Ele já sabe. "Anotado." e o plano.
 
 REEMBOLSO / DESPESAS (recibo virando relatório)
 - 3 tools: registrar_despesa, listar_despesas, fechar_mes_despesas.
@@ -1138,6 +1177,7 @@ export interface FastWithToolsDeps {
     listMarketingDeliverables: (input: ListCrmDeliverablesInput) => Promise<CrmDeliverable[]>;
     listSupplierQuotes: (input: ListSupplierQuotesInput) => Promise<CrmSupplierQuote[]>;
     completeTask: (input: CompleteTaskInput) => Promise<CompleteTaskResult>;
+    rescheduleTask: (input: RescheduleTaskInput) => Promise<RescheduleTaskResult>;
     pickNextActions: () => Promise<NextActionSuggestion[]>;
     /**
      * `userId` chega na chamada (igual registrarDespesa): as deps pertencem ao
@@ -1334,6 +1374,18 @@ export function defaultFastWithToolsDeps(
       listMarketingDeliverables: (input) => defaultListCrmDeliverables(input, { env }),
       listSupplierQuotes: (input) => defaultListSupplierQuotes(input, { env }),
       completeTask: (input) => getTaskProvider(env).completeTask(input),
+      rescheduleTask: (input) => {
+        const provider = getTaskProvider(env);
+        // Único método opcional da interface: provider que não implementa
+        // devolve erro explicativo em vez de estourar TypeError. O modelo lê
+        // esse texto e avisa o usuário, em vez de dizer que remarcou.
+        if (!provider.rescheduleTask) {
+          throw new Error(
+            `O gerenciador de tarefas configurado (${provider.name}) não permite mudar prazo por aqui — dá pra concluir e criar, mas remarcar tem que ser na tela dele.`,
+          );
+        }
+        return provider.rescheduleTask(input);
+      },
       pickNextActions: () => defaultPickNextActions(getTaskProvider(env)),
       montarLinkWhatsapp: (input, userId) => {
         // Mesmo portão de despesas: sem tenant identificado não existe agenda
@@ -1583,6 +1635,19 @@ async function executeTool(
       const result = await deps.tools.completeTask({
         frente: String(input.frente),
         query: String(input.query),
+        list: input.list ? String(input.list) : undefined,
+      });
+      return result;
+    }
+    if (name === "remarcar_tarefa") {
+      // A data vem do MODELO, que resolveu "quinta"/"semana que vem" sozinho —
+      // é entrada não confiável como qualquer outra. Validar aqui, antes do
+      // provider, evita entre outras coisas o ClickUp receber NaN e APAGAR o
+      // prazo em silêncio (ver validaDueDate).
+      const result = await deps.tools.rescheduleTask({
+        frente: String(input.frente),
+        query: String(input.query),
+        due_date: validaDueDate(String(input.due_date), todayISOInSP(new Date())),
         list: input.list ? String(input.list) : undefined,
       });
       return result;

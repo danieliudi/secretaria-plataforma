@@ -94,6 +94,11 @@ import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
+  type CompromissoDoDia,
+  montaMensagemFimDoDia,
+  type TarefaDoDia,
+} from "../_shared/fim-do-dia.ts";
+import {
   cargaPorDia,
   detectaConflitos,
   detectaMaratona,
@@ -1713,28 +1718,70 @@ async function getStaleCaptures(tenantId: string, days = 7): Promise<Array<{ tex
   return (data ?? []) as Array<{ texto: string; ts: string }>;
 }
 
-// Recap de fim de dia: só com dados reais (tasks com prazo hoje que continuam
-// abertas) — sem inventar o que foi concluído, isso o gerenciador de tarefas
-// não devolve de forma confiável.
-async function runEveningRecap(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
-  const entrega = resolveEntrega(tenant, env);
-  if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
+// Fim do dia: PERGUNTA, não monólogo.
+//
+// Antes isto era um recap escrito pelo modelo — ele listava o que ficou aberto,
+// sugeria remarcar, e nada acontecia: o usuário lia, concordava mentalmente e o
+// dia seguinte continuava igual. Agora a mensagem devolve a bola, e a RESPOSTA
+// dele volta pelo /fast, que tem complete_task + remarcar_tarefa +
+// get_events_by_date pra replanejar de verdade (seção FECHAR O DIA do prompt).
+//
+// O texto em si é montado por montaMensagemFimDoDia (_shared/fim-do-dia.ts),
+// função pura e testada — aqui fica só a coleta dos dados.
 
-  const text = await askFast(
-    "Monte meu recap de fim de dia, curto e em tópicos. Baseie-se SÓ nos dados " +
-      "que você tem acesso (tarefas, agenda) — NÃO invente o que foi concluído " +
-      "hoje, você não tem essa informação. Inclua: " +
-      `(1) entregas/tarefas das minhas frentes (${frentesEmTexto(tenant)}) que ` +
-      "tinham prazo HOJE e continuam abertas — pra cada uma, sugira reagendar pra " +
-      "amanhã ou pra quando fizer sentido; " +
-      "(2) se não sobrou nada em aberto com prazo hoje, diga isso e feche com um " +
-      "reforço positivo curto (sem ser piegas). Tom direto, sem perguntas — só entregue.",
-    env,
-    tenant.slug,
-  ) || "Sem pendências de hoje em aberto. Bom descanso, chefe.";
-  const message = `🌙 Recap do dia\n\n${text}`;
+/** O dia civil em SP de um instante (YYYY-MM-DD), pra comparar com hojeEmSP(). */
+function diaSPdeMs(ms: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date(ms));
+}
+
+async function runEveningRecap(
+  env: EnvFn,
+  tenant: Tenant,
+): Promise<{ len: number; tarefas: number; compromissos: number; pulado?: string }> {
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { len: 0, tarefas: 0, compromissos: 0, pulado: "sem destino/envio configurado" };
+
+  const hoje = hojeEmSP();
+
+  // Tarefas abertas com prazo HOJE. Vencidas de dias anteriores ficam de fora
+  // de propósito: elas já têm canal próprio (runAlerts/atrasadas_check), e
+  // arrastar tudo pra cá transformaria a pergunta de fim de dia na mesma lista
+  // longa que o resto do sistema já manda.
+  //
+  // Falha de qualquer uma das duas fontes não derruba a mensagem: perguntar
+  // sobre metade do dia é melhor que sumir sem explicação às 19h.
+  let tarefas: TarefaDoDia[] = [];
+  if (taskProviderConfigurado(tenant)) {
+    try {
+      tarefas = (await getTasksWithDue(env))
+        .filter((t) => diaSPdeMs(t.dueMs) === hoje)
+        .map((t) => ({ name: t.name, frente: t.frente, list: t.list }));
+    } catch (err) {
+      console.error(`[cron] recap: tasks falharam p/ tenant ${tenant.id}:`, semDadoPessoal(err));
+    }
+  }
+
+  // Compromissos de hoje que JÁ COMEÇARAM. Um evento das 20h não entra numa
+  // pergunta feita às 19h — perguntar "o que andou?" sobre algo que ainda nem
+  // aconteceu é o tipo de erro que faz ele parar de responder.
+  const agora = Date.now();
+  let compromissos: CompromissoDoDia[] = [];
+  if (googleConectado(tenant)) {
+    try {
+      const inicio = new Date(`${hoje}T03:00:00.000Z`); // 00:00 SP
+      const fim = new Date(inicio.getTime() + 24 * 3600_000);
+      compromissos = (await getEventosEntre(inicio.toISOString(), fim.toISOString(), env))
+        .filter((e) => e.inicio.getTime() <= agora)
+        .map((e) => ({ titulo: e.titulo, hora: fmtTime(e.inicio.toISOString()) }));
+    } catch (err) {
+      await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+      console.error(`[cron] recap: agenda falhou p/ tenant ${tenant.id}:`, semDadoPessoal(err));
+    }
+  }
+
+  const message = montaMensagemFimDoDia(tarefas, compromissos);
   await enviarTextoTenant(entrega, message, tenant.id);
-  return { len: text.length };
+  return { len: message.length, tarefas: tarefas.length, compromissos: compromissos.length };
 }
 
 // ─── Agenda apertada (proativo por DETECÇÃO, não por horário) ───────────────

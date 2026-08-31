@@ -35,6 +35,8 @@ import type {
   OpenTaskWithDue,
   TaskItem,
   TaskProvider,
+  RescheduleTaskInput,
+  RescheduleTaskResult,
 } from "../task-provider.ts";
 import { frentesDoEnv } from "../tenant.ts";
 import { fetchComRetry } from "../http-retry.ts";
@@ -450,6 +452,45 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
       }, deps.fetch);
       if (!res.ok) {
         throw new Error(`Notion update page failed: ${res.status} ${await res.text()}`);
+      }
+      const updated = (await res.json()) as NotionPage;
+      return { matched: mapPage(updated, schema) };
+    },
+
+    async rescheduleTask(input: RescheduleTaskInput): Promise<RescheduleTaskResult> {
+      const token = getApiToken(deps.env);
+      const map = loadMap(deps.env);
+      const databaseId = resolveDatabaseId(map, input.frente);
+      const { pages, schema } = await queryDatabase(databaseId, token, deps.fetch);
+      const open = pages.filter((p) => !isDone(p, schema));
+
+      const q = input.query.trim().toLowerCase();
+      const matches = open.filter((p) => mapPage(p, schema).name.toLowerCase().includes(q));
+      if (matches.length === 0) {
+        throw new Error(`Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`);
+      }
+      if (matches.length > 1) {
+        return { candidates: matches.map((p) => mapPage(p, schema)) };
+      }
+
+      // Database sem coluna de data: a task existe mas não tem onde guardar
+      // prazo. Dizer isso é melhor que criar a coluna por conta própria.
+      if (!schema.dueProp) {
+        throw new Error(
+          `Database de '${input.frente}' não tem coluna de data — não dá pra remarcar prazo`,
+        );
+      }
+
+      const [page] = matches;
+      const res = await fetchComRetry(`${NOTION_BASE}/pages/${page.id}`, {
+        method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          properties: { [schema.dueProp]: { date: { start: input.due_date } } },
+        }),
+      }, deps.fetch);
+      if (!res.ok) {
+        throw new Error(`Notion update due date failed: ${res.status} ${await res.text()}`);
       }
       const updated = (await res.json()) as NotionPage;
       return { matched: mapPage(updated, schema) };

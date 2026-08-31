@@ -30,6 +30,8 @@ import type {
   CreateTaskInput as PCreateTaskInput,
   ListTasksInput as PListTasksInput,
   OpenTaskWithDue,
+  RescheduleTaskInput as PRescheduleTaskInput,
+  RescheduleTaskResult as PRescheduleTaskResult,
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
@@ -74,6 +76,20 @@ export interface CompleteTaskInput {
 }
 
 export type CompleteTaskResult =
+  | { matched: MicrosoftTodoItem }
+  | { candidates: MicrosoftTodoItem[] };
+
+export interface RescheduleTaskInput {
+  frente: string;
+  /** Trecho do nome da task (case-insensitive) pra identificar qual remarcar. */
+  query: string;
+  /** Novo prazo, YYYY-MM-DD. */
+  due_date: string;
+  /** Ignorado — Microsoft To Do não tem sub-listas dentro da frente. */
+  list?: string;
+}
+
+export type RescheduleTaskResult =
   | { matched: MicrosoftTodoItem }
   | { candidates: MicrosoftTodoItem[] };
 
@@ -288,6 +304,45 @@ export async function completeTask(
   return { matched: mapTask(data) };
 }
 
+/**
+ * Muda só o `dueDateTime` da task que casa com `query` — status intocado.
+ * Reusa o buildDueDateTime do create: o Graph exige o objeto {dateTime,
+ * timeZone}, não uma string RFC3339 solta.
+ */
+export async function rescheduleTask(
+  input: RescheduleTaskInput,
+  deps: MicrosoftTodoDeps = defaultMicrosoftTodoDeps(),
+): Promise<RescheduleTaskResult> {
+  const map = loadMap(deps.env);
+  const listId = resolveListId(map, input.frente);
+  const tasks = await listTasks({ frente: input.frente }, deps);
+
+  const q = input.query.trim().toLowerCase();
+  const matches = tasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    throw new Error(
+      `Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`,
+    );
+  }
+  if (matches.length > 1) return { candidates: matches };
+
+  const [task] = matches;
+  const headers = await getAuthHeaders(deps);
+  const res = await deps.fetch(
+    `${GRAPH_BASE}/me/todo/lists/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(task.id)}`,
+    {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ dueDateTime: buildDueDateTime(input.due_date) }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Microsoft To Do update due failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as GraphTodoTask;
+  return { matched: mapTask(data) };
+}
+
 // ─── "O que eu faço agora": tasks com prazo, cross-frente ───────────────────
 
 /** Agrega tasks abertas COM prazo de todas as frentes configuradas. */
@@ -364,6 +419,12 @@ export function createMicrosoftTodoProvider(env?: (key: string) => string | unde
 
     completeTask: (input: PCompleteTaskInput): Promise<PCompleteTaskResult> =>
       completeTask({ frente: input.frente, query: input.query }, deps),
+
+    rescheduleTask: (input: PRescheduleTaskInput): Promise<PRescheduleTaskResult> =>
+      rescheduleTask(
+        { frente: input.frente, query: input.query, due_date: input.due_date },
+        deps,
+      ),
 
     listAllOpenTasksWithDue: (): Promise<OpenTaskWithDue[]> =>
       listAllOpenTasksWithDue(deps),

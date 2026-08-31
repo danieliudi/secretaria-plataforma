@@ -175,6 +175,10 @@ function mapEvent(e: GraphEvent, meEmail: string): CalendarEvent {
     id: e.id,
     time: e.isAllDay ? null : formatTimeInSP(startISO),
     startISO,
+    // Dia inteiro não tem fim com hora — mesma convenção do leitor do Google,
+    // que devolve null quando o evento não tem `end.dateTime`. Quem calcula
+    // carga de agenda filtra por esse null.
+    endISO: e.isAllDay ? null : toStartISO(e.end),
     title: e.subject ?? "(sem título)",
     location: e.location?.displayName ?? null,
     attendees: mapAttendees(e.attendees, meEmail),

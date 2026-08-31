@@ -33,6 +33,8 @@ import type {
   CreateTaskInput as PCreateTaskInput,
   ListTasksInput as PListTasksInput,
   OpenTaskWithDue,
+  RescheduleTaskInput as PRescheduleTaskInput,
+  RescheduleTaskResult as PRescheduleTaskResult,
   TaskItem,
   TaskProvider,
 } from "../task-provider.ts";
@@ -78,6 +80,20 @@ export interface CompleteTaskInput {
 }
 
 export type CompleteTaskResult =
+  | { matched: SanweyTaskItem }
+  | { candidates: SanweyTaskItem[] };
+
+export interface RescheduleTaskInput {
+  frente: string;
+  /** Trecho do nome da task (case-insensitive) pra identificar qual remarcar. */
+  query: string;
+  /** Novo prazo, YYYY-MM-DD. */
+  due_date: string;
+  /** Ignorado — `personal_tasks` não tem sub-lista dentro da frente. */
+  list?: string;
+}
+
+export type RescheduleTaskResult =
   | { matched: SanweyTaskItem }
   | { candidates: SanweyTaskItem[] };
 
@@ -286,6 +302,44 @@ export async function completeTask(
   return { matched: mapRecord(data) };
 }
 
+/**
+ * Muda só o `due_date` da task que casa com `query` — status intocado.
+ * Mesma disciplina de match do completeTask: zero match dá throw, mais de um
+ * devolve candidates, exatamente um faz o PATCH.
+ */
+export async function rescheduleTask(
+  input: RescheduleTaskInput,
+  deps: SanweyTasksDeps = defaultSanweyTasksDeps(),
+): Promise<RescheduleTaskResult> {
+  const tasks = await listTasks({ frente: input.frente }, deps);
+
+  const q = input.query.trim().toLowerCase();
+  const matches = tasks.filter((t) => t.name.toLowerCase().includes(q));
+  if (matches.length === 0) {
+    throw new Error(
+      `Nenhuma task aberta encontrada com '${input.query}' em '${input.frente}'`,
+    );
+  }
+  if (matches.length > 1) return { candidates: matches };
+
+  const [task] = matches;
+  const res = await callPersonalTasksApi(
+    "?action=update",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ id: task.id, due_date: input.due_date }),
+    },
+    deps,
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Sanwey Tasks update due_date failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  const { data } = (await res.json()) as { data: PersonalTaskRecord };
+  return { matched: mapRecord(data) };
+}
+
 // ─── "O que eu faço agora": tasks com prazo, cross-frente ───────────────────
 
 /**
@@ -336,7 +390,7 @@ export function buildSanweyTasksSystemBlock(map: SanweyTasksListMap | null): str
     : `\n- Frentes SEM Sanwey Tasks configurado: ${missingFrentes.join(", ")}. Se Daniel pedir tasks de uma dessas, diga que essa frente ainda não está integrada — não chame a tool.`;
 
   return `ACESSO AO SANWEY TASKS (Meu To-Do pessoal do Daniel, dentro do sanwey-crm)
-- 3 tools: list_tasks(frente, limit?), create_task(frente, title, ...), complete_task(frente, query).
+- 4 tools: list_tasks(frente, limit?), create_task(frente, title, ...), complete_task(frente, query), remarcar_tarefa(frente, query, due_date).
 - Frentes com Sanwey Tasks configurado:
 ${frentesList}
 - IMPORTANTE: igual Google Tasks, não tem sub-lista dentro da frente — não existe parâmetro \`list\` aqui.
@@ -369,6 +423,12 @@ export function createSanweyTasksProvider(env?: (key: string) => string | undefi
 
     completeTask: (input: PCompleteTaskInput): Promise<PCompleteTaskResult> =>
       completeTask({ frente: input.frente, query: input.query }, deps),
+
+    rescheduleTask: (input: PRescheduleTaskInput): Promise<PRescheduleTaskResult> =>
+      rescheduleTask(
+        { frente: input.frente, query: input.query, due_date: input.due_date },
+        deps,
+      ),
 
     listAllOpenTasksWithDue: (): Promise<OpenTaskWithDue[]> =>
       listAllOpenTasksWithDue(deps),
