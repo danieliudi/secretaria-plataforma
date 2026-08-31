@@ -1,9 +1,9 @@
 // Proativo (agendado por pg_cron): resumo diário, relatório semanal, lembretes
-// de agenda e alertas de prazo do gerenciador de tarefas (Agência Beehave).
+// de agenda e alertas de prazo do gerenciador de tarefas.
 //
 // Modos (POST { task }):
 //   - "brief":     resumo do dia (agenda + tarefas por cliente, via /fast).
-//   - "weekly":    panorama da semana da Beehave (via /fast).
+//   - "weekly":    panorama da semana por frente (via /fast).
 //   - "reminders": eventos de agenda começando dentro da janela → lembrete.
 //   - "alerts":    tasks vencendo/vencidas (TaskProvider ativo) → alerta (dedup).
 //   - "scheduled": lembretes que o Daniel agendou via tool schedule_reminder
@@ -62,7 +62,6 @@ import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-remind
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import {
   buildTenantEnv,
-  DEFAULT_TENANT_SLUG,
   getPlatformOwnerTenant,
   getTenantById,
   jidFromE164,
@@ -113,9 +112,30 @@ import {
 
 type EnvFn = (key: string) => string | undefined;
 
-// Frentes com operação de agência (Beehave) — únicas com resumo de notícias
-// no brief por ora. Ampliar aqui se outra frente ganhar cobertura de imprensa.
-const NEWS_FRENTES: Array<"resibag" | "sanwey"> = ["resibag", "sanwey"];
+// Frentes que TÊM cobertura de imprensa configurada (_shared/news.ts). Não é
+// a lista de frentes de ninguém — é o que existe de fonte. Cada tenant recebe
+// notícia só das SUAS frentes que estão aqui dentro (ver newsFrentesDoTenant).
+const NEWS_FRENTES_COBERTAS: Array<"resibag" | "sanwey"> = ["resibag", "sanwey"];
+
+/** Notícia só das frentes do tenant que têm fonte configurada. */
+function newsFrentesDoTenant(tenant: Tenant): Array<"resibag" | "sanwey"> {
+  const dele = new Set((tenant.frentes ?? []).map((f) => f.toLowerCase()));
+  return NEWS_FRENTES_COBERTAS.filter((f) => dele.has(f));
+}
+
+/**
+ * Frentes do tenant escritas pra entrar num prompt: "Resibag e Sanwey".
+ *
+ * Existe porque os quatro relatórios que passam pelo /fast tinham
+ * "da Beehave (Resibag, Sanwey)" CHAPADO no texto — o negócio do dono da
+ * plataforma, dentro de um prompt que qualquer cliente receberia.
+ */
+function frentesEmTexto(tenant: Tenant): string {
+  const fs = tenant.frentes ?? [];
+  if (fs.length === 0) return "suas frentes";
+  if (fs.length === 1) return fs[0];
+  return `${fs.slice(0, -1).join(", ")} e ${fs[fs.length - 1]}`;
+}
 
 // Destinatário dos avisos das tasks de PLATAFORMA (novos_cadastros,
 // feedback_novo) e das que ainda passam pelo /fast (brief, weekly, marketing,
@@ -454,7 +474,17 @@ function fmtDateTime(ms: number): string {
 
 // ─── /fast (reuso do loop de tools pra compor textos) ────────────────────────
 
-async function askFast(prompt: string, env: EnvFn): Promise<string> {
+/**
+ * Pergunta pro /fast, no contexto de UM tenant.
+ *
+ * `tenantSlug` é OBRIGATÓRIO e sem default de propósito. Até 31/08/2026 esta
+ * função mandava DEFAULT_TENANT_SLUG fixo — o slug do dono da plataforma — e
+ * era exatamente por isso que brief/weekly/marketing/evening_recap não podiam
+ * rodar multi-tenant: ligar fan-out neles mandaria a agenda e o CRM do dono
+ * pro WhatsApp de outro cliente. Sem default, esquecer o parâmetro vira erro
+ * de compilação em vez de vazamento silencioso.
+ */
+async function askFast(prompt: string, env: EnvFn, tenantSlug: string): Promise<string> {
   const url = env("SUPABASE_URL");
   const key = env("SUPABASE_SERVICE_ROLE_KEY");
   if (!url || !key) throw new Error("SUPABASE_URL/SERVICE_ROLE_KEY ausentes");
@@ -465,9 +495,9 @@ async function askFast(prompt: string, env: EnvFn): Promise<string> {
       "apikey": key,
       "Authorization": `Bearer ${key}`,
     },
-    // tenant_slug: /fast resolve o mesmo tenant e usa o Vault dele (Calendar
+    // tenant_slug: /fast resolve ESTE tenant e usa o Vault dele (Calendar
     // incluso) em vez do env global — ver fast/index.ts.
-    body: JSON.stringify({ text: prompt, tenant_slug: DEFAULT_TENANT_SLUG }),
+    body: JSON.stringify({ text: prompt, tenant_slug: tenantSlug }),
   });
   const data = (await res.json()) as { message?: string };
   return (data.message ?? "").trim();
@@ -1140,7 +1170,7 @@ async function runRelacionamentoEsfriando(
   return { sent, candidatos: candidatos.length };
 }
 
-// Alertas de prazo: tasks Beehave vencidas ou vencendo nas próximas 24h.
+// Alertas de prazo: tasks vencidas ou vencendo nas próximas 24h.
 async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; scanned: number; pulado?: string }> {
   if (!taskProviderConfigurado(tenant)) return { sent: 0, scanned: 0, pulado: "provedor de tarefas não configurado" };
   const entrega = resolveEntrega(tenant, env);
@@ -1399,31 +1429,35 @@ async function jaEnviouTemplate(
 
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
-async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> {
+async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
+  const tenantId = tenant.id;
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
+
   try {
     const novidade = await buildNovidadeBlock(tenantId);
-    if (novidade) {
-      await sendWhatsAppText(ownerJid(env), novidade, { fetch, env });
-      await appendAssistantMessage(ownerJid(env), novidade, tenantId);
-    }
+    if (novidade) await enviarTextoTenant(entrega, novidade, tenantId);
   } catch (err) {
     console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
   }
 
+  const newsFrentes = newsFrentesDoTenant(tenant);
   let newsBlock = "";
-  try {
-    newsBlock = await getSectorNewsBlock(NEWS_FRENTES);
-  } catch (err) {
-    console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
+  if (newsFrentes.length > 0) {
+    try {
+      newsBlock = await getSectorNewsBlock(newsFrentes);
+    } catch (err) {
+      console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
+    }
   }
 
   const prompt =
     "Monte meu resumo da manhã, conciso e em tópicos curtos. Inclua: " +
     "(1) os compromissos de hoje na minha agenda, com horário; " +
-    "(2) por cliente da Beehave (Resibag, Sanwey): entregas/tarefas com prazo " +
+    `(2) por frente (${frentesEmTexto(tenant)}): entregas/tarefas com prazo ` +
     "pra hoje ou atrasadas, e reuniões pautadas; " +
-    "(3) um resumo curto (2-4 linhas) das notícias mais relevantes de Resibag e " +
-    "Sanwey com base SÓ nos dados abaixo — eles já vêm organizados por categoria " +
+    "(3) um resumo curto (2-4 linhas) das notícias mais relevantes " +
+    "com base SÓ nos dados abaixo — eles já vêm organizados por categoria " +
     "(gatilho regulatório, radar competitivo, sinal de demanda/risco); priorize " +
     "gatilho regulatório e sinal de demanda (viram janela de urgência comercial), " +
     "não invente nada além do que está listado, e se não houver nada relevante " +
@@ -1431,20 +1465,16 @@ async function runBrief(env: EnvFn, tenantId: string): Promise<{ len: number }> 
     "Se algum bloco estiver vazio, diga em uma linha. Não faça perguntas, só entregue." +
     (newsBlock ? `\n\nNOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}` : "");
 
-  const text = await askFast(prompt, env) || "Sem itens pra hoje. Bom dia!";
-  await sendWhatsAppText(ownerJid(env), text, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), text, tenantId);
+  const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
+  await enviarTextoTenant(entrega, text, tenantId);
 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
   try {
     const confirmacoes = await buildConfirmacoesBlock(env, tenantId);
-    if (confirmacoes) {
-      await sendWhatsAppText(ownerJid(env), confirmacoes, { fetch, env });
-      // Vai pro histórico pra que, quando o chefe responder "pode escrever pra
-      // Ana", o /fast saiba de qual reunião ele está falando.
-      await appendAssistantMessage(ownerJid(env), confirmacoes, tenantId);
-    }
+    // Vai pro histórico pra que, quando o chefe responder "pode escrever pra
+    // Ana", o /fast saiba de qual reunião ele está falando.
+    if (confirmacoes) await enviarTextoTenant(entrega, confirmacoes, tenantId);
   } catch (err) {
     console.error("[cron] brief: bloco de confirmações falhou:", semDadoPessoal(err));
   }
@@ -1551,11 +1581,14 @@ async function runScheduled(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
 // Review semanal de marketing, por frente com GA4 configurado. Junta métricas
 // do site (GA4) + entregas/prazos das tarefas e pede ao /fast uma análise:
 // digest + otimizações acionáveis + cobrança em rascunho pra agência.
-async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: number; frentes: number }> {
+async function runMarketing(env: EnvFn, tenant: Tenant): Promise<{ sent: number; frentes: number }> {
+  const tenantId = tenant.id;
   const map = tryLoadGa4Map(env);
   if (!map || Object.keys(map).length === 0) {
     return { sent: 0, frentes: 0 };
   }
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { sent: 0, frentes: 0 };
 
   // Carrega as tasks com prazo uma vez e filtra por frente no loop.
   let allTasks: Awaited<ReturnType<typeof getTasksWithDue>> = [];
@@ -1565,7 +1598,6 @@ async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: numbe
     console.error("[cron] marketing: tarefas falharam:", semDadoPessoal(err));
   }
 
-  const owner = ownerJid(env);
   let sent = 0;
   const frentes = Object.keys(map);
 
@@ -1595,7 +1627,7 @@ async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: numbe
     // dado, o próprio bloco explica por quê (ver blocoAdsDaFrente).
     const adsData = await blocoAdsDaFrente(frente, env);
 
-    const prompt = `Você é a secretária do Daniel agindo como analista de marketing da frente "${frente}". ` +
+    const prompt = `Você é a secretária agindo como analista de marketing da frente "${frente}". ` +
       `Com base SÓ nos dados abaixo (NÃO invente números, NÃO chame ferramentas), monte um review semanal curto pro WhatsApp:\n` +
       `1) Digest do tráfego: 2-3 linhas citando sessões, variação % vs período anterior e principais canais.\n` +
       `1b) Se houver dados de GOOGLE ADS, comece por eles: quanto foi gasto, variação vs período anterior, ` +
@@ -1612,10 +1644,9 @@ async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: numbe
       `DADOS GA4 (28 dias): ${ga4Data}\n\nGOOGLE ADS (7 dias): ${adsData}\n\nENTREGAS: ${JSON.stringify(tasks)}`;
 
     try {
-      const text = await askFast(prompt, env) || "Sem dados suficientes pro review essa semana.";
+      const text = await askFast(prompt, env, tenant.slug) || "Sem dados suficientes pro review essa semana.";
       const message = `📈 Review semanal — ${frente}\n\n${text}`;
-      await sendWhatsAppText(owner, message, { fetch, env });
-      await appendAssistantMessage(owner, message, tenantId);
+      await enviarTextoTenant(entrega, message, tenantId);
       sent++;
     } catch (err) {
       console.error(`[cron] marketing '${frente}' falhou:`, semDadoPessoal(err));
@@ -1624,20 +1655,24 @@ async function runMarketing(env: EnvFn, tenantId: string): Promise<{ sent: numbe
   return { sent, frentes: frentes.length };
 }
 
-// Relatório semanal: panorama da Beehave (via /fast) + triagem de capturas
+// Relatório semanal: panorama por frente (via /fast) + triagem de capturas
 // rápidas paradas há mais de 7 dias (mesmo gatilho semanal, mensagem à parte
 // — são assuntos diferentes: cliente da agência vs. inbox pessoal).
-async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }> {
+async function runWeekly(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
+  const tenantId = tenant.id;
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
+
   const text = await askFast(
-    "Monte um panorama da semana da Agência Beehave, em tópicos por cliente " +
-      "(Resibag, Sanwey). Pra cada um liste as tarefas/entregas em aberto " +
-      "com prazo nesta semana, o que está atrasado, e campanhas/pautas em andamento. " +
-      "Seja objetivo, agrupe por cliente. Não faça perguntas, só entregue o panorama.",
+    `Monte um panorama da minha semana, em tópicos por frente (${frentesEmTexto(tenant)}). ` +
+      "Pra cada uma liste as tarefas/entregas em aberto com prazo nesta semana, " +
+      "o que está atrasado, e campanhas/pautas em andamento. " +
+      "Seja objetivo, agrupe por frente. Não faça perguntas, só entregue o panorama.",
     env,
-  ) || "Sem itens em aberto na Beehave esta semana.";
-  const panorama = `📊 Panorama da semana — Beehave\n\n${text}`;
-  await sendWhatsAppText(ownerJid(env), panorama, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), panorama, tenantId);
+    tenant.slug,
+  ) || "Sem itens em aberto esta semana.";
+  const panorama = `📊 Panorama da semana\n\n${text}`;
+  await enviarTextoTenant(entrega, panorama, tenantId);
 
   // Manutenção da memória de longo prazo — silenciosa, não vira mensagem.
   // Só toca em quem passou do limiar; pra maioria é um SELECT e nada mais.
@@ -1655,8 +1690,7 @@ async function runWeekly(env: EnvFn, tenantId: string): Promise<{ len: number }>
     const lines = stale.map((c) => `• ${c.texto}`).join("\n");
     const staleMsg =
       `🗂️ Tem ${stale.length} nota(s) rápida(s) paradas há mais de 7 dias — quer que eu vire task, ou posso arquivar?\n\n${lines}`;
-    await sendWhatsAppText(ownerJid(env), staleMsg, { fetch, env });
-    await appendAssistantMessage(ownerJid(env), staleMsg, tenantId);
+    await enviarTextoTenant(entrega, staleMsg, tenantId);
   }
 
   return { len: text.length };
@@ -1688,21 +1722,24 @@ async function getStaleCaptures(tenantId: string, days = 7): Promise<Array<{ tex
 // Recap de fim de dia: só com dados reais (tasks com prazo hoje que continuam
 // abertas) — sem inventar o que foi concluído, isso o gerenciador de tarefas
 // não devolve de forma confiável.
-async function runEveningRecap(env: EnvFn, tenantId: string): Promise<{ len: number }> {
+async function runEveningRecap(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
+
   const text = await askFast(
     "Monte meu recap de fim de dia, curto e em tópicos. Baseie-se SÓ nos dados " +
       "que você tem acesso (tarefas, agenda) — NÃO invente o que foi concluído " +
       "hoje, você não tem essa informação. Inclua: " +
-      "(1) entregas/tarefas da Beehave (Resibag, Sanwey) que tinham prazo HOJE e " +
-      "continuam abertas — pra cada uma, sugira reagendar pra amanhã ou pra quando " +
-      "fizer sentido; " +
+      `(1) entregas/tarefas das minhas frentes (${frentesEmTexto(tenant)}) que ` +
+      "tinham prazo HOJE e continuam abertas — pra cada uma, sugira reagendar pra " +
+      "amanhã ou pra quando fizer sentido; " +
       "(2) se não sobrou nada em aberto com prazo hoje, diga isso e feche com um " +
       "reforço positivo curto (sem ser piegas). Tom direto, sem perguntas — só entregue.",
     env,
+    tenant.slug,
   ) || "Sem pendências de hoje em aberto. Bom descanso, chefe.";
   const message = `🌙 Recap do dia\n\n${text}`;
-  await sendWhatsAppText(ownerJid(env), message, { fetch, env });
-  await appendAssistantMessage(ownerJid(env), message, tenantId);
+  await enviarTextoTenant(entrega, message, tenant.id);
   return { len: text.length };
 }
 
@@ -3377,10 +3414,22 @@ Deno.serve(async (req: Request) => {
     if (task === "conflito_check_dry") return json({ ok: true, ...(await runConflitoCheck(env, tenant, true)) });
     if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, tenant, true)) });
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant, true)) });
-    if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant.id)) });
-    if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant.id)) });
-    if (task === "marketing") return json({ ok: true, ...(await runMarketing(env, tenant.id)) });
-    if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env, tenant.id)) });
+    // Estas quatro passam pelo /fast e continuam SINGLE-TENANT de propósito.
+    //
+    // O que mudou em 31/08/2026: elas deixaram de ser IMPOSSÍVEIS de rodar
+    // multi-tenant. Antes, askFast mandava o slug do dono FIXO e os prompts
+    // citavam "Beehave (Resibag, Sanwey)" — ligar fan-out mandaria a agenda e
+    // o CRM do dono pro WhatsApp de outro cliente. Agora cada uma recebe o
+    // tenant inteiro, pergunta ao /fast com o slug DELE e entrega no canal
+    // DELE, com as frentes DELE no prompt.
+    //
+    // Ligar o fan-out (mover pra TASKS_MULTI_TENANT) é decisão de produto, não
+    // técnica: passa a mandar relatório diário pra todo tenant elegível, com
+    // custo de modelo por conta e por dia. Fica pro Daniel decidir.
+    if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant)) });
+    if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant)) });
+    if (task === "marketing") return json({ ok: true, ...(await runMarketing(env, tenant)) });
+    if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env, tenant)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     if (task === "feedback_novo") return json({ ok: true, ...(await runFeedbackNovo(env)) });
     if (task === "whatsapp_watchdog") return json({ ok: true, ...(await runWhatsappWatchdog(env, tenant)) });
