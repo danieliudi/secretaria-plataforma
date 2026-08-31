@@ -2,7 +2,9 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   erroSeguroDeProvedor,
   formataTempo,
+  MAX_TAREFAS_SUGERIDAS,
   parseFalantes,
+  parseTarefasDaAta,
   turnosParaTexto,
 } from "../_shared/diarizacao.ts";
 
@@ -100,4 +102,58 @@ Deno.test("erroSeguroDeProvedor: mensagem sem URL passa intacta", () => {
 
 Deno.test("erroSeguroDeProvedor: corta em 500 caracteres", () => {
   assertEquals(erroSeguroDeProvedor("x".repeat(900)).length, 500);
+});
+
+// parseTarefasDaAta tem o mesmo risco do parseFalantes: uma linha malformada
+// virando tarefa inventada no nome de alguém — e depois cobrança em cima disso.
+
+Deno.test("parseTarefasDaAta: lê título, dono e prazo", () => {
+  const r = parseTarefasDaAta("- Mandar a proposta revisada | Daniel | sexta");
+  assertEquals(r, [{ titulo: "Mandar a proposta revisada", quem: "Daniel", quando: "sexta" }]);
+});
+
+Deno.test("parseTarefasDaAta: '?' não vira dono nem prazo", () => {
+  assertEquals(
+    parseTarefasDaAta("- Confirmar o horário | ? | ?"),
+    [{ titulo: "Confirmar o horário" }],
+  );
+});
+
+Deno.test("parseTarefasDaAta: prazo fica como foi dito, sem virar data", () => {
+  const r = parseTarefasDaAta("- Agendar visita na Braskem | Kleber | semana que vem");
+  assertEquals(r[0].quando, "semana que vem");
+});
+
+Deno.test("parseTarefasDaAta: 'nenhuma' devolve lista vazia", () => {
+  assertEquals(parseTarefasDaAta("- nenhuma"), []);
+  assertEquals(parseTarefasDaAta("nenhuma."), []);
+});
+
+Deno.test("parseTarefasDaAta: linha sem título de verdade é descartada", () => {
+  assertEquals(parseTarefasDaAta("- | Daniel | sexta\n-  \n- ok | x | y"), []);
+});
+
+Deno.test("parseTarefasDaAta: aceita marcador de lista variado", () => {
+  assertEquals(parseTarefasDaAta("• Cobrar a Locaweb | Daniel | amanhã").length, 1);
+  assertEquals(parseTarefasDaAta("* Cobrar a Locaweb | Daniel | amanhã").length, 1);
+});
+
+Deno.test("parseTarefasDaAta: sem pipes, vira só título", () => {
+  assertEquals(parseTarefasDaAta("- Revisar o contrato"), [{ titulo: "Revisar o contrato" }]);
+});
+
+Deno.test("parseTarefasDaAta: corta no teto", () => {
+  const muitas = Array.from({ length: MAX_TAREFAS_SUGERIDAS + 6 }, (_, i) => `- Tarefa numero ${i} | Daniel | sexta`).join("\n");
+  assertEquals(parseTarefasDaAta(muitas).length, MAX_TAREFAS_SUGERIDAS);
+});
+
+Deno.test("parseTarefasDaAta: campos gigantes são cortados", () => {
+  const r = parseTarefasDaAta(`- ${"t".repeat(400)} | ${"q".repeat(200)} | ${"w".repeat(200)}`);
+  assertEquals(r[0].titulo.length, 200);
+  assertEquals(r[0].quem?.length, 60);
+  assertEquals(r[0].quando?.length, 60);
+});
+
+Deno.test("parseTarefasDaAta: bloco vazio devolve vazio", () => {
+  assertEquals(parseTarefasDaAta(""), []);
 });
