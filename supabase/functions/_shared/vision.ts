@@ -4,7 +4,7 @@ import { registraUso } from "./uso.ts";
 const VISION_MODEL = "claude-haiku-4-5-20251001";
 const VISION_MAX_TOKENS = 512;
 
-type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+export type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
 function toBase64(bytes: Uint8Array): string {
   let bin = "";
