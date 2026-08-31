@@ -131,7 +131,7 @@ function buildDeps(tenantId: string): OrchestratorDeps {
 // saber as frentes REAIS de quem está falando, não uma lista fixa (achado da
 // auditoria de "prompt mestre", 21/08/2026: a lista fixa fazia qualquer
 // tenant com frentes diferentes das do Daniel cair sempre em "ambiguo").
-async function classify(text: string, frentes: string[]): Promise<Decision> {
+async function classify(text: string, frentes: string[], tenantId?: string | null): Promise<Decision> {
   if (checkRegexReflex(text)) {
     return {
       tier: "reflex",
@@ -142,7 +142,7 @@ async function classify(text: string, frentes: string[]): Promise<Decision> {
       confidence: 1.0,
     };
   }
-  const decision = await classifyWithHaiku(text, frentes);
+  const decision = await classifyWithHaiku(text, frentes, tenantId);
   // Safety net: Haiku às vezes classifica saudações/conversas como reflex.
   // Se não há padrão parseável, foi misclassificação — escala pra fast.
   if (decision.tier === "reflex" && parseReflexIntent(text).type === "unknown") {
@@ -429,7 +429,7 @@ async function handleSharedNumberMessage(
   // compartilhada em vez do EVOLUTION_* global.
   let decision: Decision;
   try {
-    decision = await classify(text, tenant.frentes);
+    decision = await classify(text, tenant.frentes, tenant.id);
     if (decision.tier === "deep") decision = { ...decision, tier: "fast" };
   } catch (err) {
     console.error(`[reflex] classify falhou (número compartilhado): ${semDadoPessoal(err)}`);
@@ -621,7 +621,7 @@ Deno.serve(async (req: Request) => {
     // também deixava QUALQUER chamador escolher o tier (e portanto o
     // orçamento/tools liberados) da própria mensagem sem passar pelo Haiku.
     // Nenhum caller legítimo do repositório manda esse campo hoje.
-    let decision = await classify(text, tenant?.frentes ?? []);
+    let decision = await classify(text, tenant?.frentes ?? [], tenant?.id ?? null);
     // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
     // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
     // A classificação sozinha já basta pra diagnóstico.
