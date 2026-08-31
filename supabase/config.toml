@@ -24,11 +24,27 @@ verify_jwt = false
 [functions.telegram]
 verify_jwt = false
 
-# /reflex: em MODO OBSERVAÇÃO (ver comentário no index.ts) — ainda não
-# convertido pra bloqueio de verdade, então mantém o verify_jwt do projeto
-# como camada extra por enquanto.
+# /reflex: chamado só pelo n8n, que autentica com REFLEX_WEBHOOK_SECRET no
+# header X-Webhook-Secret (temSegredoDeWebhook, comparação em tempo constante).
+#
+# Ficou `true` de 10/08 a 31/08 porque a trava própria do /reflex ainda estava
+# em "modo observação" e o verify_jwt era a única camada. A observação acabou em
+# 28/08 e a recusa de verdade entrou em vigor — mas o config nunca foi
+# atualizado junto, e aí o gateway virou um problema em vez de uma proteção:
+#
+#  - Ele NUNCA foi um limite real. A chave publicável é um JWT válido do
+#    projeto e vai no bundle do navegador por design — verificado hoje: uma
+#    requisição com ela passa o gateway e é recusada pelo NOSSO código, que é
+#    quem de fato protege (ver o cabeçalho de _shared/internal-auth.ts).
+#  - E ele obriga o n8n a gastar o único slot de credencial do nó HTTP com o
+#    `Authorization`, o que força o X-Webhook-Secret a ficar em TEXTO PURO no
+#    parâmetro do nó, visível pra quem abrir o workflow. Um portão que não
+#    protege estava impedindo o portão que protege de ser guardado direito.
+#
+# Com `false`, o segredo vai pro slot de credencial (criptografado no n8n) e a
+# autenticação passa a ser uma só, real e auditável.
 [functions.reflex]
-verify_jwt = true
+verify_jwt = false
 
 # /wa-webhook: webhook público da Meta (WhatsApp Cloud API) — não manda JWT
 # nenhum, mesma situação do /telegram. Quem autentica é a assinatura HMAC-SHA256
