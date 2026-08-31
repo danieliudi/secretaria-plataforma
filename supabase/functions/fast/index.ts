@@ -1746,7 +1746,16 @@ export async function handleFastWithTools(
 
 // ─── Entry point HTTP ────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
+// O servidor sobe SEMPRE, menos quando MIA_TEST_MODE está setado. A negativa é
+// de propósito: em produção ninguém seta essa variável, então qualquer engano
+// aqui erra pro lado de servir, nunca pro lado de ficar mudo. É o que permite a
+// suíte de comportamento (_tests/comportamento.test.ts) importar handleFastWithTools
+// e as TOOLS reais sem que o import binde uma porta.
+if (!Deno.env.get("MIA_TEST_MODE")) {
+  Deno.serve(handlerHttp);
+}
+
+async function handlerHttp(req: Request): Promise<Response> {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
 
   // /fast só aceita chamada INTERNA. Sem isto, qualquer um na internet mandava
@@ -1856,7 +1865,7 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return resp({ error: semDadoPessoal(err) }, 500);
   }
-});
+}
 
 function resp(data: unknown, status: number): Response {
   return new Response(JSON.stringify(data), {
