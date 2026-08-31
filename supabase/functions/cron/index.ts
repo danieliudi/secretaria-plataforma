@@ -3307,6 +3307,13 @@ const TASKS_MULTI_TENANT = new Set([
   "reunioes",
   "ads_check",
   "lugar_novo",
+  // Liberados pro fan-out em 31/08/2026 (decisão do Daniel). O `marketing`
+  // ficou DE FORA de propósito: é o relatório mais caro dos quatro (cruza
+  // GA4, CRM e Google Ads), e a maioria dos tenants não roda anúncio nenhum
+  // — mandar review de marketing pra quem não faz marketing é custo puro.
+  "brief",
+  "weekly",
+  "evening_recap",
 ]);
 
 // Tasks de PLATAFORMA: varredura global (não por tenant), só o dono vê —
@@ -3435,6 +3442,12 @@ async function executarTaskMecanica(task: string, tenant: Tenant): Promise<unkno
       return await runAdsCheck(env, tenant);
     case "lugar_novo":
       return await runLugarNovo(env, tenant);
+    case "brief":
+      return await runBrief(env, tenant);
+    case "weekly":
+      return await runWeekly(env, tenant);
+    case "evening_recap":
+      return await runEveningRecap(env, tenant);
     default:
       throw new Error(`task '${task}' não é multi-tenant`);
   }
@@ -3561,29 +3574,26 @@ Deno.serve(async (req: Request) => {
     if (task === "conflito_check_dry") return json({ ok: true, ...(await runConflitoCheck(env, tenant, true)) });
     if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, tenant, true)) });
     if (task === "atrasadas_check_dry") return json({ ok: true, ...(await runAtrasadasCheck(env, tenant, true)) });
-    // Estas quatro passam pelo /fast e continuam SINGLE-TENANT de propósito.
+    // `marketing` é a ÚNICA dos quatro relatórios que continua single-tenant.
     //
-    // O que mudou em 31/08/2026: elas deixaram de ser IMPOSSÍVEIS de rodar
-    // multi-tenant. Antes, askFast mandava o slug do dono FIXO e os prompts
-    // citavam "Beehave (Resibag, Sanwey)" — ligar fan-out mandaria a agenda e
-    // o CRM do dono pro WhatsApp de outro cliente. Agora cada uma recebe o
-    // tenant inteiro, pergunta ao /fast com o slug DELE e entrega no canal
-    // DELE, com as frentes DELE no prompt.
+    // Brief, weekly e evening_recap foram pro fan-out em 31/08/2026 (decisão
+    // do Daniel) — desde a generalização deles, cada um recebe o tenant
+    // inteiro, pergunta ao /fast com o slug DELE e entrega no canal DELE.
     //
-    // Ligar o fan-out (mover pra TASKS_MULTI_TENANT) é decisão de produto, não
-    // técnica: passa a mandar relatório diário pra todo tenant elegível, com
-    // custo de modelo por conta e por dia. Fica pro Daniel decidir.
-    if (task === "brief") return json({ ok: true, ...(await runBrief(env, tenant)) });
-    if (task === "weekly") return json({ ok: true, ...(await runWeekly(env, tenant)) });
+    // O marketing ficou de fora por custo, não por segurança: é o mais caro
+    // dos quatro (cruza GA4, CRM e Google Ads) e a maioria dos tenants não
+    // roda anúncio nenhum. Mandar review de marketing pra quem não faz
+    // marketing é gasto de modelo sem ninguém do outro lado. Se um dia valer,
+    // o caminho não é ligar pra todo mundo — é um pré-filtro por "tem GA4 ou
+    // Ads configurado", igual o que ads_check já faz.
     if (task === "marketing") return json({ ok: true, ...(await runMarketing(env, tenant)) });
-    if (task === "evening_recap") return json({ ok: true, ...(await runEveningRecap(env, tenant)) });
     if (task === "novos_cadastros") return json({ ok: true, ...(await runNovosCadastros(env)) });
     if (task === "feedback_novo") return json({ ok: true, ...(await runFeedbackNovo(env)) });
     if (task === "whatsapp_watchdog") return json({ ok: true, ...(await runWhatsappWatchdog(env, tenant)) });
     if (task === "reuniao_retencao") return json({ ok: true, ...(await runReuniaoRetencao()) });
     return json({
       error: "task: " + [...TASKS_MULTI_TENANT, ...TASKS_PLATAFORMA].join(" | ") +
-        " | brief | weekly | marketing | evening_recap | <mecânica>_dry",
+        " | marketing | <mecânica>_dry",
     }, 400);
   } catch (err) {
     console.error(`[cron] task='${task}' erro:`, semDadoPessoal(err));
