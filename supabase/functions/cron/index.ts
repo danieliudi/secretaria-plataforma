@@ -85,7 +85,12 @@ import {
 } from "../_shared/google-ads.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
-import { type CalendarAttendee, getEventsBetween, getEventsByDate } from "../fast/tools/calendar-read.ts";
+import {
+  type CalendarAttendee,
+  type CalendarEvent,
+  getEventsBetween,
+  getEventsByDate,
+} from "../fast/tools/calendar-read.ts";
 import { listaRelacionamentosIgnorados } from "../fast/tools/relacionamento.ts";
 import { buscaContatoPorEmail } from "../fast/tools/redigir-supabase.ts";
 import { decideEnvio } from "../_shared/envio-decisao.ts";
@@ -93,6 +98,12 @@ import { enviaTemplate, temCredencialMeta } from "../_shared/whatsapp-oficial.ts
 import { appendAssistantMessage } from "../_shared/conversation.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
 import { apelidoDeUsuario, semDadoPessoal } from "../_shared/log-seguro.ts";
+import {
+  ehVirtual,
+  jaEsteve,
+  MESES_DE_HISTORICO,
+  montaAvisoLugarNovo,
+} from "../_shared/lugar-novo.ts";
 import {
   type CompromissoDoDia,
   montaMensagemFimDoDia,
@@ -1784,6 +1795,105 @@ async function runEveningRecap(
   return { len: message.length, tarefas: tarefas.length, compromissos: compromissos.length };
 }
 
+// ─── Lugar novo (proativo por DETECÇÃO, silêncio é o normal) ─────────────────
+//
+// Na véspera, olha os compromissos de amanhã que têm ENDEREÇO e avisa quando
+// encontra um onde a pessoa nunca esteve. Só fala quando acha — na maioria das
+// noites não manda nada, igual agenda_check e conflito_check.
+//
+// Sem previsão do tempo de propósito — ver o cabeçalho de _shared/lugar-novo.ts.
+// A mensagem inteira é determinística: as duas afirmações que ela faz ("você
+// nunca esteve aí", "esse tipo de lugar costuma pedir X") são justamente as que
+// não podem sair de um chute plausível.
+
+/** Teto de avisos por noite: 3 lugares novos já é um dia atípico; acima disso é ruído. */
+const LUGAR_NOVO_MAX_POR_NOITE = 3;
+
+async function runLugarNovo(
+  env: EnvFn,
+  tenant: Tenant,
+  dryRun = false,
+): Promise<{ avisou: number; olhados: number; motivo?: string; pulado?: string }> {
+  if (!googleConectado(tenant)) return { avisou: 0, olhados: 0, pulado: "sem Google" };
+  const entrega = resolveEntrega(tenant, env);
+  if (!dryRun && !entrega) return { avisou: 0, olhados: 0, pulado: "sem destino/envio configurado" };
+
+  // Amanhã inteiro, em SP.
+  const agora = new Date();
+  const amanha = new Date(agora.getTime() + 24 * 3600_000);
+  const dia = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(amanha);
+  const inicioAmanha = new Date(`${dia}T03:00:00.000Z`); // 00:00 SP
+  const fimAmanha = new Date(inicioAmanha.getTime() + 24 * 3600_000);
+
+  let deAmanha: CalendarEvent[];
+  let historico: CalendarEvent[];
+  try {
+    // O histórico é a parte cara (12 meses de agenda), então só é buscado
+    // depois de saber que existe pelo menos um compromisso com endereço.
+    deAmanha = await getEventsBetween(
+      inicioAmanha.toISOString(),
+      fimAmanha.toISOString(),
+      calendarDeps(env),
+    );
+  } catch (err) {
+    await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+    throw err;
+  }
+
+  const comLugar = deAmanha.filter((e) => !ehVirtual(e.location));
+  if (comLugar.length === 0) {
+    return { avisou: 0, olhados: 0, motivo: "nenhum compromisso com endereço amanhã" };
+  }
+
+  const desde = new Date(inicioAmanha);
+  desde.setUTCMonth(desde.getUTCMonth() - MESES_DE_HISTORICO);
+  try {
+    historico = await getEventsBetween(desde.toISOString(), inicioAmanha.toISOString(), calendarDeps(env));
+  } catch (err) {
+    await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+    throw err;
+  }
+  const lugaresConhecidos = historico
+    .map((e) => e.location)
+    .filter((l): l is string => !ehVirtual(l));
+
+  const ineditos = comLugar.filter((e) => !jaEsteve(e.location!, lugaresConhecidos));
+  if (ineditos.length === 0) {
+    return { avisou: 0, olhados: comLugar.length, motivo: "todos os lugares de amanhã já são conhecidos" };
+  }
+
+  let avisou = 0;
+  for (const evento of ineditos.slice(0, LUGAR_NOVO_MAX_POR_NOITE)) {
+    const texto = montaAvisoLugarNovo({
+      titulo: evento.title,
+      hora: evento.time,
+      local: evento.location!,
+      // Só oferece procurar o convite quando existe convite: evento sem
+      // convidado não tem e-mail nenhum pra vasculhar, e prometer isso seria
+      // oferecer um serviço que não pode ser prestado.
+      temConvite: evento.attendees.length > 0,
+    });
+    if (dryRun) {
+      avisou++;
+      continue;
+    }
+
+    // Claim ANTES do envio, chaveado por evento+dia: reentrada do tick não
+    // reenvia, e um evento que mudar de dia ganha aviso novo (que é o certo).
+    const chave = `${evento.id}|${dia}`;
+    if (!(await reivindicaAviso(tenant.id, "lugar_novo", chave))) continue;
+    try {
+      await enviarTextoTenant(entrega!, texto, tenant.id);
+      avisou++;
+    } catch (err) {
+      await desfazAviso(tenant.id, "lugar_novo", chave);
+      throw err;
+    }
+  }
+
+  return { avisou, olhados: comLugar.length };
+}
+
 // ─── Agenda apertada (proativo por DETECÇÃO, não por horário) ───────────────
 //
 // Diferente de todo o resto deste arquivo: os outros proativos disparam porque
@@ -3196,6 +3306,7 @@ const TASKS_MULTI_TENANT = new Set([
   "resumo_diario",
   "reunioes",
   "ads_check",
+  "lugar_novo",
 ]);
 
 // Tasks de PLATAFORMA: varredura global (não por tenant), só o dono vê —
@@ -3219,6 +3330,7 @@ const TASKS_GOOGLE = new Set([
   "conflito_check",
   "semana_check",
   "relacionamento_esfriando",
+  "lugar_novo",
 ]);
 
 /** Tenants elegíveis pra esta task, já pré-filtrados. */
@@ -3321,6 +3433,8 @@ async function executarTaskMecanica(task: string, tenant: Tenant): Promise<unkno
       return await runReunioes(env, tenant);
     case "ads_check":
       return await runAdsCheck(env, tenant);
+    case "lugar_novo":
+      return await runLugarNovo(env, tenant);
     default:
       throw new Error(`task '${task}' não é multi-tenant`);
   }
@@ -3442,6 +3556,7 @@ Deno.serve(async (req: Request) => {
     if (task === "relacionamento_esfriando_dry") {
       return json({ ok: true, ...(await runRelacionamentoEsfriando(env, tenant, true)) });
     }
+    if (task === "lugar_novo_dry") return json({ ok: true, ...(await runLugarNovo(env, tenant, true)) });
     if (task === "agenda_check_dry") return json({ ok: true, ...(await runAgendaCheck(env, tenant, true)) });
     if (task === "conflito_check_dry") return json({ ok: true, ...(await runConflitoCheck(env, tenant, true)) });
     if (task === "semana_check_dry") return json({ ok: true, ...(await runSemanaCheck(env, tenant, true)) });
