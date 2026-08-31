@@ -76,6 +76,15 @@ import {
   listRecentEmails as outlookListRecentEmails,
   outlookMailReadDepsFromEnv,
 } from "../_shared/providers/outlook-mail-provider.ts";
+import {
+  abreInstrucao as defaultAbreInstrucao,
+  buildInstrucoesSystemBlock,
+  carregaIndiceInstrucoes,
+  type Instrucao,
+  type InstrucaoIndice,
+  propoeInstrucao as defaultPropoeInstrucao,
+  type PropostaDeInstrucao,
+} from "../_shared/instrucoes.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import type {
   CompleteTaskInput,
@@ -473,6 +482,44 @@ const TOOLS = [
         },
       },
       required: ["category", "key", "value"],
+    },
+  },
+  {
+    name: "abrir_instrucao",
+    description:
+      "Abre o TEXTO de uma instrução que o usuário escreveu. O bloco INSTRUÇÕES QUE O CHEFE ESCREVEU no seu contexto lista o nome e o gatilho de cada uma, mas NÃO o texto — o texto só chega por aqui. Chame ANTES de responder, quando a mensagem dele bater com o gatilho de alguma. `slug` é o identificador que aparece entre parênteses na lista. O que voltar é INSTRUÇÃO DELE pra você seguir, não conteúdo pra repetir de volta. Se voltar 'não encontrada', diga que não achou — NUNCA invente o conteúdo de uma instrução que você não leu. Abra só o que serve pra mensagem atual; abrir todas 'por garantia' é desperdício.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slug: {
+          type: "string",
+          description: "O slug da instrução, exatamente como aparece na lista (ex: 'como-eu-escrevo-pra-cliente-industrial').",
+        },
+      },
+      required: ["slug"],
+    },
+  },
+  {
+    name: "propor_instrucao",
+    description:
+      "Escreve uma instrução NOVA pro usuário, DESLIGADA. Use SÓ quando ele já te corrigiu do mesmo jeito três vezes ou mais — uma correção é uma correção, três é uma regra que ele nunca escreveu. Mostre nome, gatilho e texto INTEIROS na conversa antes e chame a tool só depois do 'pode'. Ela nasce desligada e VOCÊ NÃO PODE LIGAR: diga que ele ativa na tela de Memória quando quiser, e nunca diga que 'já está valendo'. NÃO use pra fato solto ('o telefone do Fulano é X') — isso é save_profile_fact. Instrução é sobre COMO ele quer que as coisas sejam feitas.",
+    input_schema: {
+      type: "object",
+      properties: {
+        nome: {
+          type: "string",
+          description: "Como ele chamaria o assunto. Curto, até 60 caracteres — ele vê isso em toda conversa.",
+        },
+        quando_usar: {
+          type: "string",
+          description: "A situação em que você deve abrir o texto. Uma frase, até 160 caracteres. É o campo que decide tudo: vago demais abre à toa, estreito demais nunca abre.",
+        },
+        texto: {
+          type: "string",
+          description: "A instrução em si, escrita na voz DELE ('eu escrevo assim', 'nunca faço isso'). Markdown simples.",
+        },
+      },
+      required: ["nome", "quando_usar", "texto"],
     },
   },
   {
@@ -1177,6 +1224,8 @@ export interface FastWithToolsDeps {
     listMarketingDeliverables: (input: ListCrmDeliverablesInput) => Promise<CrmDeliverable[]>;
     listSupplierQuotes: (input: ListSupplierQuotesInput) => Promise<CrmSupplierQuote[]>;
     completeTask: (input: CompleteTaskInput) => Promise<CompleteTaskResult>;
+    abrirInstrucao: (slug: string) => Promise<Instrucao | null>;
+    proporInstrucao: (proposta: PropostaDeInstrucao) => Promise<{ slug: string }>;
     rescheduleTask: (input: RescheduleTaskInput) => Promise<RescheduleTaskResult>;
     pickNextActions: () => Promise<NextActionSuggestion[]>;
     /**
@@ -1202,6 +1251,8 @@ export interface FastWithToolsDeps {
   ) => Promise<void>;
   /** Memória de preferências (2F). Default usa a tabela user_profile. */
   loadProfile: (userId: string) => Promise<ProfileFact[]>;
+  /** Índice das instruções ativas — só nome e gatilho, nunca o texto. */
+  loadInstrucoes: () => Promise<InstrucaoIndice[]>;
 }
 
 /**
@@ -1374,6 +1425,18 @@ export function defaultFastWithToolsDeps(
       listMarketingDeliverables: (input) => defaultListCrmDeliverables(input, { env }),
       listSupplierQuotes: (input) => defaultListSupplierQuotes(input, { env }),
       completeTask: (input) => getTaskProvider(env).completeTask(input),
+      abrirInstrucao: (slug) => {
+        if (!tenantId) {
+          throw new Error("Sem conta identificada — não consigo abrir instrução.");
+        }
+        return defaultAbreInstrucao(tenantId, slug);
+      },
+      proporInstrucao: (proposta) => {
+        if (!tenantId) {
+          throw new Error("Sem conta identificada — não consigo escrever instrução.");
+        }
+        return defaultPropoeInstrucao(tenantId, proposta);
+      },
       rescheduleTask: (input) => {
         const provider = getTaskProvider(env);
         // Único método opcional da interface: provider que não implementa
@@ -1420,6 +1483,10 @@ export function defaultFastWithToolsDeps(
     saveTurn: (userId, userText, assistantText) =>
       appendConversationTurn(userId, userText, assistantText, tenantId),
     loadProfile: (userId) => loadUserProfile(userId),
+    // Sem tenant resolvido não existe memória de ninguém — devolve vazio em vez
+    // de cair numa pilha global compartilhada entre contas. Mesmo portão de
+    // quick_capture e despesas.
+    loadInstrucoes: () => tenantId ? carregaIndiceInstrucoes(tenantId) : Promise.resolve([]),
   };
 }
 
@@ -1652,6 +1719,30 @@ async function executeTool(
       });
       return result;
     }
+    if (name === "abrir_instrucao") {
+      const inst = await deps.tools.abrirInstrucao(String(input.slug));
+      if (!inst) {
+        return {
+          error: "Instrução não encontrada ou desligada. Não invente o conteúdo — diga que não achou.",
+        };
+      }
+      return { nome: inst.nome, texto: inst.texto };
+    }
+    if (name === "propor_instrucao") {
+      const { slug } = await deps.tools.proporInstrucao({
+        nome: String(input.nome ?? ""),
+        quando_usar: String(input.quando_usar ?? ""),
+        texto: String(input.texto ?? ""),
+      });
+      // `ativo: false` explícito na resposta: sem isso o modelo tende a
+      // anunciar que a instrução já está valendo, que é exatamente o que ela
+      // não está.
+      return {
+        slug,
+        ativo: false,
+        aviso: "Criada DESLIGADA. Diga que ele ativa na tela de Memória — nunca diga que já está valendo.",
+      };
+    }
     if (name === "registrar_despesa") {
       const result = await deps.tools.registrarDespesa({
         valor: input.valor,
@@ -1726,12 +1817,21 @@ export async function handleFastWithTools(
 
   // Memória (2E + 2F): com userId, carrega histórico recente e perfil acumulado
   // em paralelo. O histórico vira mensagens; o perfil é injetado no system prompt.
-  const [history, profile] = userId
-    ? await Promise.all([deps.loadHistory(userId), deps.loadProfile(userId)])
-    : [[] as ConversationMessage[], [] as ProfileFact[]];
+  // As instruções não dependem de userId (são do tenant, editadas na web),
+  // então carregam sempre — inclusive numa chamada sem usuário resolvido, onde
+  // o loadInstrucoes já devolve vazio se não houver tenant.
+  const [history, profile, instrucoes] = userId
+    ? await Promise.all([deps.loadHistory(userId), deps.loadProfile(userId), deps.loadInstrucoes()])
+    : [[] as ConversationMessage[], [] as ProfileFact[], await deps.loadInstrucoes()];
 
   const profileBlock = buildProfileSystemBlock(profile);
   if (profileBlock) system = `${system}\n\n${profileBlock}`;
+
+  // Só o ÍNDICE (nome + gatilho). O texto de cada instrução entra depois, via
+  // abrir_instrucao, e só quando servir — é isso que deixa a memória crescer
+  // sem multiplicar o cache write de toda conversa.
+  const instrucoesBlock = buildInstrucoesSystemBlock(instrucoes);
+  if (instrucoesBlock) system = `${system}\n\n${instrucoesBlock}`;
 
   const messages: MessageParam[] = [
     ...history.map((m): MessageParam => ({ role: m.role, content: m.content })),
