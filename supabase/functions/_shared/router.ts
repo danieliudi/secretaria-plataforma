@@ -71,21 +71,33 @@ export function applyRules(decision: Decision): RouterResult {
  * `frentes` vem do tenant (`tenant.frentes`) — quem chama já resolveu o
  * tenant antes de classificar (ver reflex/index.ts). Lista vazia é um tenant
  * válido que ainda não configurou frente nenhuma, não um erro.
+ *
+ * `tenantId` existe SÓ pra contabilidade: o classificador roda em TODA
+ * mensagem, e até 31/08/2026 ele era a única origem de `uso_modelo` que
+ * gravava dono nenhum — 36 de 36 chamadas numa semana com `tenant_id` nulo,
+ * enquanto whatsapp/visao/cron gravavam certo. O gasto aparecia no total e
+ * sumia do rateio por usuário, que é justamente o número que importa numa
+ * plataforma cobrada por conta. Quem chama JÁ tem o tenant resolvido (é dele
+ * que sai `frentes`), então era só não passar adiante.
  */
-export async function classifyWithHaiku(input: string, frentes: string[]): Promise<Decision> {
+export async function classifyWithHaiku(
+  input: string,
+  frentes: string[],
+  tenantId?: string | null,
+): Promise<Decision> {
   const client = getAnthropicClient();
   const prompt = buildClassifierPrompt(input, frentes);
   const response = await client.messages.create({ model: "claude-haiku-4-5-20251001", max_tokens: 256, messages: [{ role: "user", content: prompt }] });
-  await registraUso("claude-haiku-4-5-20251001", "classificador", response.usage);
+  await registraUso("claude-haiku-4-5-20251001", "classificador", response.usage, tenantId);
   const raw = (response.content[0] as { type: "text"; text: string }).text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   return JSON.parse(raw) as Decision;
 }
 
-export async function route(input: string, frentes: string[]): Promise<RouterResult> {
+export async function route(input: string, frentes: string[], tenantId?: string | null): Promise<RouterResult> {
   if (checkRegexReflex(input)) {
     const decision: Decision = { tier: "reflex", frente: "pessoal", domain: "saude", action_required: true, irreversible: false, confidence: 1.0 };
     return { route: "reflex", decision };
   }
-  const decision = await classifyWithHaiku(input, frentes);
+  const decision = await classifyWithHaiku(input, frentes, tenantId);
   return applyRules(decision);
 }
