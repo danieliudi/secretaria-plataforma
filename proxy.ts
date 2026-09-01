@@ -52,5 +52,20 @@ export const config = {
   // garantidamente inútil — a sessão ainda não existe — e coloca um segundo
   // escritor de cookie no meio do fluxo PKCE, que é onde uma sessão recém-criada
   // some sem deixar erro.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|auth).*)"],
+  //
+  // ARQUIVO ESTÁTICO TAMBÉM FICA DE FORA (01/09/2026). `getUser()` não lê
+  // cookie: ele valida o token NO SERVIDOR da Supabase, ou seja, é uma ida e
+  // volta de rede. Até aqui `/brand/*.png`, `/icons/*`, o manifest e o service
+  // worker passavam por ele — cada imagem da página pagava um round-trip antes
+  // de ser servida, pra decidir uma sessão que imagem nenhuma consulta.
+  //
+  // A lista é EXPLÍCITA, arquivo por arquivo, em vez de uma regra por extensão
+  // (`.*\.png$` e afins): um slug dinâmico que por acaso terminasse em .png
+  // sairia do middleware sem ninguém perceber. O que está aqui é exatamente o
+  // conteúdo de public/ mais a rota gerada /icon.png — nada que dependa de
+  // sessão. Conferido nos dois sentidos antes de subir: estático sai, e /,
+  // /login, /onboarding, /admin, /app e /api continuam entrando.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon\\.ico|icon\\.png|manifest\\.webmanifest|sw\\.js|brand/|icons/|auth).*)",
+  ],
 };
