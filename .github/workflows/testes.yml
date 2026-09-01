@@ -30,8 +30,13 @@ jobs:
         with:
           deno-version: v2.x
 
+      # --node-modules-dir=auto: a raiz do repo tem o package.json do Next.js, e
+      # o Deno 2 conclui daí que o projeto gerencia node_modules na mão — aí
+      # recusa resolver os `npm:` das edge functions ("Could not find a matching
+      # package for 'npm:@anthropic-ai/sdk'"). O flag manda instalar sozinho.
+      # Os imports de esm.sh nunca foram problema; só os `npm:`.
       - name: Testes offline (não chamam modelo, não custam nada)
-        run: deno test --allow-env supabase/functions/_tests/
+        run: deno test --node-modules-dir=auto --allow-env supabase/functions/_tests/
 
       - name: Suíte de comportamento
         # Só quando pedido E com a chave configurada. Sem a chave os casos são
@@ -46,4 +51,4 @@ jobs:
             echo "::error::ANTHROPIC_API_KEY não está configurada. Adicione em Settings -> Secrets and variables -> Actions -> New repository secret, com esse nome exato. Sem ela os casos seriam pulados e este passo ficaria verde sem ter testado nada."
             exit 1
           fi
-          deno test --allow-net --allow-env supabase/functions/_tests/comportamento.test.ts
+          deno test --node-modules-dir=auto --allow-net --allow-env supabase/functions/_tests/comportamento.test.ts
