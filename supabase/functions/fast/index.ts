@@ -192,7 +192,7 @@ import {
   type ReportarFeedbackInput,
   type ReportarFeedbackResult,
 } from "./tools/feedback.ts";
-import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
+import { buildTenantEnv, getTenantBySlug, type Tenant } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { LIMITE_BLOQUEIO_POR_HORA, LIMITE_OBSERVACAO_POR_HORA, registraChamadaJanela } from "../_shared/rate-limit.ts";
@@ -2044,39 +2044,56 @@ async function handlerHttp(req: Request): Promise<Response> {
   let deps = defaultFastWithToolsDeps();
   let tenantId: string | undefined;
   if (tenantSlugRaw) {
+    // Quem manda `tenant_slug` está dizendo DE QUEM é esta mensagem. Se não dá
+    // pra confirmar quem é, a única resposta segura é não responder.
+    //
+    // Até 01/09/2026 os dois caminhos de falha aqui caíam no env global — que
+    // é o do DONO DA PLATAFORMA. Um blip de banco na resolução do tenant, ou
+    // um slug que não existe mais, e a mensagem de outra pessoa era atendida
+    // com o Google, o Gmail e o CRM do dono. O comentário logo abaixo já dizia
+    // que "cair no global seria pior que negar", mas isso só valia pro tenant
+    // não aprovado; erro e not-found seguiam passando.
+    //
+    // 409 (e não 500) porque não é defeito do chamador nem do servidor: é
+    // ambiguidade de identidade. Mesmo código e mesma razão do /reflex quando
+    // chega mensagem sem `from`. O callFastEndpoint trata qualquer não-2xx
+    // devolvendo a mensagem humana de fallback, então a pessoa vê "tenta de
+    // novo daqui a pouco" em vez de resposta com a conta de outro.
+    let tenant: Tenant | null;
     try {
-      const tenant = await getTenantBySlug(tenantSlugRaw);
-      // Portão de acesso, em profundidade. Hoje /reflex, /telegram e o cron já
-      // barram tenant não aprovado antes de chegar aqui — mas o portão morava
-      // SÓ neles. Um caminho novo que chamasse /fast (endpoint do site, job)
-      // nasceria sem portão nenhum, e /fast dá acesso a agenda, Gmail, CRM e
-      // despesa. Recusa explícita em vez de seguir com env global: cair no
-      // global aqui seria pior que negar — usaria a credencial do dono da
-      // plataforma pra atender quem não foi aprovado.
-      if (tenant && !tenant.aprovado_em) {
-        return resp({ error: "tenant sem acesso liberado" }, 403);
-      }
-      if (tenant) {
-        tenantId = tenant.id;
-        const persona: TenantPersona = {
-          nome: tenant.nome,
-          cargo: tenant.cargo,
-          frentes: tenant.frentes,
-          persona: tenant.persona,
-          usaVocativo: tenant.usa_vocativo,
-          tratamento: tenant.tratamento,
-          personalidade: tenant.personalidade,
-        };
-        deps = defaultFastWithToolsDeps(
-          await buildTenantEnv(tenant),
-          persona,
-          tenant.id,
-          origemPorUsuario(userId),
-        );
-      }
+      tenant = await getTenantBySlug(tenantSlugRaw);
     } catch (err) {
-      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${semDadoPessoal(err)}`);
+      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou — recusando: ${semDadoPessoal(err)}`);
+      return resp({ error: "não foi possível identificar de quem é esta conversa" }, 409);
     }
+    if (!tenant) {
+      console.warn(`[fast] tenant '${tenantSlugRaw}' não encontrado — recusando em vez de cair no env global`);
+      return resp({ error: "não foi possível identificar de quem é esta conversa" }, 409);
+    }
+    // Portão de acesso, em profundidade. Hoje /reflex, /telegram e o cron já
+    // barram tenant não aprovado antes de chegar aqui — mas o portão morava
+    // SÓ neles. Um caminho novo que chamasse /fast (endpoint do site, job)
+    // nasceria sem portão nenhum, e /fast dá acesso a agenda, Gmail, CRM e
+    // despesa.
+    if (!tenant.aprovado_em) {
+      return resp({ error: "tenant sem acesso liberado" }, 403);
+    }
+    tenantId = tenant.id;
+    const persona: TenantPersona = {
+      nome: tenant.nome,
+      cargo: tenant.cargo,
+      frentes: tenant.frentes,
+      persona: tenant.persona,
+      usaVocativo: tenant.usa_vocativo,
+      tratamento: tenant.tratamento,
+      personalidade: tenant.personalidade,
+    };
+    deps = defaultFastWithToolsDeps(
+      await buildTenantEnv(tenant),
+      persona,
+      tenant.id,
+      origemPorUsuario(userId),
+    );
   }
 
   // Taxa por tenant, em dois patamares (ver _shared/rate-limit.ts): acima de
