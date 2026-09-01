@@ -464,6 +464,10 @@ const RELACAO_MAX_CARDS_POR_EXECUCAO = 3; // resto fica pra fila do dia seguinte
 const SCHEDULED_MAX_TENTATIVAS = 10; // teto antes de desistir de um lembrete que não consegue entregar
 const TZ = "America/Sao_Paulo";
 
+/** Marca "o resumo da manhã deste dia já saiu", em avisos_enviados. A chave é
+ *  a data em SP (YYYY-MM-DD), então é uma linha por tenant por dia. */
+const BRIEF_TIPO = "brief_do_dia";
+
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
 
@@ -1191,32 +1195,97 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
   const tasks = await getTasksWithDue(env);
   let sent = 0;
 
+  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo já
+  // lista "prazo pra hoje ou atrasadas", então tudo que JÁ estava vencido
+  // naquele momento ele contou — e repetir duas horas depois, uma mensagem por
+  // tarefa, era o grosso do "muito texto".
+  //
+  // O que o resumo lista é: atrasada NAQUELE momento, ou com prazo pra hoje.
+  // Então o alerta só fala de uma tarefa quando ela vira NOTÍCIA depois disso —
+  // venceu de verdade no meio do dia, ou o prazo nem era de hoje.
+  const briefMs = await horaDoBriefDeHoje(tenant.id);
+
+  // Agrupa por (frente, vencida?) antes de mandar. Uma mensagem por grupo em
+  // vez de uma por tarefa; o rótulo do grupo só é honesto se vencida e
+  // vencendo não se misturarem.
+  type Grupo = { label: string; overdue: boolean; itens: typeof tasks };
+  const grupos = new Map<string, Grupo>();
+
   for (const t of tasks) {
     const overdue = t.dueMs < now;
     const dueSoon = t.dueMs >= now && t.dueMs <= now + ALERT_AHEAD_MS;
     if (!overdue && !dueSoon) continue;
+    if (briefMs !== null) {
+      // Estava no resumo de hoje se já tinha vencido quando ele saiu, ou se o
+      // prazo é de hoje ("Prazo hoje" é uma das linhas que ele escreve).
+      const estavaNoResumo = t.dueMs < briefMs || mesmoDiaEm(t.dueMs, briefMs);
+      // ...mas se venceu DEPOIS do resumo, virou informação nova: o resumo
+      // disse "vence hoje às 15h", e agora são 15h05 e passou.
+      const venceuDepoisDoResumo = overdue && t.dueMs >= briefMs;
+      if (estavaNoResumo && !venceuDepoisDoResumo) continue;
+    }
 
     // Claim ANTES do envio — mesmo motivo dos outros. Nome da tabela é
     // legado (era ClickUp-only) — dedup funciona igual pra qualquer provider.
     const reivindicado = await reivindicaAlerta(tenant.id, t.id, t.dueMs);
     if (!reivindicado) continue;
 
+    // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
+    // que hoje já roda multi-tenant — `label` já carrega a frente/lista
+    // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
+    const label = t.list ? `${t.frente}/${t.list}` : t.frente;
+    const chave = `${label}\u0000${overdue}`;
+    const grupo = grupos.get(chave) ?? { label, overdue, itens: [] };
+    grupo.itens.push(t);
+    grupos.set(chave, grupo);
+  }
+
+  for (const g of grupos.values()) {
+    const icon = g.overdue ? "🔴" : "🟡";
+    const verbo = g.overdue ? "venceu" : "vence";
+    // Uma tarefa só não vira lista: cabeçalho + um marcador pra uma linha é
+    // mais texto, não menos, que é o oposto do ponto.
+    const text = g.itens.length === 1
+      ? `${icon} Prazo — ${g.label}: "${g.itens[0].name}" ${verbo} ${fmtDateTime(g.itens[0].dueMs)}`
+      : `${icon} *${g.overdue ? "Prazos vencidos" : "Vencendo em breve"} — ${g.label} (${g.itens.length})*\n` +
+        g.itens.map((t) => `· ${t.name} — ${verbo} ${fmtDateTime(t.dueMs)}`).join("\n");
     try {
-      const quando = overdue ? `venceu ${fmtDateTime(t.dueMs)}` : `vence ${fmtDateTime(t.dueMs)}`;
-      const icon = overdue ? "🔴" : "🟡";
-      const label = t.list ? `${t.frente}/${t.list}` : t.frente;
-      // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
-      // que hoje já roda multi-tenant — `label` já carrega a frente/lista
-      // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
-      const text = `${icon} Prazo — ${label}: "${t.name}" ${quando}`;
       await enviarTextoTenant(entrega, text, tenant.id);
     } catch (err) {
-      await desfazAlerta(tenant.id, t.id, t.dueMs);
+      // Rollback do grupo inteiro: sem isso, o que já tinha sido reivindicado
+      // nunca mais alertaria, e a mensagem que o carregava não chegou.
+      for (const t of g.itens) await desfazAlerta(tenant.id, t.id, t.dueMs);
       throw err;
     }
-    sent++;
+    sent += g.itens.length;
   }
   return { sent, scanned: tasks.length };
+}
+
+/** Mesmo dia no fuso do usuário — comparar timestamp cru erraria perto da meia-noite. */
+function mesmoDiaEm(a: number, b: number): boolean {
+  const dia = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: TZ });
+  return dia(a) === dia(b);
+}
+
+/** Quando o resumo da manhã deste tenant saiu hoje, em ms — null se ainda não saiu. */
+async function horaDoBriefDeHoje(tenantId: string): Promise<number | null> {
+  const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const { data, error } = await getSupabaseClient()
+    .from("avisos_enviados")
+    .select("ts")
+    .eq("tenant_id", tenantId)
+    .eq("tipo", BRIEF_TIPO)
+    .eq("chave", hoje)
+    .maybeSingle();
+  if (error) {
+    // Falha aqui não pode calar o alerta: sem a marca, ele volta a mandar
+    // tudo — o comportamento antigo, barulhento mas não omisso.
+    console.error("[cron] alerts: leitura da marca do brief falhou:", semDadoPessoal(error.message));
+    return null;
+  }
+  const ts = (data as { ts?: string } | null)?.ts;
+  return ts ? new Date(ts).getTime() : null;
 }
 
 // Avisa novidade do produto (tabela `atualizacoes`, ver /novidades no site)
@@ -1473,11 +1542,33 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     "gatilho regulatório e sinal de demanda (viram janela de urgência comercial), " +
     "não invente nada além do que está listado, e se não houver nada relevante " +
     "diga isso em uma linha. " +
-    "Se algum bloco estiver vazio, diga em uma linha. Não faça perguntas, só entregue." +
+    "OMITA por completo as frentes que não tiverem nenhum item — não escreva o nome " +
+    "delas nem uma linha dizendo que não há nada. Só se NENHUMA frente tiver item, " +
+    "escreva uma única linha dizendo isso. Vale o mesmo pros blocos de agenda e " +
+    "notícias: vazio se resolve em uma linha, nunca em uma lista de vazios. " +
+    "Não faça perguntas, só entregue." +
     (newsBlock ? `\n\nNOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}` : "");
 
   const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
   await enviarTextoTenant(entrega, text, tenantId);
+
+  // Marca que o resumo de hoje saiu. É o que permite ao runAlerts não repetir
+  // o que este resumo já listou (ver o comentário lá). Gravado DEPOIS do envio
+  // de propósito: resumo que não chegou não pode calar o alerta.
+  // Falha aqui não derruba um brief já entregue — no pior caso o alerta
+  // duplica, que é o comportamento antigo.
+  try {
+    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const { error: briefErr } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hoje });
+    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
+    if (briefErr && (briefErr as { code?: string }).code !== "23505") {
+      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(briefErr.message));
+    }
+  } catch (err) {
+    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
+  }
 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
