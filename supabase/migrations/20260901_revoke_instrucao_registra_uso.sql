@@ -1,0 +1,33 @@
+-- Fecha `instrucao_registra_uso` pro `anon` e pro `authenticated`.
+--
+-- A migration 20260831_instrucoes.sql JÁ TENTOU fechar:
+--
+--   revoke all on function public.instrucao_registra_uso(uuid, text) from public;
+--   grant execute on function public.instrucao_registra_uso(uuid, text) to service_role;
+--
+-- e não fechou. A ACL em produção continuou:
+--   postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres
+--
+-- A PEGADINHA, que vale pra toda função nova daqui pra frente: o Supabase usa
+-- `ALTER DEFAULT PRIVILEGES` pra dar EXECUTE **nominalmente** a `anon` e a
+-- `authenticated` em toda função criada no schema `public`. `revoke ... from
+-- public` remove só o pseudo-papel PUBLIC ("todo mundo"), e NÃO remove um grant
+-- nominal a um papel específico. O revoke roda, não dá erro, e não faz nada.
+-- Pra fechar de verdade é preciso nomear os papéis, que é o que este arquivo faz.
+--
+-- POR QUE IMPORTAVA: a função é SECURITY DEFINER (passa por cima do RLS),
+-- recebe `p_tenant_id` e `p_slug` por argumento e não checa nada. Quem tivesse a
+-- chave publicável — que vive no bundle do navegador por design — podia chamar
+-- /rest/v1/rpc/instrucao_registra_uso e inflar `usos`/`ultimo_uso` de instrução
+-- de QUALQUER tenant. Não lê nem apaga nada, mas é escrita cross-tenant sem
+-- autenticação, e `usos` é justamente o número que o dono da conta olha pra
+-- decidir se o `quando_usar` daquela instrução está pegando.
+-- Conferido em 01/09/2026, antes do fecho: `sum(usos)` = 0 em toda a tabela —
+-- ninguém explorou.
+--
+-- SEGURO: o único chamador é _shared/instrucoes.ts, via getSupabaseClient(),
+-- que usa SUPABASE_SERVICE_ROLE_KEY. O `grant ... to service_role` de
+-- 20260831 já cobre ele; nada legítimo passa por anon nem por authenticated.
+
+revoke execute on function public.instrucao_registra_uso(uuid, text)
+  from anon, authenticated;
