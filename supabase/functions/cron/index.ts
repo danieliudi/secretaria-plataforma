@@ -85,6 +85,12 @@ import {
   termosSemConversao,
 } from "../_shared/google-ads.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
+import {
+  buscaCambio,
+  buscaEditais,
+  montaBlocoSinais,
+  normalizaUfs,
+} from "../_shared/sinais.ts";
 import { nomeCurto, pendentesDeConfirmacao } from "../_shared/confirmacoes.ts";
 import {
   type CalendarAttendee,
@@ -133,6 +139,31 @@ type EnvFn = (key: string) => string | undefined;
 // a lista de frentes de ninguém — é o que existe de fonte. Cada tenant recebe
 // notícia só das SUAS frentes que estão aqui dentro (ver newsFrentesDoTenant).
 const NEWS_FRENTES_COBERTAS: Array<"resibag" | "sanwey"> = ["resibag", "sanwey"];
+
+/**
+ * A qual frente o edital público pertence.
+ *
+ * Edital de resíduo perigoso é oportunidade da frente que vende embalagem
+ * homologada pra resíduo. Se o tenant não tiver essa frente, cai na primeira
+ * que ele tem — nunca numa string chapada: "Resibag" aqui dentro seria o
+ * negócio do dono da plataforma aparecendo no relatório de todo cliente.
+ */
+function frenteDeEdital(tenant: Tenant): string {
+  const fs = tenant.frentes ?? [];
+  return fs.find((f) => f.toLowerCase() === "resibag") ?? fs[0] ?? "Geral";
+}
+
+/**
+ * A qual frente o câmbio pertence — e se pertence a alguma.
+ *
+ * Dólar só é sinal pra quem exporta ou compra insumo indexado. Devolver null
+ * (em vez de jogar em qualquer frente) é o que impede o bloco de virar ruído
+ * pra tenant que só opera no mercado interno.
+ */
+function frenteDeCambio(tenant: Tenant): string | null {
+  const fs = tenant.frentes ?? [];
+  return fs.find((f) => f.toLowerCase() === "sanwey") ?? null;
+}
 
 /** Notícia só das frentes do tenant que têm fonte configurada. */
 function newsFrentesDoTenant(tenant: Tenant): Array<"resibag" | "sanwey"> {
@@ -1452,29 +1483,60 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
   }
 
+  // SINAIS DE FONTE PRIMÁRIA (01/09/2026). Antes daqui só havia manchete de
+  // Google Notícias, e medido no dia ela rendia ZERO — evento regulatório e
+  // edital público quase nunca viram notícia, morrem no registro de origem.
+  // Agora vêm primeiro PNCP e BCB, que respondem "isto aconteceu?" em vez de
+  // "alguém escreveu sobre isto?". Cada fonte falha sozinha.
+  const blocos: string[] = [];
+
+  const ufs = normalizaUfs(tenant.radar_ufs);
+  if (ufs.length > 0) {
+    try {
+      const hoje = new Date();
+      const ontem = new Date(hoje.getTime() - 86400000);
+      const editais = await buscaEditais(ufs, ontem, hoje, frenteDeEdital(tenant));
+      const bloco = montaBlocoSinais(editais);
+      if (bloco) blocos.push(`EDITAIS PÚBLICOS (PNCP, últimas 24h):\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] brief: editais falharam:", semDadoPessoal(err));
+    }
+  }
+
+  if (frenteDeCambio(tenant)) {
+    try {
+      const cambio = await buscaCambio(new Date(), frenteDeCambio(tenant)!);
+      const bloco = montaBlocoSinais(cambio ? [cambio] : []);
+      if (bloco) blocos.push(`CÂMBIO:\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] brief: câmbio falhou:", semDadoPessoal(err));
+    }
+  }
+
   const newsFrentes = newsFrentesDoTenant(tenant);
-  let newsBlock = "";
   if (newsFrentes.length > 0) {
     try {
-      newsBlock = await getSectorNewsBlock(newsFrentes);
+      const newsBlock = await getSectorNewsBlock(newsFrentes);
+      if (newsBlock) blocos.push(`NOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}`);
     } catch (err) {
       console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
     }
   }
+
+  const sinaisBlock = blocos.join("\n\n");
 
   const prompt =
     "Monte meu resumo da manhã, conciso e em tópicos curtos. Inclua: " +
     "(1) os compromissos de hoje na minha agenda, com horário; " +
     `(2) por frente (${frentesEmTexto(tenant)}): entregas/tarefas com prazo ` +
     "pra hoje ou atrasadas, e reuniões pautadas; " +
-    "(3) um resumo curto (2-4 linhas) das notícias mais relevantes " +
-    "com base SÓ nos dados abaixo — eles já vêm organizados por categoria " +
-    "(gatilho regulatório, radar competitivo, sinal de demanda/risco); priorize " +
-    "gatilho regulatório e sinal de demanda (viram janela de urgência comercial), " +
-    "não invente nada além do que está listado, e se não houver nada relevante " +
-    "diga isso em uma linha. " +
-    "Se algum bloco estiver vazio, diga em uma linha. Não faça perguntas, só entregue." +
-    (newsBlock ? `\n\nNOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}` : "");
+    "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
+    "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
+    "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
+    "com a data. NÃO invente nada além do que está listado, e NÃO explique por " +
+    "que um bloco veio vazio — se não há sinal, diga só 'sem sinal novo hoje'. " +
+    "Não faça perguntas, só entregue." +
+    (sinaisBlock ? `\n\n${sinaisBlock}` : "");
 
   const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
   await enviarTextoTenant(entrega, text, tenantId);
