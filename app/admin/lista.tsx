@@ -21,6 +21,18 @@ export interface UsoAdmin {
   usd: number;
 }
 
+/** Entrega quebrada nas últimas 24h, por tenant. Ver a montagem em page.tsx. */
+export interface FalhaEntrega {
+  /** Lembretes vencidos que já falharam ao menos uma vez e não foram entregues. */
+  naoEntregues: number;
+  /** Quantos desses o cron já desistiu de tentar. */
+  desistidos: number;
+  /** fire_at do mais recente — é "quando devia ter chegado", não a hora da tentativa. */
+  ultimaTentativaEm: string;
+  /** Motivo da última falha. Já passa por semDadoPessoal() na gravação. */
+  ultimoErro: string | null;
+}
+
 export interface CadastroAdmin {
   slug: string;
   nome: string;
@@ -34,6 +46,8 @@ export interface CadastroAdmin {
   aprovadoEm: string | null;
   recusadoEm: string | null;
   criadoEm: string;
+  /** Ausente = nenhuma entrega falhando pra este tenant nas últimas 24h. */
+  entrega?: FalhaEntrega;
 }
 
 // `channel_preference` virou texto livre ("whatsapp,teams") desde que o
@@ -84,6 +98,17 @@ export default function AdminLista({
   const aguardando = cadastros.filter((c) => !c.aprovadoEm && !c.recusadoEm);
   const rodando = cadastros.filter((c) => c.aprovadoEm);
   const recusados = cadastros.filter((c) => c.recusadoEm);
+
+  // Faixa de entrega quebrada: existe SÓ quando há falha de verdade nas
+  // últimas 24h. Nada de moldura permanente — um alerta que está sempre lá
+  // deixa de ser alerta, e era exatamente o silêncio que a gente estava
+  // consertando.
+  const semEntrega = cadastros.filter((c) => c.entrega);
+  const totalNaoEntregues = semEntrega.reduce((n, c) => n + (c.entrega?.naoEntregues ?? 0), 0);
+  const erroMaisRecente = semEntrega
+    .slice()
+    .sort((a, b) => (b.entrega!.ultimaTentativaEm > a.entrega!.ultimaTentativaEm ? 1 : -1))[0]
+    ?.entrega?.ultimoErro ?? null;
 
   const custoTotal = uso.reduce((s, u) => s + u.usd, 0);
   // Média SÓ entre quem é gente: a linha da plataforma (classificador) não é
@@ -170,6 +195,30 @@ export default function AdminLista({
       <div className="mx-auto flex max-w-[1040px] flex-col gap-8 px-8 py-9">
         {erro && (
           <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">{erro}</p>
+        )}
+
+        {semEntrega.length > 0 && (
+          <div className="flex items-start gap-3 rounded-xl border border-aurora-crit/30 bg-aurora-crit/[0.08] px-4 py-3.5">
+            <span aria-hidden="true" className="text-[15px] leading-tight text-aurora-crit">
+              ▲
+            </span>
+            <p className="text-[12.5px] leading-relaxed text-aurora-crit">
+              <strong className="font-extrabold">
+                {semEntrega.length === 1
+                  ? "1 usuário não está recebendo mensagem."
+                  : `${semEntrega.length} usuários não estão recebendo mensagem.`}
+              </strong>
+              <br />
+              {totalNaoEntregues} lembrete{totalNaoEntregues > 1 ? "s" : ""} não entregue
+              {totalNaoEntregues > 1 ? "s" : ""} nas últimas 24h.
+              {erroMaisRecente && (
+                <>
+                  {" "}
+                  A causa mais recente foi <code className="font-mono text-[11.5px]">{erroMaisRecente}</code>.
+                </>
+              )}
+            </p>
+          </div>
         )}
 
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -490,6 +539,11 @@ export default function AdminLista({
               <span className="font-mono text-[12px] text-aurora-muted">
                 {c.canalVinculado ? "canal vinculado" : "sem canal ainda"}
               </span>
+              {c.entrega && (
+                <span className="rounded-full border border-aurora-crit/30 bg-aurora-crit/10 px-[9px] py-0.5 text-[10.5px] font-bold uppercase tracking-wide text-aurora-crit">
+                  entrega falhando
+                </span>
+              )}
               <span className="ml-auto flex items-center gap-3 text-[11.5px] text-aurora-muted-2">
                 <span>desde {dataCurta(c.aprovadoEm!)}</span>
                 {!c.dono && (
@@ -503,6 +557,20 @@ export default function AdminLista({
                   </button>
                 )}
               </span>
+              {/* Segunda linha (basis-full) porque o motivo é o que faz agir —
+                  o selo sozinho só diz que tem problema, não o que fazer. */}
+              {c.entrega && (
+                <p className="basis-full text-[11.5px] leading-snug text-aurora-crit">
+                  {c.entrega.naoEntregues} lembrete{c.entrega.naoEntregues > 1 ? "s" : ""} não entregue
+                  {c.entrega.naoEntregues > 1 ? "s" : ""} · devia ter chegado {dataHora(c.entrega.ultimaTentativaEm)}
+                  {c.entrega.ultimoErro && (
+                    <>
+                      {" · "}
+                      <code className="font-mono text-[11px]">{c.entrega.ultimoErro}</code>
+                    </>
+                  )}
+                </p>
+              )}
             </div>
           ))}
         </section>

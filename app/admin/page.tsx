@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/service";
 import { carregaDonoDaPlataforma } from "@/lib/admin-guard";
-import AdminLista, { type CadastroAdmin, type UsoAdmin } from "./lista";
+import AdminLista, { type CadastroAdmin, type FalhaEntrega, type UsoAdmin } from "./lista";
 import { semDadoPessoal } from "@/lib/log-seguro";
 import { custoUsd, PRECOS } from "@/lib/precos-modelo";
 
@@ -60,6 +60,55 @@ export default async function AdminPage() {
     recusadoEm: (t.recusado_em as string | null) ?? null,
     criadoEm: String(t.created_at),
   }));
+
+  // Entrega quebrada nas últimas 24h. A pergunta que isto responde é a que
+  // ninguém estava fazendo: "tem alguém que a Mia não está conseguindo
+  // alcançar?". Em 01/09/2026 a resposta era sim, havia dias, e a única pista
+  // era log de cron — que ninguém abre.
+  //
+  // Só linhas que JÁ falharam ao menos uma vez e ainda não foram entregues:
+  // `tentativas > 0` + `sent_at` nulo. É um conjunto naturalmente pequeno
+  // (lembrete que entrega de primeira nunca entra), então dá pra agrupar aqui
+  // sem repetir o problema de teto de linhas que o uso_por_tenant já teve.
+  const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: falhasRows, error: falhasErro } = await admin
+    .from("scheduled_reminders")
+    .select("tenant_id, desistiu_em, ultimo_erro, fire_at, tentativas")
+    .gt("tentativas", 0)
+    .is("sent_at", null)
+    .order("fire_at", { ascending: false })
+    .limit(200);
+  if (falhasErro) {
+    console.error(`[admin] falhas de entrega: ${semDadoPessoal(falhasErro.message)}`);
+  }
+
+  type LinhaFalha = {
+    tenant_id: string | null;
+    desistiu_em: string | null;
+    ultimo_erro: string | null;
+    fire_at: string;
+    tentativas: number;
+  };
+  const entregaPorTenant = new Map<string, FalhaEntrega>();
+  for (const f of (falhasRows ?? []) as LinhaFalha[]) {
+    // Desistência velha já é história: some da tela depois de 24h em vez de
+    // virar um alerta permanente que ninguém consegue limpar.
+    if (f.desistiu_em && f.desistiu_em < desde24h) continue;
+    if (!f.tenant_id) continue;
+    const atual = entregaPorTenant.get(f.tenant_id) ??
+      { naoEntregues: 0, desistidos: 0, ultimaTentativaEm: f.fire_at, ultimoErro: null };
+    atual.naoEntregues += 1;
+    if (f.desistiu_em) atual.desistidos += 1;
+    // As linhas vêm ordenadas por fire_at desc, então a PRIMEIRA de cada
+    // tenant é a mais recente — é dela que sai o erro que a tela mostra.
+    if (atual.ultimoErro === null) atual.ultimoErro = f.ultimo_erro;
+    entregaPorTenant.set(f.tenant_id, atual);
+  }
+  for (const c of cadastros) {
+    const id = linhas.find((t) => String(t.slug) === c.slug)?.id;
+    const falha = id ? entregaPorTenant.get(String(id)) : undefined;
+    if (falha) c.entrega = falha;
+  }
 
   const nomeDono = linhas.find((t) => t.auth_user_id === dono.authUserId)?.nome as string | null;
   const primeiroNome = (nomeDono ?? "").trim().split(/\s+/)[0] ?? "";
