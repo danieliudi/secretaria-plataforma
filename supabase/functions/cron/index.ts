@@ -1533,6 +1533,10 @@ async function runScheduled(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
     .eq("tenant_id", tenant.id)
     .lte("fire_at", nowISO)
     .is("sent_at", null)
+    // `desistiu_em` é o outro estado final: o cron estourou o teto de
+    // tentativas e parou. Sem este filtro a linha reentraria pra sempre — era
+    // justamente pra evitar isso que a desistência gravava sent_at antes.
+    .is("desistiu_em", null)
     .order("fire_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`scheduled_reminders load: ${error.message}`);
@@ -1572,18 +1576,38 @@ async function runScheduled(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
     } catch (err) {
       // Falha de envio: sem teto, um tenant com destino quebrado (canal nunca
       // vinculado, credencial revogada) reentraria pra sempre, a cada 5 min.
-      // Com teto, a linha para de reentrar e vira um caso visível (marca
-      // sent_at mesmo sem entregar, só depois de esgotar as tentativas).
+      // Com teto, a linha para de reentrar — marcando `desistiu_em`, NUNCA
+      // `sent_at`: até 01/09/2026 a desistência gravava sent_at, e a tabela
+      // passava a afirmar que um lembrete que nunca saiu tinha sido entregue.
       const tentativas = r.tentativas + 1;
       const esgotou = tentativas >= SCHEDULED_MAX_TENTATIVAS;
+      const motivo = semDadoPessoal(err).slice(0, 500);
       await sb
         .from("scheduled_reminders")
-        .update(esgotou ? { tentativas, sent_at: new Date().toISOString() } : { tentativas })
+        .update(
+          esgotou
+            ? { tentativas, desistiu_em: new Date().toISOString(), ultimo_erro: motivo }
+            : { tentativas, ultimo_erro: motivo },
+        )
         .eq("id", r.id);
       console.error(
         `[cron] scheduled '${r.id}' send falhou (tentativa ${tentativas}/${SCHEDULED_MAX_TENTATIVAS}${esgotou ? ", desistindo" : ""}):`,
-        semDadoPessoal(err),
+        motivo,
       );
+      // Rastro consultável, porque log de cron ninguém abre: foi assim que um
+      // tenant ficou dias sem receber lembrete nenhum sem ninguém perceber.
+      // Só na PRIMEIRA falha e na desistência — as tentativas do meio não
+      // acrescentam nada e virariam 10 linhas iguais por lembrete.
+      //
+      // tenant_id (uuid) em vez de slug, e nada de user_id nem do texto do
+      // lembrete: `async_debug` não é lugar de dado pessoal.
+      if (tentativas === 1 || esgotou) {
+        await sb.from("async_debug").insert({
+          step: esgotou ? "entrega_desistiu" : "entrega_falhou",
+          detail:
+            `tenant_id=${tenant.id} lembrete=${r.id} tentativa=${tentativas}/${SCHEDULED_MAX_TENTATIVAS} erro=${motivo}`,
+        });
+      }
     }
   }
   return { sent, scanned: pending.length };
@@ -3462,6 +3486,10 @@ async function tenantIdsComLembreteVencido(): Promise<Set<string>> {
     .from("scheduled_reminders")
     .select("tenant_id")
     .is("sent_at", null)
+    // Sem `desistiu_em` aqui, um lembrete que o cron já desistiu de entregar
+    // manteria o tenant nesta lista pra sempre: a cada 5 min o cron acordaria
+    // runScheduled pra ele e não acharia nada (a varredura de lá já exclui).
+    .is("desistiu_em", null)
     .lte("fire_at", new Date().toISOString());
   if (error) throw new Error(`pré-filtro de scheduled falhou: ${error.message}`);
   return new Set((data ?? []).map((r: { tenant_id: string }) => r.tenant_id));
