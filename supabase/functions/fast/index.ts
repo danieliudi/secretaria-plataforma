@@ -17,7 +17,13 @@
 import { getAnthropicClient } from "../_shared/anthropic.ts";
 import { origemPorUsuario, registraUso, type OrigemUso, type UsageAnthropic } from "../_shared/uso.ts";
 import { isInternalCall, respostaNaoAutorizado } from "../_shared/internal-auth.ts";
-import { buildFastSystemPrompt, DEFAULT_PERSONA, nowInSaoPaulo, type TenantPersona } from "../_shared/fast.ts";
+import {
+  blocoAgora,
+  buildFastSystemPrompt,
+  DEFAULT_PERSONA,
+  nowInSaoPaulo,
+  type TenantPersona,
+} from "../_shared/fast.ts";
 import { instrucaoRedacao, normalizaPersonalidade } from "../_shared/personalidade.ts";
 import type { Decision, ReflexResult } from "../_shared/types.ts";
 import {
@@ -186,7 +192,7 @@ import {
   type ReportarFeedbackInput,
   type ReportarFeedbackResult,
 } from "./tools/feedback.ts";
-import { buildTenantEnv, getTenantBySlug } from "../_shared/tenant.ts";
+import { buildTenantEnv, getTenantBySlug, type Tenant } from "../_shared/tenant.ts";
 import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { LIMITE_BLOQUEIO_POR_HORA, LIMITE_OBSERVACAO_POR_HORA, registraChamadaJanela } from "../_shared/rate-limit.ts";
@@ -958,6 +964,31 @@ const TOOLS = [
 
 // ─── System prompt builder ───────────────────────────────────────────────────
 
+// Tools que só existem pra quem tem a integração ligada. Sem esse filtro, o
+// array inteiro ia pra todo tenant em TODA mensagem — e as 5 abaixo (~1.150
+// tokens) são inúteis pra quem não é o dono da plataforma: as próprias
+// implementações recusariam. Os blocos de system correspondentes já dizem
+// "não configurado" nesse caso, então o texto continua batendo com as tools
+// que o modelo realmente recebe.
+const TOOLS_SO_COM_GA4 = new Set(["get_ga4_metrics"]);
+const TOOLS_SO_COM_CRM = new Set([
+  "list_crm_leads",
+  "list_marketing_campaigns",
+  "list_marketing_deliverables",
+  "list_supplier_quotes",
+]);
+
+export function toolsDoTenant(env: (key: string) => string | undefined): typeof TOOLS {
+  const ga4 = tryLoadGa4Map(env);
+  const temGa4 = Boolean(ga4 && Object.keys(ga4).length > 0);
+  const temCrm = hasCrmConfig(env);
+  if (temGa4 && temCrm) return TOOLS;
+  return TOOLS.filter((t) =>
+    !(TOOLS_SO_COM_GA4.has(t.name) && !temGa4) &&
+    !(TOOLS_SO_COM_CRM.has(t.name) && !temCrm)
+  );
+}
+
 const TOOLS_INSTRUCTIONS_TEMPLATE = `
 {{calendar_email_block}}
 
@@ -1109,6 +1140,8 @@ ACESSO AO EMAIL (${email}, somente leitura)
 - ${querySyntaxNote}`;
 }
 
+/** Prefixo ESTÁVEL do system prompt — é isto que vai com `cache_control`.
+ *  O bloco "agora" NÃO está aqui de propósito (ver blocoAgora). */
 export function buildFastWithToolsSystemPrompt(
   now: Date = new Date(),
   tasksBlock: string = getTaskProvider().buildSystemBlock(),
@@ -1117,7 +1150,11 @@ export function buildFastWithToolsSystemPrompt(
   crmBlock: string = buildCrmSystemBlock(false),
   calendarEmailBlock: string = buildCalendarEmailSystemBlock(false),
 ): string {
-  const base = buildFastSystemPrompt(nowInSaoPaulo(now), persona);
+  // `null` = sem o bloco "Agora: ..." — ele vai separado, fora do cache
+  // (ver blocoAgora em _shared/fast.ts e o segundo bloco de system em
+  // createMessage). `now` continua sendo usado pro {{today_iso}}, que muda
+  // uma vez por dia e não vale a pena tirar do prefixo.
+  const base = buildFastSystemPrompt(null, persona);
   const tools = TOOLS_INSTRUCTIONS_TEMPLATE
     .replace("{{today_iso}}", todayISOInSP(now))
     .replace("{{calendar_email_block}}", calendarEmailBlock)
@@ -1163,10 +1200,22 @@ export interface AnthropicMessage {
   content: ContentBlock[];
 }
 
+/** System prompt partido em duas metades por causa do cache de prompt:
+ *  o prefixo estável é cacheado, o "agora" (que muda a cada minuto) não. */
+export interface SystemPromptDividido {
+  /** Prefixo estável — vai com `cache_control`. */
+  estavel: string;
+  /** Data/hora com minuto. Vai num segundo bloco, DEPOIS do breakpoint. */
+  agora: string;
+}
+
 export interface CreateMessageParams {
   model: string;
   max_tokens: number;
+  /** Prefixo estável (cacheado). */
   system: string;
+  /** Bloco volátil, enviado sem cache logo depois do prefixo. */
+  systemAgora: string;
   tools: typeof TOOLS;
   messages: MessageParam[];
 }
@@ -1175,10 +1224,15 @@ export interface CreateMessageParams {
 
 export interface FastWithToolsDeps {
   now: () => Date;
-  /** Constrói o system prompt completo. Default lê o provider de tarefas ativo
+  /** Constrói o system prompt, já partido entre prefixo estável (cacheado) e
+   *  bloco "agora" (volátil). Default lê o provider de tarefas ativo
    *  (TASK_PROVIDER) do env pra injetar a lista dinâmica de frentes/lists.
    *  Tests passam um builder fixo. */
-  buildSystemPrompt: (now: Date) => string;
+  buildSystemPrompt: (now: Date) => SystemPromptDividido;
+  /** Definições de tool mandadas ao modelo, já filtradas pela capacidade do
+   *  tenant (ver toolsDoTenant). Separado do objeto `tools` abaixo, que são as
+   *  implementações. */
+  toolsDefinidas: typeof TOOLS;
   createMessage: (params: CreateMessageParams) => Promise<AnthropicMessage>;
   tools: {
     getNextEvents: (n: number) => Promise<CalendarEvent[]>;
@@ -1310,17 +1364,18 @@ export function defaultFastWithToolsDeps(
   };
   return {
     now: () => new Date(),
-    buildSystemPrompt: (now) => {
-      const ga4 = tryLoadGa4Map(env);
-      return buildFastWithToolsSystemPrompt(
+    buildSystemPrompt: (now) => ({
+      estavel: buildFastWithToolsSystemPrompt(
         now,
         getTaskProvider(env).buildSystemBlock(),
-        buildGa4SystemBlock(ga4, env),
+        buildGa4SystemBlock(tryLoadGa4Map(env), env),
         persona,
         buildCrmSystemBlock(hasCrmConfig(env)),
         buildCalendarEmailSystemBlock(usaOutlookParaCalendarEEmail),
-      );
-    },
+      ),
+      agora: blocoAgora(nowInSaoPaulo(now)),
+    }),
+    toolsDefinidas: toolsDoTenant(env),
     createMessage: async (params) => {
       const client = getAnthropicClient();
       // Prompt caching (mitigação de custo + ITPM): o loop de tool use reenvia
@@ -1333,12 +1388,16 @@ export function defaultFastWithToolsDeps(
           ? { ...t, cache_control: { type: "ephemeral" as const } }
           : t
       );
+      // Dois blocos de propósito: o breakpoint de cache é o PRIMEIRO, então
+      // tudo depois dele (o "agora", com minuto) pode mudar sem invalidar o
+      // prefixo de ~17k tokens. Ver blocoAgora em _shared/fast.ts.
       const cachedSystem = [
         {
           type: "text" as const,
           text: params.system,
           cache_control: { type: "ephemeral" as const },
         },
+        { type: "text" as const, text: params.systemAgora },
       ];
       const response = await client.messages.create({
         model: params.model,
@@ -1827,7 +1886,8 @@ export async function handleFastWithTools(
   deps: FastWithToolsDeps = defaultFastWithToolsDeps(),
   userId?: string,
 ): Promise<ReflexResult> {
-  let system = deps.buildSystemPrompt(deps.now());
+  const prompt = deps.buildSystemPrompt(deps.now());
+  let system = prompt.estavel;
 
   // Memória (2E + 2F): com userId, carrega histórico recente e perfil acumulado
   // em paralelo. O histórico vira mensagens; o perfil é injetado no system prompt.
@@ -1859,7 +1919,8 @@ export async function handleFastWithTools(
         model: FAST_MODEL,
         max_tokens: FAST_MAX_TOKENS,
         system,
-        tools: TOOLS,
+        systemAgora: prompt.agora,
+        tools: deps.toolsDefinidas,
         messages,
       });
     } catch (err) {
@@ -1929,7 +1990,16 @@ export async function handleFastWithTools(
 
 // ─── Entry point HTTP ────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
+// O servidor sobe SEMPRE, menos quando MIA_TEST_MODE está setado. A negativa é
+// de propósito: em produção ninguém seta essa variável, então qualquer engano
+// aqui erra pro lado de servir, nunca pro lado de ficar mudo. É o que permite a
+// suíte de comportamento (_tests/comportamento.test.ts) importar handleFastWithTools
+// e as TOOLS reais sem que o import binde uma porta.
+if (!Deno.env.get("MIA_TEST_MODE")) {
+  Deno.serve(handlerHttp);
+}
+
+async function handlerHttp(req: Request): Promise<Response> {
   if (req.method !== "POST") return resp("Method Not Allowed", 405);
 
   // /fast só aceita chamada INTERNA. Sem isto, qualquer um na internet mandava
@@ -1974,39 +2044,56 @@ Deno.serve(async (req: Request) => {
   let deps = defaultFastWithToolsDeps();
   let tenantId: string | undefined;
   if (tenantSlugRaw) {
+    // Quem manda `tenant_slug` está dizendo DE QUEM é esta mensagem. Se não dá
+    // pra confirmar quem é, a única resposta segura é não responder.
+    //
+    // Até 01/09/2026 os dois caminhos de falha aqui caíam no env global — que
+    // é o do DONO DA PLATAFORMA. Um blip de banco na resolução do tenant, ou
+    // um slug que não existe mais, e a mensagem de outra pessoa era atendida
+    // com o Google, o Gmail e o CRM do dono. O comentário logo abaixo já dizia
+    // que "cair no global seria pior que negar", mas isso só valia pro tenant
+    // não aprovado; erro e not-found seguiam passando.
+    //
+    // 409 (e não 500) porque não é defeito do chamador nem do servidor: é
+    // ambiguidade de identidade. Mesmo código e mesma razão do /reflex quando
+    // chega mensagem sem `from`. O callFastEndpoint trata qualquer não-2xx
+    // devolvendo a mensagem humana de fallback, então a pessoa vê "tenta de
+    // novo daqui a pouco" em vez de resposta com a conta de outro.
+    let tenant: Tenant | null;
     try {
-      const tenant = await getTenantBySlug(tenantSlugRaw);
-      // Portão de acesso, em profundidade. Hoje /reflex, /telegram e o cron já
-      // barram tenant não aprovado antes de chegar aqui — mas o portão morava
-      // SÓ neles. Um caminho novo que chamasse /fast (endpoint do site, job)
-      // nasceria sem portão nenhum, e /fast dá acesso a agenda, Gmail, CRM e
-      // despesa. Recusa explícita em vez de seguir com env global: cair no
-      // global aqui seria pior que negar — usaria a credencial do dono da
-      // plataforma pra atender quem não foi aprovado.
-      if (tenant && !tenant.aprovado_em) {
-        return resp({ error: "tenant sem acesso liberado" }, 403);
-      }
-      if (tenant) {
-        tenantId = tenant.id;
-        const persona: TenantPersona = {
-          nome: tenant.nome,
-          cargo: tenant.cargo,
-          frentes: tenant.frentes,
-          persona: tenant.persona,
-          usaVocativo: tenant.usa_vocativo,
-          tratamento: tenant.tratamento,
-          personalidade: tenant.personalidade,
-        };
-        deps = defaultFastWithToolsDeps(
-          await buildTenantEnv(tenant),
-          persona,
-          tenant.id,
-          origemPorUsuario(userId),
-        );
-      }
+      tenant = await getTenantBySlug(tenantSlugRaw);
     } catch (err) {
-      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou, seguindo com env global: ${semDadoPessoal(err)}`);
+      console.error(`[fast] resolução de tenant '${tenantSlugRaw}' falhou — recusando: ${semDadoPessoal(err)}`);
+      return resp({ error: "não foi possível identificar de quem é esta conversa" }, 409);
     }
+    if (!tenant) {
+      console.warn(`[fast] tenant '${tenantSlugRaw}' não encontrado — recusando em vez de cair no env global`);
+      return resp({ error: "não foi possível identificar de quem é esta conversa" }, 409);
+    }
+    // Portão de acesso, em profundidade. Hoje /reflex, /telegram e o cron já
+    // barram tenant não aprovado antes de chegar aqui — mas o portão morava
+    // SÓ neles. Um caminho novo que chamasse /fast (endpoint do site, job)
+    // nasceria sem portão nenhum, e /fast dá acesso a agenda, Gmail, CRM e
+    // despesa.
+    if (!tenant.aprovado_em) {
+      return resp({ error: "tenant sem acesso liberado" }, 403);
+    }
+    tenantId = tenant.id;
+    const persona: TenantPersona = {
+      nome: tenant.nome,
+      cargo: tenant.cargo,
+      frentes: tenant.frentes,
+      persona: tenant.persona,
+      usaVocativo: tenant.usa_vocativo,
+      tratamento: tenant.tratamento,
+      personalidade: tenant.personalidade,
+    };
+    deps = defaultFastWithToolsDeps(
+      await buildTenantEnv(tenant),
+      persona,
+      tenant.id,
+      origemPorUsuario(userId),
+    );
   }
 
   // Taxa por tenant, em dois patamares (ver _shared/rate-limit.ts): acima de
@@ -2039,7 +2126,7 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return resp({ error: semDadoPessoal(err) }, 500);
   }
-});
+}
 
 function resp(data: unknown, status: number): Response {
   return new Response(JSON.stringify(data), {

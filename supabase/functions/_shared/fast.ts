@@ -61,18 +61,17 @@ function familyBlock(persona?: Record<string, unknown>): string {
   return `\n\nFAMÍLIA (use só quando a conversa exigir — não puxe assunto)\n${lines.map((f) => `- ${f}`).join("\n")}`;
 }
 
-// System prompt — v2 aprovado. {{datetime}} e os campos de identidade são
-// injetados em runtime (ver buildFastSystemPrompt). O restante do texto
+// System prompt — v2 aprovado. Os campos de identidade são injetados em
+// runtime (ver buildFastSystemPrompt). {{contexto_atual}} é o único pedaço que
+// muda a cada minuto — ver blocoAgora() pro porquê de ele sair daqui.
+// O restante do texto
 // (tom, estilo, exemplos) trata "Daniel" como o nome-placeholder — trocado
 // pelo primeiro nome real do tenant depois de montado (ver replace no final
 // de buildFastSystemPrompt), pra não precisar reescrever cada frase.
 export const FAST_SYSTEM_PROMPT_TEMPLATE =
   `Você é a Secretária Executiva do {{nome}} via WhatsApp.
 
-CONTEXTO ATUAL
-- Agora: {{datetime}}
-
-QUEM É {{primeiro_nome_upper}}
+{{contexto_atual}}QUEM É {{primeiro_nome_upper}}
 - Nome completo: {{nome}}
 {{cargo_line}}{{frentes_line}}- Comunica por WhatsApp. Quer respostas curtas e diretas.{{familia_block}}
 
@@ -170,7 +169,31 @@ function exemploCrise(persona: TenantPersona): string {
   return `"${voc}, ${base}" (notícia ruim é onde o vocativo acolhe)`;
 }
 
-export function buildFastSystemPrompt(datetime: string, persona: TenantPersona = DEFAULT_PERSONA): string {
+/**
+ * A ÚNICA parte do system prompt que muda a cada minuto.
+ *
+ * Fica isolada de propósito: o prefixo do prompt vai com `cache_control` na
+ * chamada com tools (ver fast/index.ts), e o cache do Anthropic casa por
+ * prefixo EXATO. Com o "Agora: ..." lá dentro — e ele tem minuto —, o prefixo
+ * inteiro (~17k tokens) virava outro a cada minuto que passava, e toda mensagem
+ * nova pagava escrita de cache (1,25x) em vez de leitura (0,1x). Medido em
+ * `uso_modelo` (31/08/2026): 45% das chamadas escreviam um cache que ninguém
+ * leu. Agora este bloco entra num segundo bloco de system, DEPOIS do
+ * breakpoint, e não invalida mais o prefixo.
+ */
+export function blocoAgora(datetime: string): string {
+  return `CONTEXTO ATUAL\n- Agora: ${datetime}`;
+}
+
+/**
+ * `datetime = null` devolve o prompt SEM o bloco "agora" — é a forma usada no
+ * caminho com tools, que manda esse bloco separado (ver blocoAgora). Passando
+ * a string, o prompt sai completo como sempre foi.
+ */
+export function buildFastSystemPrompt(
+  datetime: string | null,
+  persona: TenantPersona = DEFAULT_PERSONA,
+): string {
   // Sem tenant resolvido não existe nome real pra usar — e inventar um default
   // com dados de pessoa real foi exatamente o problema corrigido em 10/08/2026.
   const temNome = Boolean(persona.nome?.trim());
@@ -184,7 +207,7 @@ export function buildFastSystemPrompt(datetime: string, persona: TenantPersona =
 
   const filled = FAST_SYSTEM_PROMPT_TEMPLATE
     .replaceAll("{{nome}}", nome)
-    .replace("{{datetime}}", datetime)
+    .replace("{{contexto_atual}}", datetime === null ? "" : `${blocoAgora(datetime)}\n\n`)
     .replace("{{primeiro_nome_upper}}", primeiro.toUpperCase())
     .replace("{{cargo_line}}", cargoLine)
     .replace("{{frentes_line}}", frentesLine)

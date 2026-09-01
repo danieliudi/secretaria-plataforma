@@ -495,6 +495,10 @@ const RELACAO_MAX_CARDS_POR_EXECUCAO = 3; // resto fica pra fila do dia seguinte
 const SCHEDULED_MAX_TENTATIVAS = 10; // teto antes de desistir de um lembrete que não consegue entregar
 const TZ = "America/Sao_Paulo";
 
+/** Marca "o resumo da manhã deste dia já saiu", em avisos_enviados. A chave é
+ *  a data em SP (YYYY-MM-DD), então é uma linha por tenant por dia. */
+const BRIEF_TIPO = "brief_do_dia";
+
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
 
@@ -1222,32 +1226,97 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
   const tasks = await getTasksWithDue(env);
   let sent = 0;
 
+  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo já
+  // lista "prazo pra hoje ou atrasadas", então tudo que JÁ estava vencido
+  // naquele momento ele contou — e repetir duas horas depois, uma mensagem por
+  // tarefa, era o grosso do "muito texto".
+  //
+  // O que o resumo lista é: atrasada NAQUELE momento, ou com prazo pra hoje.
+  // Então o alerta só fala de uma tarefa quando ela vira NOTÍCIA depois disso —
+  // venceu de verdade no meio do dia, ou o prazo nem era de hoje.
+  const briefMs = await horaDoBriefDeHoje(tenant.id);
+
+  // Agrupa por (frente, vencida?) antes de mandar. Uma mensagem por grupo em
+  // vez de uma por tarefa; o rótulo do grupo só é honesto se vencida e
+  // vencendo não se misturarem.
+  type Grupo = { label: string; overdue: boolean; itens: typeof tasks };
+  const grupos = new Map<string, Grupo>();
+
   for (const t of tasks) {
     const overdue = t.dueMs < now;
     const dueSoon = t.dueMs >= now && t.dueMs <= now + ALERT_AHEAD_MS;
     if (!overdue && !dueSoon) continue;
+    if (briefMs !== null) {
+      // Estava no resumo de hoje se já tinha vencido quando ele saiu, ou se o
+      // prazo é de hoje ("Prazo hoje" é uma das linhas que ele escreve).
+      const estavaNoResumo = t.dueMs < briefMs || mesmoDiaEm(t.dueMs, briefMs);
+      // ...mas se venceu DEPOIS do resumo, virou informação nova: o resumo
+      // disse "vence hoje às 15h", e agora são 15h05 e passou.
+      const venceuDepoisDoResumo = overdue && t.dueMs >= briefMs;
+      if (estavaNoResumo && !venceuDepoisDoResumo) continue;
+    }
 
     // Claim ANTES do envio — mesmo motivo dos outros. Nome da tabela é
     // legado (era ClickUp-only) — dedup funciona igual pra qualquer provider.
     const reivindicado = await reivindicaAlerta(tenant.id, t.id, t.dueMs);
     if (!reivindicado) continue;
 
+    // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
+    // que hoje já roda multi-tenant — `label` já carrega a frente/lista
+    // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
+    const label = t.list ? `${t.frente}/${t.list}` : t.frente;
+    const chave = `${label}\u0000${overdue}`;
+    const grupo = grupos.get(chave) ?? { label, overdue, itens: [] };
+    grupo.itens.push(t);
+    grupos.set(chave, grupo);
+  }
+
+  for (const g of grupos.values()) {
+    const icon = g.overdue ? "🔴" : "🟡";
+    const verbo = g.overdue ? "venceu" : "vence";
+    // Uma tarefa só não vira lista: cabeçalho + um marcador pra uma linha é
+    // mais texto, não menos, que é o oposto do ponto.
+    const text = g.itens.length === 1
+      ? `${icon} Prazo — ${g.label}: "${g.itens[0].name}" ${verbo} ${fmtDateTime(g.itens[0].dueMs)}`
+      : `${icon} *${g.overdue ? "Prazos vencidos" : "Vencendo em breve"} — ${g.label} (${g.itens.length})*\n` +
+        g.itens.map((t) => `· ${t.name} — ${verbo} ${fmtDateTime(t.dueMs)}`).join("\n");
     try {
-      const quando = overdue ? `venceu ${fmtDateTime(t.dueMs)}` : `vence ${fmtDateTime(t.dueMs)}`;
-      const icon = overdue ? "🔴" : "🟡";
-      const label = t.list ? `${t.frente}/${t.list}` : t.frente;
-      // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
-      // que hoje já roda multi-tenant — `label` já carrega a frente/lista
-      // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
-      const text = `${icon} Prazo — ${label}: "${t.name}" ${quando}`;
       await enviarTextoTenant(entrega, text, tenant.id);
     } catch (err) {
-      await desfazAlerta(tenant.id, t.id, t.dueMs);
+      // Rollback do grupo inteiro: sem isso, o que já tinha sido reivindicado
+      // nunca mais alertaria, e a mensagem que o carregava não chegou.
+      for (const t of g.itens) await desfazAlerta(tenant.id, t.id, t.dueMs);
       throw err;
     }
-    sent++;
+    sent += g.itens.length;
   }
   return { sent, scanned: tasks.length };
+}
+
+/** Mesmo dia no fuso do usuário — comparar timestamp cru erraria perto da meia-noite. */
+function mesmoDiaEm(a: number, b: number): boolean {
+  const dia = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: TZ });
+  return dia(a) === dia(b);
+}
+
+/** Quando o resumo da manhã deste tenant saiu hoje, em ms — null se ainda não saiu. */
+async function horaDoBriefDeHoje(tenantId: string): Promise<number | null> {
+  const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const { data, error } = await getSupabaseClient()
+    .from("avisos_enviados")
+    .select("ts")
+    .eq("tenant_id", tenantId)
+    .eq("tipo", BRIEF_TIPO)
+    .eq("chave", hoje)
+    .maybeSingle();
+  if (error) {
+    // Falha aqui não pode calar o alerta: sem a marca, ele volta a mandar
+    // tudo — o comportamento antigo, barulhento mas não omisso.
+    console.error("[cron] alerts: leitura da marca do brief falhou:", semDadoPessoal(error.message));
+    return null;
+  }
+  const ts = (data as { ts?: string } | null)?.ts;
+  return ts ? new Date(ts).getTime() : null;
 }
 
 // Avisa novidade do produto (tabela `atualizacoes`, ver /novidades no site)
@@ -1530,16 +1599,48 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     "(1) os compromissos de hoje na minha agenda, com horário; " +
     `(2) por frente (${frentesEmTexto(tenant)}): entregas/tarefas com prazo ` +
     "pra hoje ou atrasadas, e reuniões pautadas; " +
+    // (3) reescrito na junção de 01/09/2026, preservando DUAS regras que
+    // nasceram separadas e resolvem coisas diferentes do mesmo texto:
+    //   - do main (mockup aprovado no dia): frente sem item é OMITIDA, nunca
+    //     vira uma linha dizendo que não há nada — três frentes vazias viravam
+    //     três linhas de "nada", que era o grosso do "resumo comprido";
+    //   - daqui: proibido EXPLICAR por que um bloco veio vazio. A instrução
+    //     antiga ("se não houver nada relevante, diga isso em uma linha") era
+    //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
+    //     "as fontes de notícias estão indisponíveis no momento" num dia em
+    //     que a única verdade disponível era "não há sinal".
     "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
     "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
     "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
     "com a data. NÃO invente nada além do que está listado, e NÃO explique por " +
     "que um bloco veio vazio — se não há sinal, diga só 'sem sinal novo hoje'. " +
+    "OMITA por completo as frentes que não tiverem nenhum item — não escreva o nome " +
+    "delas nem uma linha dizendo que não há nada. Só se NENHUMA frente tiver item, " +
+    "escreva uma única linha dizendo isso. Vale o mesmo pros blocos de agenda e " +
+    "sinais: vazio se resolve em uma linha, nunca em uma lista de vazios. " +
     "Não faça perguntas, só entregue." +
     (sinaisBlock ? `\n\n${sinaisBlock}` : "");
 
   const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
   await enviarTextoTenant(entrega, text, tenantId);
+
+  // Marca que o resumo de hoje saiu. É o que permite ao runAlerts não repetir
+  // o que este resumo já listou (ver o comentário lá). Gravado DEPOIS do envio
+  // de propósito: resumo que não chegou não pode calar o alerta.
+  // Falha aqui não derruba um brief já entregue — no pior caso o alerta
+  // duplica, que é o comportamento antigo.
+  try {
+    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const { error: briefErr } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hoje });
+    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
+    if (briefErr && (briefErr as { code?: string }).code !== "23505") {
+      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(briefErr.message));
+    }
+  } catch (err) {
+    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
+  }
 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
@@ -1595,6 +1696,10 @@ async function runScheduled(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
     .eq("tenant_id", tenant.id)
     .lte("fire_at", nowISO)
     .is("sent_at", null)
+    // `desistiu_em` é o outro estado final: o cron estourou o teto de
+    // tentativas e parou. Sem este filtro a linha reentraria pra sempre — era
+    // justamente pra evitar isso que a desistência gravava sent_at antes.
+    .is("desistiu_em", null)
     .order("fire_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`scheduled_reminders load: ${error.message}`);
@@ -1634,18 +1739,38 @@ async function runScheduled(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
     } catch (err) {
       // Falha de envio: sem teto, um tenant com destino quebrado (canal nunca
       // vinculado, credencial revogada) reentraria pra sempre, a cada 5 min.
-      // Com teto, a linha para de reentrar e vira um caso visível (marca
-      // sent_at mesmo sem entregar, só depois de esgotar as tentativas).
+      // Com teto, a linha para de reentrar — marcando `desistiu_em`, NUNCA
+      // `sent_at`: até 01/09/2026 a desistência gravava sent_at, e a tabela
+      // passava a afirmar que um lembrete que nunca saiu tinha sido entregue.
       const tentativas = r.tentativas + 1;
       const esgotou = tentativas >= SCHEDULED_MAX_TENTATIVAS;
+      const motivo = semDadoPessoal(err).slice(0, 500);
       await sb
         .from("scheduled_reminders")
-        .update(esgotou ? { tentativas, sent_at: new Date().toISOString() } : { tentativas })
+        .update(
+          esgotou
+            ? { tentativas, desistiu_em: new Date().toISOString(), ultimo_erro: motivo }
+            : { tentativas, ultimo_erro: motivo },
+        )
         .eq("id", r.id);
       console.error(
         `[cron] scheduled '${r.id}' send falhou (tentativa ${tentativas}/${SCHEDULED_MAX_TENTATIVAS}${esgotou ? ", desistindo" : ""}):`,
-        semDadoPessoal(err),
+        motivo,
       );
+      // Rastro consultável, porque log de cron ninguém abre: foi assim que um
+      // tenant ficou dias sem receber lembrete nenhum sem ninguém perceber.
+      // Só na PRIMEIRA falha e na desistência — as tentativas do meio não
+      // acrescentam nada e virariam 10 linhas iguais por lembrete.
+      //
+      // tenant_id (uuid) em vez de slug, e nada de user_id nem do texto do
+      // lembrete: `async_debug` não é lugar de dado pessoal.
+      if (tentativas === 1 || esgotou) {
+        await sb.from("async_debug").insert({
+          step: esgotou ? "entrega_desistiu" : "entrega_falhou",
+          detail:
+            `tenant_id=${tenant.id} lembrete=${r.id} tentativa=${tentativas}/${SCHEDULED_MAX_TENTATIVAS} erro=${motivo}`,
+        });
+      }
     }
   }
   return { sent, scanned: pending.length };
@@ -3524,6 +3649,10 @@ async function tenantIdsComLembreteVencido(): Promise<Set<string>> {
     .from("scheduled_reminders")
     .select("tenant_id")
     .is("sent_at", null)
+    // Sem `desistiu_em` aqui, um lembrete que o cron já desistiu de entregar
+    // manteria o tenant nesta lista pra sempre: a cada 5 min o cron acordaria
+    // runScheduled pra ele e não acharia nada (a varredura de lá já exclui).
+    .is("desistiu_em", null)
     .lte("fire_at", new Date().toISOString());
   if (error) throw new Error(`pré-filtro de scheduled falhou: ${error.message}`);
   return new Set((data ?? []).map((r: { tenant_id: string }) => r.tenant_id));

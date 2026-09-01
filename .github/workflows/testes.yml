@@ -1,0 +1,49 @@
+name: Testes
+
+# NUNCA em push. Dois motivos diferentes, os dois importam:
+#
+# - a suíte de comportamento chama o modelo de verdade e custa dinheiro
+#   (~US$ 0,20 a rodada). Um gatilho automático transformaria cada push num
+#   débito silencioso;
+# - ela roda na mesma temperatura da produção, de propósito (ver o cabeçalho
+#   de _tests/comportamento.test.ts), então uma falha isolada não é
+#   necessariamente regressão. Como bloqueio automático de merge, viraria
+#   ruído que todo mundo aprende a ignorar — que é o oposto do que ela existe
+#   pra fazer.
+#
+# Então: você clica quando quer saber. Actions -> Testes -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      comportamento:
+        description: "Rodar também a suíte de comportamento (chama o modelo, ~US$ 0,20)"
+        type: boolean
+        default: true
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Testes offline (não chamam modelo, não custam nada)
+        run: deno test --allow-env supabase/functions/_tests/
+
+      - name: Suíte de comportamento
+        # Só quando pedido E com a chave configurada. Sem a chave os casos são
+        # PULADOS pelo próprio arquivo de teste, mas aí o passo passaria verde
+        # sem ter testado nada — e "verde sem ter rodado" é pior que vermelho.
+        # Por isso o passo falha explicitamente dizendo o que fazer.
+        if: ${{ inputs.comportamento }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY não está configurada. Adicione em Settings -> Secrets and variables -> Actions -> New repository secret, com esse nome exato. Sem ela os casos seriam pulados e este passo ficaria verde sem ter testado nada."
+            exit 1
+          fi
+          deno test --allow-net --allow-env supabase/functions/_tests/comportamento.test.ts

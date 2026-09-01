@@ -84,6 +84,11 @@ export function defaultScheduledReminderDeps(): ScheduledReminderDeps {
         .select("id, user_id, fire_at, text, recurrence")
         .eq("user_id", userId)
         .is("sent_at", null)
+        // Lembrete que o cron desistiu de entregar NÃO conta como pendente:
+        // senão ele seguiria disparando `conflict: true` e a secretária ficaria
+        // perguntando "já tem um parecido, quer criar mesmo assim?" por causa
+        // de uma mensagem que a pessoa nunca recebeu.
+        .is("desistiu_em", null)
         .gte("fire_at", fromISO)
         .lte("fire_at", toISO);
       if (error) throw new Error(error.message);
