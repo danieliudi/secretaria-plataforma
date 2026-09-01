@@ -20,11 +20,25 @@
 /** Quanto tempo de agenda passada conta como "já estive aqui". */
 export const MESES_DE_HISTORICO = 12;
 
-/** Compromissos virtuais não são lugares — nunca viram "lugar novo". */
+/**
+ * Compromissos virtuais não são lugares — nunca viram "lugar novo".
+ *
+ * Duas formas, e a segunda faltava: o link (o que o convite cola no campo) e o
+ * NOME DO PRODUTO EM TEXTO PURO, que é o que o Outlook e o Google Calendar
+ * escrevem no local ("Microsoft Teams Meeting"). Sem as formas de texto, uma
+ * reunião de Teams passava por endereço físico e virava um "amanhã tem lugar
+ * novo" sobre uma sala que não existe — o tipo de erro que, pelo viés declarado
+ * no topo deste arquivo, é o mais caro que esta feature pode cometer.
+ * Pego pelo CI em 01/09/2026 (_tests/lugar-novo.test.ts).
+ */
 const MARCAS_DE_VIRTUAL = [
+  // links
   "meet.google", "zoom.us", "teams.microsoft", "teams.live", "whereby",
-  "http://", "https://", "webex", "hangout", "online", "remoto", "virtual",
-  "a definir", "a confirmar",
+  "http://", "https://", "webex", "hangout",
+  // nome do produto em texto puro, como o convite escreve
+  "microsoft teams", "teams meeting", "google meet", "zoom meeting", "skype",
+  // genéricos
+  "online", "remoto", "virtual", "a definir", "a confirmar",
 ];
 
 // Palavras que aparecem em QUALQUER endereço brasileiro e por isso não
