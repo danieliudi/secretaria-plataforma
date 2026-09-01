@@ -37,8 +37,28 @@ export async function gerarDocx(spec: DocumentoSpec): Promise<Uint8Array> {
   return await Packer.toBuffer(doc);
 }
 
+/**
+ * Sob a resolução do Deno, o default do `pptxgenjs` chega como namespace do
+ * módulo, sem construct signature — `new PptxGenJS()` fazia `deno check`
+ * recusar o arquivo inteiro (1 dos 6 erros que quebravam `deno test` em
+ * 01/09/2026). Em runtime o valor É o construtor; o que falta é só a assinatura
+ * no .d.ts.
+ *
+ * Em vez de `as any` (que apagaria a checagem do uso todo), o cast declara só a
+ * superfície que este arquivo usa. Se o dia em que a API mudar chegar, quebra
+ * aqui em vez de em produção.
+ */
+interface SlidePptx {
+  addText(texto: string, opcoes: Record<string, unknown>): void;
+}
+interface ApresentacaoPptx {
+  addSlide(): SlidePptx;
+  write(opcoes: { outputType: string }): Promise<unknown>;
+}
+const ConstrutorPptx = PptxGenJS as unknown as new () => ApresentacaoPptx;
+
 export async function gerarPptx(spec: DocumentoSpec): Promise<Uint8Array> {
-  const pres = new PptxGenJS();
+  const pres = new ConstrutorPptx();
 
   const capa = pres.addSlide();
   capa.addText(spec.titulo, {

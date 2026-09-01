@@ -22,11 +22,19 @@ export type OrigemUso =
   | "consolidacao";
 
 /** Formato do campo `usage` que a API da Anthropic devolve em toda resposta. */
+/**
+ * O SDK da Anthropic devolve `number | null` nos campos de cache (não
+ * `undefined`) quando a chamada não usou cache. Declarar só `?: number` fazia
+ * `deno check` recusar TODA chamada de registraUso que passasse `response.usage`
+ * direto — 3 dos 6 erros que quebravam `deno test` em 01/09/2026.
+ * O `?? 0` na gravação já trata null e undefined igual, então aceitar os dois
+ * aqui não muda nada em runtime; só para de mentir sobre o que chega.
+ */
 export interface UsageAnthropic {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
 }
 
 /**

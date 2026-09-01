@@ -113,7 +113,12 @@ export async function sendTelegramDocument(
   const url = `${TELEGRAM_API}/bot${botToken(deps.env)}/sendDocument`;
   const form = new FormData();
   form.append("chat_id", String(chatId));
-  form.append("document", new Blob([bytes], { type: mimeType }), fileName);
+  // `bytes` chega como Uint8Array<ArrayBufferLike>, e BlobPart exige
+  // ArrayBufferView<ArrayBuffer> — um ArrayBufferLike pode ser SharedArrayBuffer,
+  // que o Blob não aceita. `new Uint8Array(bytes)` copia pra um ArrayBuffer
+  // comum e o tipo fecha. Cópia é barata perto do upload que vem em seguida, e
+  // é o que evita o `as unknown as` que esconderia um erro de verdade depois.
+  form.append("document", new Blob([new Uint8Array(bytes)], { type: mimeType }), fileName);
   if (caption) form.append("caption", caption);
 
   const res = await deps.fetch(url, { method: "POST", body: form });
@@ -134,7 +139,7 @@ export async function sendTelegramVoice(
   const url = `${TELEGRAM_API}/bot${botToken(deps.env)}/sendVoice`;
   const form = new FormData();
   form.append("chat_id", String(chatId));
-  form.append("voice", new Blob([audioBytes], { type: "audio/ogg" }), "voice.ogg");
+  form.append("voice", new Blob([new Uint8Array(audioBytes)], { type: "audio/ogg" }), "voice.ogg");
 
   const res = await deps.fetch(url, { method: "POST", body: form });
   if (!res.ok) {
