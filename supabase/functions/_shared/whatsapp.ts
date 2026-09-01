@@ -47,9 +47,19 @@ function evolutionConfig(env: (k: string) => string | undefined): {
   const instance = evolutionInstance(env);
   const apikey = env("EVOLUTION_API_KEY");
   if (!base || !instance || !apikey) {
-    throw new Error(
-      "Evolution secrets ausentes: EVOLUTION_API_URL, EVOLUTION_INSTANCE (ou EVOLUTION_INSTANCE_NAME), EVOLUTION_API_KEY",
-    );
+    // Nomeia SÓ o que realmente falta. A lista fixa dos três custou caro em
+    // 01/09/2026: um tenant de número compartilhado ficou dias sem receber
+    // lembrete agendado, e o log dizia que faltava EVOLUTION_API_URL — que
+    // estava setada. A que faltava era PLATFORM_EVOLUTION_API_KEY, e o erro
+    // apontava pro lugar errado. Quem lê este erro está debugando entrega
+    // quebrada; a lista precisa ser a resposta, não um lembrete do contrato.
+    //
+    // Só NOME de variável, nunca valor — este texto vai pra console.error.
+    const faltando: string[] = [];
+    if (!base) faltando.push("EVOLUTION_API_URL");
+    if (!instance) faltando.push("EVOLUTION_INSTANCE (ou EVOLUTION_INSTANCE_NAME)");
+    if (!apikey) faltando.push("EVOLUTION_API_KEY");
+    throw new Error(`Evolution secrets ausentes: ${faltando.join(", ")}`);
   }
   return { base: base.replace(/\/$/, ""), instance, apikey };
 }
