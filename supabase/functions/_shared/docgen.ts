@@ -48,8 +48,13 @@ export async function gerarDocx(spec: DocumentoSpec): Promise<Uint8Array> {
  * superfície que este arquivo usa. Se o dia em que a API mudar chegar, quebra
  * aqui em vez de em produção.
  */
+/** `addText` aceita texto simples OU uma lista de trechos (que é como saem os
+ *  marcadores das seções, logo abaixo). Declarar só a forma string fez o CI
+ *  recusar a chamada da lista — a interface tem que cobrir os dois usos reais
+ *  deste arquivo, senão ela troca um erro de tipo por outro. */
+type TrechoPptx = { text: string; options?: Record<string, unknown> };
 interface SlidePptx {
-  addText(texto: string, opcoes: Record<string, unknown>): void;
+  addText(texto: string | TrechoPptx[], opcoes: Record<string, unknown>): void;
 }
 interface ApresentacaoPptx {
   addSlide(): SlidePptx;
