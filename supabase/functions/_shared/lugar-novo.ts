@@ -89,10 +89,52 @@ export function ehVirtual(local: string | null): boolean {
  * quando compartilham 2+ tokens distintivos ("tita diadema" vs "rua x 400
  * diadema tita").
  */
+/**
+ * Palavras que introduzem um número que NÃO é o do logradouro. "sala 502" e
+ * "andar 12" descrevem onde dentro do prédio, não qual prédio — contá-los faria
+ * o mesmo endereço escrito de dois jeitos ("Zaidan 1240 sala 502" e "Zaidan
+ * 1240 andar 12") parecer dois lugares.
+ */
+const UNIDADES = new Set([
+  "andar", "sala", "conjunto", "cj", "bloco", "torre", "apto", "ap",
+  "apartamento", "km",
+]);
+
+/** Números de logradouro do endereço, sem os de sala/andar/bloco. */
+function numerosDeLogradouro(bruto: string): Set<string> {
+  const tokens = normalizaLocal(bruto).split(" ");
+  const numeros = new Set<string>();
+  for (let i = 0; i < tokens.length; i++) {
+    if (!/^\d+$/.test(tokens[i])) continue;
+    if (i > 0 && UNIDADES.has(tokens[i - 1])) continue;
+    numeros.add(tokens[i]);
+  }
+  return numeros;
+}
+
 export function mesmoLugar(a: string, b: string): boolean {
   const na = normalizaLocal(a);
   const nb = normalizaLocal(b);
   if (!na || !nb) return false;
+
+  // VETO PELO NÚMERO, antes de qualquer atalho generoso (decisão do Daniel,
+  // 01/09/2026): Augusta 100 e Augusta 2500 são 2 km de distância e merecem
+  // aviso. Antes disso o número era ignorado e os dois casavam por rua+cidade.
+  //
+  // Só veta quando os DOIS lados têm número de logradouro e não compartilham
+  // nenhum. Um lado sem número ("Titã Diadema") cai na lógica generosa de
+  // sempre — é o caso do lugar escrito pelo nome, não pelo endereço.
+  //
+  // Também é o que corrige o atalho de substring logo abaixo: "rua augusta 100"
+  // é substring literal de "rua augusta 1000", e sem este veto os dois casavam.
+  const numsA = numerosDeLogradouro(a);
+  const numsB = numerosDeLogradouro(b);
+  if (numsA.size > 0 && numsB.size > 0) {
+    let compartilha = false;
+    for (const n of numsA) if (numsB.has(n)) compartilha = true;
+    if (!compartilha) return false;
+  }
+
   if (na === nb) return true;
   if (na.includes(nb) || nb.includes(na)) return true;
 

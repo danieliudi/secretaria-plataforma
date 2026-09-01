@@ -39,27 +39,29 @@ Deno.test("mesmo prédio, sala diferente, continua sendo o mesmo lugar", () => {
 
 // ─── Lugares diferentes de verdade ──────────────────────────────────────────
 
-// PARADO À ESPERA DE DECISÃO DE PRODUTO (01/09/2026), não é bug de código.
+// DECIDIDO em 01/09/2026: número diferente na mesma rua É lugar novo, e a Mia
+// deve avisar. Augusta 100 e Augusta 2500 são 2 km de distância. Antes disso o
+// número era ignorado e os dois casavam por rua + cidade.
 //
-// `mesmoLugar` ignora o número do endereço de propósito: casa por rua + cidade
-// e erra pro lado de "já conhecido". Isso segue o VIÉS DELIBERADO PRO SILÊNCIO
-// declarado no topo de _shared/lugar-novo.ts — avisar "você nunca foi aí" sobre
-// o escritório de sempre queima a confiança na feature inteira.
-//
-// Este teste afirma o oposto: que Augusta 100 e Augusta 2500 (2 km de distância)
-// são lugares diferentes e mereciam aviso. As duas posições são defensáveis; a
-// escolha é de quanto a Mia deve incomodar sobre endereço, não de implementação.
-//
-// Enquanto não houver decisão, fica ignorado em vez de: (a) afrouxar o teste até
-// passar, que apagaria a pergunta, ou (b) mudar `mesmoLugar`, que seria decidir
-// no lugar do dono. Pra religar: tire o `ignore` e ajuste tokensDistintivos pra
-// contar o número do logradouro.
-Deno.test({
-  name: "mesma rua, número diferente, não é o mesmo lugar",
-  ignore: true,
-  fn: () => {
-    assert(!mesmoLugar("Rua Augusta, 100 - São Paulo", "Rua Augusta, 2500 - São Paulo"));
-  },
+// A implementação veta pelo número ANTES dos atalhos generosos, mas só quando
+// os dois lados têm número de LOGRADOURO — os três testes logo acima seguem
+// passando, e é isso que impede o veto de virar barulho.
+Deno.test("mesma rua, número diferente, não é o mesmo lugar", () => {
+  assert(!mesmoLugar("Rua Augusta, 100 - São Paulo", "Rua Augusta, 2500 - São Paulo"));
+});
+
+// As duas regressões que o veto pelo número podia causar — e que ele não causa.
+// Sem elas, um aperto futuro nesta regra quebraria em produção, não aqui.
+Deno.test("número de andar/sala não conta como número do logradouro", () => {
+  // Mesmo prédio: um lado escrito pelo nome + andar, outro pelo endereço. Se o
+  // "12" de "andar 12" contasse, viraria um "lugar novo" falso.
+  assert(mesmoLugar("Berrini One - andar 12", "Ed. Berrini One, Av. Chucri Zaidan 1240"));
+});
+
+Deno.test("número que é substring de outro não casa por acidente", () => {
+  // "rua augusta 100" é substring literal de "rua augusta 1000", e o atalho de
+  // substring casava os dois antes do veto.
+  assert(!mesmoLugar("Rua Augusta, 100", "Rua Augusta, 1000"));
 });
 
 Deno.test("ruas diferentes na mesma cidade não casam por causa de 'rua' e 'sp'", () => {
