@@ -13,6 +13,15 @@
 
 import { semDadoPessoal } from "./log-seguro.ts";
 
+// ENCURTAMENTO DOS TERMOS (01/09/2026): as frases exatas longas ("autuação
+// IBAMA resíduos perigosos") retornavam ZERO manchetes — medido, com o Google
+// no ar. `orQuery` põe aspas em todo termo com espaço, então cada palavra a
+// mais era um AND implícito. Termos curtos casam; o preço é mais ruído, e a
+// decisão consciente foi ver o rendimento antes de decidir manter esta fonte.
+//
+// O grosso do sinal migrou pra _shared/sinais.ts (PNCP, BCB) — fonte primária
+// em vez de manchete. O Google fica só pro que SÓ existe em manchete:
+// movimento de concorrente.
 const GOOGLE_NEWS_RSS = "https://news.google.com/rss/search";
 
 export interface NewsItem {
@@ -44,38 +53,33 @@ export const SECTOR_NEWS_TERMS: Record<FrenteKey, FrenteNewsTerms> = {
         key: "regulatorio",
         title: "Gatilho Regulatório",
         terms: [
-          "RAPP IBAMA 2026",
-          "ANTT 6.078/2026",
-          "ANTT 5998 fiscalização transporte",
-          "Portaria Inmetro 320 embalagem resíduos",
-          "IN IBAMA 06/2026 rastreabilidade",
-          "Decreto 12.688/2025 PNRS",
-          "NBR 10.004:2024 classificação resíduos",
-          "IFRS S2 Brasil CVM",
-          "CVM Resolução 193 sustentabilidade",
-          "NORMAM-05 Marinha transporte perigosos",
-          "revisão CONAMA resíduos perigosos",
-          "economia circular Lei 14.260/2021",
-          "MTR-e manifesto transporte resíduos",
+          "RAPP IBAMA",
+          "ANTT 6.078",
+          "Resolução 5998",
+          "Inmetro 320",
+          "IN IBAMA 06",
+          "Decreto 12.688",
+          "NBR 10.004",
+          "IFRS S2",
+          "CONAMA resíduos",
+          "MTR-e",
         ],
       },
       {
         key: "competitivo",
         title: "Radar Competitivo",
-        terms: ["EmbTec big bag", "Ágilbag big bag", "Engebag", "homologação INMETRO big bag resíduos", "fabricante big bag resíduos perigosos Brasil"],
+        terms: ["EmbTec", "Ágilbag", "Engebag", "homologação INMETRO", "big bag"],
       },
       {
         key: "demanda",
         title: "Sinal de Demanda / Risco",
         terms: [
-          "autuação IBAMA resíduos perigosos",
-          "multa ambiental transporte rodoviário resíduo",
-          "vazamento produto químico indústria Brasil",
-          "fiscalização ANTT produtos perigosos rodovia",
-          "passivo ambiental multa indústria",
-          "polo petroquímico Camaçari resíduos",
-          "mineração Pará Amazonas resíduos perigosos",
-          "offshore óleo gás ANP resíduo",
+          "autuação IBAMA",
+          "multa ambiental",
+          "resíduo perigoso",
+          "vazamento químico",
+          "passivo ambiental",
+          "fiscalização ANTT",
         ],
       },
       {
@@ -96,29 +100,27 @@ export const SECTOR_NEWS_TERMS: Record<FrenteKey, FrenteNewsTerms> = {
         key: "regulatorio",
         title: "Certificação & Regulatório por Segmento",
         terms: [
-          "FSSC 22000 segurança alimentar Brasil",
-          "ABNT NBR 16029 contentor flexível",
-          "Type C condutivo ANP petroquímica",
-          "fator de segurança FIBC granel",
-          "contentor flexível semi-granel norma técnica",
-          "INMETRO homologação carga perigosa FIBC",
+          "FSSC 22000",
+          "NBR 16029",
+          "contentor flexível",
+          "FIBC",
+          "carga perigosa",
         ],
       },
       {
         key: "competitivo",
         title: "Radar Competitivo & Setor",
-        terms: ["fabricante FIBC Brasil", "big bag semi-granel indústria", "contentor flexível exportação Brasil"],
+        terms: ["FIBC", "big bag", "semi-granel"],
       },
       {
         key: "demanda",
         title: "Sinal de Demanda por Segmento",
         terms: [
-          "recall alimentar contaminação embalagem Brasil",
-          "exportação minério logística granel Brasil",
-          "leilão ANP exploração offshore",
-          "expansão petroquímica Brasil",
-          "safra grãos exportação embalagem",
-          "fertilizantes logística granel Brasil",
+          "recall alimentar",
+          "leilão ANP",
+          "safra grãos",
+          "fertilizantes granel",
+          "expansão petroquímica",
         ],
       },
       {

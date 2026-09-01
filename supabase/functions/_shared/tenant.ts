@@ -33,6 +33,8 @@ export interface Tenant {
   google_ads_customer_map: Record<string, unknown>;
   /** Conta gerenciadora (MCC), usada no header login-customer-id. */
   google_ads_login_customer_id: string | null;
+  /** UFs onde o tenant tem carteira — busca de edital no PNCP. Vazio = desligado. */
+  radar_ufs: string[];
   whatsapp_evolution_instance: string | null;
   whatsapp_evolution_api_key_secret_id: string | null;
   telegram_bot_token_secret_id: string | null;
@@ -75,7 +77,7 @@ const TENANT_COLUMNS = `
   trello_api_key_secret_id,
   google_client_id, google_client_secret_secret_id, google_refresh_token_secret_id,
   outlook_refresh_token_secret_id,
-  ga4_property_map, google_ads_ativo, google_ads_customer_map, google_ads_login_customer_id,
+  ga4_property_map, google_ads_ativo, google_ads_customer_map, google_ads_login_customer_id, radar_ufs,
   whatsapp_evolution_instance, whatsapp_evolution_api_key_secret_id,
   telegram_bot_token_secret_id, telegram_webhook_secret_id, telegram_authorized_chat_id,
   owner_whatsapp_jid, active, usa_vocativo, tratamento, aprovado_em,
