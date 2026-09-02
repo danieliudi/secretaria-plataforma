@@ -9,7 +9,11 @@
 //   - "scheduled": lembretes que o Daniel agendou via tool schedule_reminder
 //                  (suporta recorrência: daily/weekly/monthly_first_business_day).
 //   - "marketing": review semanal por frente (GA4 + tarefas) com otimizações.
-//   - "evening_recap": recap de fim de dia (o que ficou em aberto hoje).
+//   - "meio_do_dia": às 13:00, pergunta sobre o que passou pela manhã e ainda
+//                  não foi acusado. ÚNICA das três do dia que pode não sair:
+//                  sem nada pra perguntar, não manda nada.
+//   - "evening_recap": às 19:00, pergunta com tudo que continua pendente —
+//                  atrasado e do dia, mais lembretes e agenda. Sem modelo.
 //   - "whatsapp_watchdog": checa se a instância compartilhada da Evolution
 //                  API está conectada, tenta reconectar sozinha e só avisa
 //                  (Telegram, dedup) se continuar fora do ar depois disso —
@@ -137,6 +141,7 @@ import {
   RECAP_MAX_ITENS,
   type TarefaDoDia,
 } from "../_shared/fim-do-dia.ts";
+import { montaMensagemMeioDoDia } from "../_shared/meio-do-dia.ts";
 import {
   cargaPorDia,
   detectaConflitos,
@@ -549,6 +554,10 @@ const TZ = "America/Sao_Paulo";
 /** Marca "o resumo da manhã deste dia já saiu", em avisos_enviados. A chave é
  *  a data em SP (YYYY-MM-DD), então é uma linha por tenant por dia. */
 const BRIEF_TIPO = "brief_do_dia";
+
+/** Marca "a mensagem do meio do dia já saiu hoje", em avisos_enviados. Uma
+ *  linha por tenant por dia — pg_cron não repete, mas retry repete. */
+const MEIO_DIA_TIPO = "meio_do_dia";
 
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
@@ -2279,16 +2288,28 @@ async function runEveningRecap(
   // Escopo duplo e obrigatório: `tenant_id` (isolamento) E `user_id` do
   // DESTINO resolvido — um lembrete criado por outra pessoa do mesmo tenant
   // não é assunto de quem está recebendo este fim de dia.
-  const lembretes = await lembretesEntreguesHoje(tenant.id, entrega.destino.userId, hojeEmSP());
+  const hojeSP = hojeEmSP();
+  const lembretes = await lembretesEntreguesHoje(tenant.id, entrega.destino.userId, hojeSP);
   if (lembretes.falhou) naoConsegui.push("lista de lembretes");
 
-  const message = montaMensagemFimDoDia(tarefas, compromissos, lembretes.itens, [], naoConsegui);
+  // Mesma régua do meio do dia: lembrete que a pessoa já respondeu não volta.
+  // Sem isso, quem disse "passa pra amanhã" às 13:04 seria perguntado de novo
+  // às 19:00 sobre a mesma coisa — a redundância que motivou esta frente.
+  // Falha na leitura da fala não descarta nada: o pior caso vira repetir, e
+  // repetir é melhor que omitir numa mensagem que existe pra não deixar passar.
+  const fala = await ultimaFalaDoUsuarioHoje(tenant.id, entrega.destino.userId, hojeSP);
+  const corte = fala.falhou ? 0 : (fala.ms ?? 0);
+  const lembretesAbertos = lembretes.itens
+    .filter((l) => l.enviadoMs > corte)
+    .map((l) => ({ texto: l.texto, hora: l.hora }));
+
+  const message = montaMensagemFimDoDia(tarefas, compromissos, lembretesAbertos, [], naoConsegui);
   await enviarTextoTenant(entrega, message, tenant.id);
   return {
     len: message.length,
     tarefas: tarefas.length,
     compromissos: compromissos.length,
-    lembretes: lembretes.itens.length,
+    lembretes: lembretesAbertos.length,
   };
 }
 
@@ -2303,7 +2324,7 @@ async function lembretesEntreguesHoje(
   tenantId: string,
   userId: string,
   hojeSP: string,
-): Promise<{ itens: LembreteDoDia[]; falhou: boolean }> {
+): Promise<{ itens: Array<LembreteDoDia & { enviadoMs: number }>; falhou: boolean }> {
   // O dia civil de SP em UTC: 00:00 em São Paulo é 03:00Z (UTC−3, sem horário
   // de verão desde 2019). Mesma janela que o resto do arquivo usa.
   const inicio = new Date(`${hojeSP}T03:00:00.000Z`);
@@ -2324,6 +2345,9 @@ async function lembretesEntreguesHoje(
       itens: ((data ?? []) as Array<{ text: string; sent_at: string }>).map((r) => ({
         texto: r.text,
         hora: fmtTime(r.sent_at),
+        // Instante do envio: é o que permite comparar com a última fala da
+        // pessoa e não perguntar de novo o que ela já respondeu.
+        enviadoMs: new Date(r.sent_at).getTime(),
       })),
       falhou: false,
     };
@@ -2333,6 +2357,130 @@ async function lembretesEntreguesHoje(
     // Continua sem derrubar o fim do dia, mas devolve a falha: quem monta a
     // mensagem precisa poder dizer que a lista veio incompleta.
     return { itens: [], falhou: true };
+  }
+}
+
+/**
+ * Quando a pessoa mandou a última mensagem HOJE, em ms — null se não mandou
+ * nenhuma. `falhou` separa "não falou" de "não consegui ler".
+ *
+ * É a régua do meio do dia, e ela é uma só pros dois tipos de item: o que
+ * aconteceu ANTES da última fala dela já foi conversado. Se ela escreveu
+ * 12:59, o lembrete das 11:00 e a reunião das 09:00 saem — uma secretária que
+ * acabou de falar com você não pergunta em seguida se você viu a mensagem das
+ * 11:00. Isso também é o que faz a mensagem sumir sozinha pra quem usa a Mia o
+ * dia todo, sem precisar de teto nem de configuração.
+ */
+async function ultimaFalaDoUsuarioHoje(
+  tenantId: string,
+  userId: string,
+  hojeSP: string,
+): Promise<{ ms: number | null; falhou: boolean }> {
+  const inicio = new Date(`${hojeSP}T03:00:00.000Z`); // 00:00 em SP
+  try {
+    const { data, error } = await getSupabaseClient()
+      .from("conversation_history")
+      .select("created_at")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .eq("role", "user")
+      .gte("created_at", inicio.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw new Error(error.message);
+    const linha = (data ?? [])[0] as { created_at?: string } | undefined;
+    return { ms: linha?.created_at ? new Date(linha.created_at).getTime() : null, falhou: false };
+  } catch (err) {
+    // Nunca o conteúdo da mensagem no log — só o erro.
+    console.error(`[cron] meio do dia: última fala falhou p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return { ms: null, falhou: true };
+  }
+}
+
+// ─── Meio do dia (proativo CONDICIONAL: silêncio é o normal) ─────────────────
+//
+// A terceira mensagem do dia, e a única que pode não sair. Ver o cabeçalho de
+// _shared/meio-do-dia.ts pro porquê do desenho; aqui fica só a coleta.
+//
+// Não sai quando: a leitura da última fala falhou (sem a régua, tudo pareceria
+// não acusado e a mensagem viraria cobrança em cima de quem já respondeu), ou
+// quando não sobrou nenhum item.
+async function runMeioDoDia(
+  env: EnvFn,
+  tenant: Tenant,
+): Promise<{ enviou: boolean; itens: number; pulado?: string }> {
+  const entrega = resolveEntrega(tenant, env);
+  if (!entrega) return { enviou: false, itens: 0, pulado: "sem destino/envio configurado" };
+
+  const hoje = hojeEmSP();
+  if (await jaSaiuOMeioDoDia(tenant.id, hoje)) {
+    return { enviou: false, itens: 0, pulado: "já saiu hoje" };
+  }
+
+  const fala = await ultimaFalaDoUsuarioHoje(tenant.id, entrega.destino.userId, hoje);
+  if (fala.falhou) return { enviou: false, itens: 0, pulado: "não consegui ler a última fala" };
+  const corte = fala.ms ?? 0; // sem fala hoje: nada é descartado
+
+  const lembretes = await lembretesEntreguesHoje(tenant.id, entrega.destino.userId, hoje);
+  const naoAcusados = lembretes.itens.filter((l) => l.enviadoMs > corte);
+
+  const agora = Date.now();
+  let compromissos: CompromissoDoDia[] = [];
+  if (googleConectado(tenant)) {
+    try {
+      const { inicioISO, fimISO } = janelaDeHoje();
+      compromissos = (await getAgendaDoDia(inicioISO, fimISO, env))
+        // Já começou, e depois da última fala dela. Dia inteiro é filtrado no
+        // módulo da mensagem — às 13:00 ele ainda tem o dia todo.
+        .filter((e) => e.inicioMs <= agora && e.inicioMs > corte)
+        .map((e) => ({ titulo: e.titulo, hora: e.hora }));
+    } catch (err) {
+      // Sem agenda a mensagem ainda faz sentido com os lembretes — e dizer
+      // "não consegui ler a agenda" numa mensagem que talvez nem saia seria
+      // barulho. Aqui degradar em silêncio é o certo.
+      await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+      console.error(`[cron] meio do dia: agenda falhou p/ tenant ${tenant.id}:`, semDadoPessoal(err));
+    }
+  }
+
+  const message = montaMensagemMeioDoDia(naoAcusados, compromissos);
+  if (message === null) return { enviou: false, itens: 0, pulado: "nada passou pela manhã" };
+
+  await enviarTextoTenant(entrega, message, tenant.id);
+  // Marca DEPOIS do envio, mesmo critério do brief: mensagem que não chegou
+  // não pode bloquear a próxima tentativa.
+  await marcaMeioDoDia(tenant.id, hoje);
+  return { enviou: true, itens: naoAcusados.length + compromissos.length };
+}
+
+/** Já mandou a do meio do dia hoje? Erro de leitura responde "não": no pior
+ *  caso repete, que é melhor que calar por causa de um SELECT que falhou. */
+async function jaSaiuOMeioDoDia(tenantId: string, hojeSP: string): Promise<boolean> {
+  const { data, error } = await getSupabaseClient()
+    .from("avisos_enviados")
+    .select("ts")
+    .eq("tenant_id", tenantId)
+    .eq("tipo", MEIO_DIA_TIPO)
+    .eq("chave", hojeSP)
+    .maybeSingle();
+  if (error) {
+    console.error("[cron] meio do dia: leitura da marca falhou:", semDadoPessoal(error.message));
+    return false;
+  }
+  return data !== null;
+}
+
+async function marcaMeioDoDia(tenantId: string, hojeSP: string): Promise<void> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo: MEIO_DIA_TIPO, chave: hojeSP });
+    // 23505 = já existe. Não é erro.
+    if (error && (error as { code?: string }).code !== "23505") {
+      console.error("[cron] meio do dia: marca falhou:", semDadoPessoal(error.message));
+    }
+  } catch (err) {
+    console.error("[cron] meio do dia: marca falhou:", semDadoPessoal(err));
   }
 }
 
@@ -3944,6 +4092,9 @@ const TASKS_MULTI_TENANT = new Set([
   "brief",
   "weekly",
   "evening_recap",
+  // O checkpoint das 13:00 (02/09/2026, sugestão da Erika). Nasce multi-tenant:
+  // o caso que o motivou é de outro tenant, não do dono.
+  "meio_do_dia",
 ]);
 
 // Tasks de PLATAFORMA: varredura global (não por tenant), só o dono vê —
@@ -4093,6 +4244,8 @@ async function executarTaskMecanica(task: string, tenant: Tenant): Promise<unkno
       return await runWeekly(env, tenant);
     case "evening_recap":
       return await runEveningRecap(env, tenant);
+    case "meio_do_dia":
+      return await runMeioDoDia(env, tenant);
     default:
       throw new Error(`task '${task}' não é multi-tenant`);
   }
