@@ -62,6 +62,22 @@ import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-remind
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
 import { msDoPrazo } from "../_shared/task-provider.ts";
 import {
+  briefDeDiaVazio,
+  type CompromissoBrief,
+  type EmailBrief,
+  montaBlocoDoBrief,
+  promptDoBrief,
+  type LembreteBrief,
+  type SinalBrief,
+  type TarefaBrief,
+} from "../_shared/brief-manha.ts";
+import { leEmailsDoBrief, type LeitorDeEmail } from "../_shared/brief-email.ts";
+import { listRecentEmails as gmailListRecentEmails } from "../fast/tools/gmail-read.ts";
+import {
+  listRecentEmails as outlookListRecentEmails,
+  outlookMailReadDepsFromEnv,
+} from "../_shared/providers/outlook-mail-provider.ts";
+import {
   buildTenantEnv,
   getPlatformOwnerTenant,
   getTenantById,
@@ -1573,6 +1589,84 @@ async function jaEnviouTemplate(
 
 // Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
 // (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
+/** "terça, 02/09" — a data como ela abre a mensagem. */
+function dataExtensaSP(hojeISO: string): string {
+  const d = new Date(`${hojeISO}T12:00:00Z`); // meio-dia UTC: nunca vira de dia
+  const semana = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" }).format(d);
+  return `${semana.replace("-feira", "")}, ${hojeISO.slice(8, 10)}/${hojeISO.slice(5, 7)}`;
+}
+
+/**
+ * Lembretes AGENDADOS pra hoje que ainda NÃO saíram.
+ *
+ * É o inverso do que o fim do dia lê (lá são os já entregues). Mesmo escopo
+ * duplo: tenant_id E user_id do destino — lembrete criado por outra pessoa do
+ * mesmo tenant não é assunto de quem recebe este resumo.
+ */
+async function lembretesDeHoje(
+  tenantId: string,
+  userId: string,
+  hojeSP: string,
+): Promise<LembreteBrief[]> {
+  const inicio = new Date(`${hojeSP}T03:00:00.000Z`); // 00:00 em SP
+  const fim = new Date(inicio.getTime() + 24 * 3600_000);
+  try {
+    const { data, error } = await getSupabaseClient()
+      .from("scheduled_reminders")
+      .select("text, fire_at")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .is("sent_at", null)
+      .is("desistiu_em", null)
+      .gte("fire_at", inicio.toISOString())
+      .lt("fire_at", fim.toISOString())
+      .order("fire_at", { ascending: true })
+      .limit(10);
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Array<{ text: string; fire_at: string }>).map((r) => ({
+      texto: r.text,
+      hora: fmtTime(r.fire_at),
+    }));
+  } catch (err) {
+    // Nunca o texto do lembrete no log: é conteúdo pessoal.
+    console.error(`[cron] brief: lembretes falharam p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return [];
+  }
+}
+
+/**
+ * O leitor de e-mail do tenant, no mesmo critério que o /fast usa pra escolher
+ * Calendar/E-mail (CALENDAR_MAIL_PROVIDER). Os dois providers expõem a mesma
+ * assinatura, então `leEmailsDoBrief` não sabe qual está rodando.
+ */
+function leitorDeEmailDoTenant(env: EnvFn): LeitorDeEmail {
+  if (env("CALENDAR_MAIL_PROVIDER") === "outlook") {
+    const deps = outlookMailReadDepsFromEnv(env);
+    return (input) => outlookListRecentEmails(input, deps);
+  }
+  const deps = { getAccessToken: () => getGoogleAccessToken({ env, fetch }), fetch };
+  return (input) => gmailListRecentEmails(input, deps);
+}
+
+/**
+ * Marca que o resumo de hoje saiu — é o que permite ao runAlerts não repetir o
+ * que este resumo já listou. Falha aqui não derruba um brief já entregue: no
+ * pior caso o alerta duplica, que era o comportamento antigo.
+ */
+async function marcaBriefDoDia(tenantId: string): Promise<void> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hojeEmSP() });
+    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
+    if (error && (error as { code?: string }).code !== "23505") {
+      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(error.message));
+    }
+  } catch (err) {
+    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
+  }
+}
+
 async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
   const tenantId = tenant.id;
   const entrega = resolveEntrega(tenant, env);
@@ -1585,112 +1679,114 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
   }
 
-  // SINAIS DE FONTE PRIMÁRIA (01/09/2026). Antes daqui só havia manchete de
-  // Google Notícias, e medido no dia ela rendia ZERO — evento regulatório e
-  // edital público quase nunca viram notícia, morrem no registro de origem.
-  // Agora vêm primeiro PNCP e BCB, que respondem "isto aconteceu?" em vez de
-  // "alguém escreveu sobre isto?". Cada fonte falha sozinha.
-  const blocos: string[] = [];
+  // DADOS PRIMEIRO (02/09/2026). Até aqui o brief era "o modelo com tools":
+  // ele decidia o que ler e escrevia por cima — e foi por esse caminho que
+  // saíram os prazos e as frentes inventados de 01/09. Agora o código busca,
+  // monta um bloco fixo (_shared/brief-manha.ts) e o modelo só redige.
+  // Cada fonte falha sozinha; nenhuma derruba o resumo.
+  const hojeSP = hojeEmSP();
+  const inicioHoje = new Date(`${hojeSP}T03:00:00.000Z`); // 00:00 em SP
+  const fimHoje = new Date(inicioHoje.getTime() + 24 * 3600_000);
+  const fimAmanha = new Date(inicioHoje.getTime() + 48 * 3600_000);
 
+  let compromissosHoje: CompromissoBrief[] = [];
+  let compromissosAmanha: CompromissoBrief[] = [];
+  if (googleConectado(tenant)) {
+    try {
+      const deHoje = await getEventosEntre(inicioHoje.toISOString(), fimHoje.toISOString(), env);
+      compromissosHoje = deHoje.map((e) => ({
+        titulo: e.titulo,
+        hora: fmtTime(e.inicio.toISOString()),
+        fim: e.fim ? fmtTime(e.fim.toISOString()) : undefined,
+      }));
+      const deAmanha = await getEventosEntre(fimHoje.toISOString(), fimAmanha.toISOString(), env);
+      compromissosAmanha = deAmanha.map((e) => ({
+        titulo: e.titulo,
+        hora: fmtTime(e.inicio.toISOString()),
+      }));
+    } catch (err) {
+      await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+      console.error("[cron] brief: agenda falhou:", semDadoPessoal(err));
+    }
+  }
+
+  let tarefas: TarefaBrief[] = [];
+  if (taskProviderConfigurado(tenant)) {
+    try {
+      // Prazo futuro fica de fora: o resumo é sobre HOJE, e tarefa de sexta
+      // numa terça é ruído — ela volta no dia dela.
+      tarefas = (await getTasksWithDue(env))
+        .map((t) => ({ ...t, dia: diaSPdeMs(t.dueMs) }))
+        .filter((t) => t.dia <= hojeSP)
+        .map((t): TarefaBrief => ({
+          nome: t.name,
+          frente: t.frente,
+          situacao: t.dia < hojeSP ? "vencida" : "hoje",
+          quando: `${t.dia.slice(8, 10)}/${t.dia.slice(5, 7)}`,
+        }));
+    } catch (err) {
+      console.error("[cron] brief: tarefas falharam:", semDadoPessoal(err));
+    }
+  }
+
+  // Lembretes AGENDADOS pra hoje que ainda não saíram — o inverso do fim do
+  // dia (que olha os já entregues). É o que o brief tem a dizer pra quem não
+  // usa gerenciador de tarefas.
+  const lembretesHoje = await lembretesDeHoje(tenantId, entrega.destino.userId, hojeSP);
+
+  // E-MAIL: recurso do dono da plataforma, DESLIGADO por padrão, mesma
+  // política do radar e das notícias. Vira coluna no dia em que um segundo
+  // tenant quiser — hoje não há tela nem decisão de custo tomada pra isso.
+  let emails: EmailBrief[] = [];
+  if (tenant.is_platform_owner) {
+    try {
+      emails = await leEmailsDoBrief(leitorDeEmailDoTenant(env));
+    } catch (err) {
+      console.error("[cron] brief: e-mail falhou:", semDadoPessoal(err));
+    }
+  }
+
+  // SINAIS, só o que é ACIONÁVEL (02/09/2026). Notícia sem data ocupava 6 das
+  // 17 linhas do resumo e não pedia ação nenhuma — foi medido no dia. Edital
+  // do PNCP tem órgão, valor e prazo: esse continua. Manchete vai pro semanal.
+  let sinais: SinalBrief[] = [];
   const ufs = radarUfsDoTenant(tenant);
   if (ufs.length > 0) {
     try {
-      const hoje = new Date();
-      const ontem = new Date(hoje.getTime() - 86400000);
-      const editais = await buscaEditais(ufs, ontem, hoje, frenteDeEdital(tenant));
-      const bloco = montaBlocoSinais(editais);
-      if (bloco) blocos.push(`EDITAIS PÚBLICOS (PNCP, últimas 24h):\n${bloco}`);
+      const ontem = new Date(Date.now() - 86400000);
+      const editais = await buscaEditais(ufs, ontem, new Date(), frenteDeEdital(tenant));
+      sinais = editais.map((e) => ({ titulo: e.titulo, detalhe: e.detalhe }));
     } catch (err) {
       console.error("[cron] brief: editais falharam:", semDadoPessoal(err));
     }
   }
 
-  if (frenteDeCambio(tenant)) {
-    try {
-      const cambio = await buscaCambio(new Date(), frenteDeCambio(tenant)!);
-      const bloco = montaBlocoSinais(cambio ? [cambio] : []);
-      if (bloco) blocos.push(`CÂMBIO:\n${bloco}`);
-    } catch (err) {
-      console.error("[cron] brief: câmbio falhou:", semDadoPessoal(err));
-    }
+  const bloco = montaBlocoDoBrief({
+    dataExtenso: dataExtensaSP(hojeSP),
+    compromissosHoje,
+    compromissosAmanha,
+    tarefas,
+    emails,
+    sinais,
+    lembretesHoje,
+  });
+
+  // Dia sem nada em fonte nenhuma não gasta chamada de modelo: a frase é fixa.
+  if (bloco.vazio) {
+    const vazio = briefDeDiaVazio(dataExtensaSP(hojeSP));
+    await enviarTextoTenant(entrega, vazio, tenantId);
+    await marcaBriefDoDia(tenantId);
+    return { len: vazio.length };
   }
 
-  const newsFrentes = newsFrentesDoTenant(tenant);
-  if (newsFrentes.length > 0) {
-    try {
-      const newsBlock = await getSectorNewsBlock(newsFrentes);
-      if (newsBlock) blocos.push(`NOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}`);
-    } catch (err) {
-      console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
-    }
-  }
-
-  const sinaisBlock = blocos.join("\n\n");
-
-  const prompt =
-    "Monte meu resumo da manhã, conciso e em tópicos curtos. Inclua: " +
-    "(1) os compromissos de hoje na minha agenda, com horário; " +
-    `(2) por frente (${frentesEmTexto(tenant)}): entregas/tarefas com prazo ` +
-    "pra hoje ou atrasadas, e reuniões pautadas; " +
-    // (3) reescrito na junção de 01/09/2026, preservando DUAS regras que
-    // nasceram separadas e resolvem coisas diferentes do mesmo texto:
-    //   - do main (mockup aprovado no dia): frente sem item é OMITIDA, nunca
-    //     vira uma linha dizendo que não há nada — três frentes vazias viravam
-    //     três linhas de "nada", que era o grosso do "resumo comprido";
-    //   - daqui: proibido EXPLICAR por que um bloco veio vazio. A instrução
-    //     antiga ("se não houver nada relevante, diga isso em uma linha") era
-    //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
-    //     "as fontes de notícias estão indisponíveis no momento" num dia em
-    //     que a única verdade disponível era "não há sinal".
-    // (3) só entra no prompt quando EXISTE sinal (02/09/2026). Antes a
-    // instrução era incondicional, então o modelo escrevia a seção de
-    // qualquer jeito — e pra quem não tem radar nem frente coberta o
-    // resultado era um "SINAIS: sem sinal novo hoje" fixo, todo dia, numa
-    // seção que nunca teria conteúdo. Pedir a seção e depois pedir pra dizer
-    // que ela está vazia é gastar duas linhas pra não informar nada.
-    (sinaisBlock
-      ? "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
-        "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
-        "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
-        "com a data. NÃO invente nada além do que está listado. "
-      : "") +
-    // As duas regras de bloco vazio, preservadas da junção de 01/09/2026:
-    //   - do main (mockup aprovado no dia): frente sem item é OMITIDA, nunca
-    //     vira uma linha dizendo que não há nada — três frentes vazias viravam
-    //     três linhas de "nada", que era o grosso do "resumo comprido";
-    //   - daqui: proibido EXPLICAR por que um bloco veio vazio. A instrução
-    //     antiga ("se não houver nada relevante, diga isso em uma linha") era
-    //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
-    //     "as fontes de notícias estão indisponíveis no momento" num dia em
-    //     que a única verdade disponível era "não há sinal".
-    "NÃO explique por que um bloco veio vazio. " +
-    "OMITA por completo as frentes que não tiverem nenhum item — não escreva o nome " +
-    "delas nem uma linha dizendo que não há nada. Só se NENHUMA frente tiver item, " +
-    "escreva uma única linha dizendo isso. Vale o mesmo pro bloco de agenda: " +
-    "vazio se resolve em uma linha, nunca em uma lista de vazios. " +
-    "Não faça perguntas, só entregue." +
-    (sinaisBlock ? `\n\n${sinaisBlock}` : "");
+  const prompt = promptDoBrief(bloco);
 
   const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
   await enviarTextoTenant(entrega, text, tenantId);
 
-  // Marca que o resumo de hoje saiu. É o que permite ao runAlerts não repetir
-  // o que este resumo já listou (ver o comentário lá). Gravado DEPOIS do envio
-  // de propósito: resumo que não chegou não pode calar o alerta.
-  // Falha aqui não derruba um brief já entregue — no pior caso o alerta
-  // duplica, que é o comportamento antigo.
-  try {
-    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-    const { error: briefErr } = await getSupabaseClient()
-      .from("avisos_enviados")
-      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hoje });
-    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
-    if (briefErr && (briefErr as { code?: string }).code !== "23505") {
-      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(briefErr.message));
-    }
-  } catch (err) {
-    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
-  }
+  // Gravado DEPOIS do envio de propósito: resumo que não chegou não pode
+  // calar o alerta.
+  await marcaBriefDoDia(tenantId);
 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
@@ -1911,11 +2007,47 @@ async function runWeekly(env: EnvFn, tenant: Tenant): Promise<{ len: number; pul
   const entrega = resolveEntrega(tenant, env);
   if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
 
+  // LEITURA DE MERCADO mudou de lugar em 02/09/2026: notícia e câmbio saíram
+  // do resumo da manhã e vieram pra cá. Motivo medido no dia — os quatro
+  // sinais daquela manhã eram manchete sem data e sem ação, e ocupavam 6 das
+  // 17 linhas de uma mensagem que existe pra decidir o dia. Notícia é leitura;
+  // leitura cabe numa vez por semana. Edital do PNCP, que tem órgão, valor e
+  // prazo, continua no diário.
+  const leitura: string[] = [];
+  const newsFrentes = newsFrentesDoTenant(tenant);
+  if (newsFrentes.length > 0) {
+    try {
+      const bloco = await getSectorNewsBlock(newsFrentes);
+      if (bloco) leitura.push(`NOTÍCIAS DO SETOR:\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] weekly: notícias falharam:", semDadoPessoal(err));
+    }
+  }
+  const frenteCambio = frenteDeCambio(tenant);
+  if (frenteCambio) {
+    try {
+      const cambio = await buscaCambio(new Date(), frenteCambio);
+      const bloco = montaBlocoSinais(cambio ? [cambio] : []);
+      if (bloco) leitura.push(`CÂMBIO:\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] weekly: câmbio falhou:", semDadoPessoal(err));
+    }
+  }
+  const blocoLeitura = leitura.join("\n\n");
+
   const text = await askFast(
     `Monte um panorama da minha semana, em tópicos por frente (${frentesEmTexto(tenant)}). ` +
       "Pra cada uma liste as tarefas/entregas em aberto com prazo nesta semana, " +
       "o que está atrasado, e campanhas/pautas em andamento. " +
-      "Seja objetivo, agrupe por frente. Não faça perguntas, só entregue o panorama.",
+      (blocoLeitura
+        ? "No fim, uma seção LEITURA DE MERCADO com base SÓ nos dados abaixo — " +
+          "no máximo 4 linhas, número de câmbio sempre com a data, e NÃO invente " +
+          "nada além do que está listado. "
+        : "") +
+      "OMITA por completo a frente que não tiver nenhum item — não escreva o nome " +
+      "dela nem uma linha dizendo que não há nada. NÃO explique por que algo veio vazio. " +
+      "Seja objetivo, agrupe por frente. Não faça perguntas, só entregue o panorama." +
+      (blocoLeitura ? `\n\n${blocoLeitura}` : ""),
     env,
     tenant.slug,
   ) || "Sem itens em aberto esta semana.";
