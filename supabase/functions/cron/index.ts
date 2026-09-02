@@ -60,6 +60,7 @@ import { channelFromUserId, telegramChatId } from "../_shared/channel.ts";
 import { getGa4Snapshot, tryLoadGa4Map } from "../_shared/ga4.ts";
 import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-reminders.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
+import { msDoPrazo } from "../_shared/task-provider.ts";
 import {
   buildTenantEnv,
   getPlatformOwnerTenant,
@@ -113,7 +114,9 @@ import {
 } from "../_shared/lugar-novo.ts";
 import {
   type CompromissoDoDia,
+  type LembreteDoDia,
   montaMensagemFimDoDia,
+  RECAP_MAX_ITENS,
   type TarefaDoDia,
 } from "../_shared/fim-do-dia.ts";
 import {
@@ -161,14 +164,44 @@ function frenteDeEdital(tenant: Tenant): string {
  * pra tenant que só opera no mercado interno.
  */
 function frenteDeCambio(tenant: Tenant): string | null {
+  // Mesmo portão de dono que o radar e as notícias (02/09/2026): "sanwey" é o
+  // negócio do dono da plataforma, não uma categoria de produto.
+  if (!tenant.is_platform_owner) return null;
   const fs = tenant.frentes ?? [];
   return fs.find((f) => f.toLowerCase() === "sanwey") ?? null;
 }
 
-/** Notícia só das frentes do tenant que têm fonte configurada. */
+/**
+ * Notícia só das frentes do tenant que têm fonte configurada — E só pro DONO
+ * da plataforma (02/09/2026).
+ *
+ * As duas únicas frentes com cobertura de imprensa são "resibag" e "sanwey",
+ * que são literalmente os negócios do dono. Sem este portão, qualquer cliente
+ * que batizasse uma frente com um desses nomes passaria a receber a leitura de
+ * mercado DELE — e, mais importante, a feature ficou parecendo estrutura da
+ * plataforma quando nasceu como ferramenta pessoal.
+ *
+ * Isto não fecha a porta: no dia em que houver fonte de imprensa por
+ * frente configurável pelo cliente, o portão sai daqui e vira coluna.
+ */
 function newsFrentesDoTenant(tenant: Tenant): Array<"resibag" | "sanwey"> {
+  if (!tenant.is_platform_owner) return [];
   const dele = new Set((tenant.frentes ?? []).map((f) => f.toLowerCase()));
   return NEWS_FRENTES_COBERTAS.filter((f) => dele.has(f));
+}
+
+/**
+ * UFs do radar de editais deste tenant — vazio quando o radar não vale pra ele.
+ *
+ * Mesma política de `newsFrentesDoTenant` (02/09/2026): recurso do dono,
+ * DESLIGADO por padrão. `radar_ufs` já nasce `{}` pra todo mundo, então o
+ * portão é sobre INTENÇÃO — deixa explícito no código que ligar o radar pra um
+ * cliente é uma decisão de produto que ainda não foi tomada, em vez de um
+ * efeito colateral de preencher uma coluna.
+ */
+function radarUfsDoTenant(tenant: Tenant): string[] {
+  if (!tenant.is_platform_owner) return [];
+  return normalizaUfs(tenant.radar_ufs);
 }
 
 /**
@@ -611,7 +644,7 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
   return tasks.map((t) => ({
     id: t.id,
     name: t.name,
-    dueMs: new Date(t.due_date!).getTime(),
+    dueMs: msDoPrazo(t.due_date!),
     frente: t.frente,
     list: t.list,
     url: t.url,
@@ -1559,7 +1592,7 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
   // "alguém escreveu sobre isto?". Cada fonte falha sozinha.
   const blocos: string[] = [];
 
-  const ufs = normalizaUfs(tenant.radar_ufs);
+  const ufs = radarUfsDoTenant(tenant);
   if (ufs.length > 0) {
     try {
       const hoje = new Date();
@@ -1609,15 +1642,32 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
     //     "as fontes de notícias estão indisponíveis no momento" num dia em
     //     que a única verdade disponível era "não há sinal".
-    "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
-    "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
-    "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
-    "com a data. NÃO invente nada além do que está listado, e NÃO explique por " +
-    "que um bloco veio vazio — se não há sinal, diga só 'sem sinal novo hoje'. " +
+    // (3) só entra no prompt quando EXISTE sinal (02/09/2026). Antes a
+    // instrução era incondicional, então o modelo escrevia a seção de
+    // qualquer jeito — e pra quem não tem radar nem frente coberta o
+    // resultado era um "SINAIS: sem sinal novo hoje" fixo, todo dia, numa
+    // seção que nunca teria conteúdo. Pedir a seção e depois pedir pra dizer
+    // que ela está vazia é gastar duas linhas pra não informar nada.
+    (sinaisBlock
+      ? "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
+        "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
+        "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
+        "com a data. NÃO invente nada além do que está listado. "
+      : "") +
+    // As duas regras de bloco vazio, preservadas da junção de 01/09/2026:
+    //   - do main (mockup aprovado no dia): frente sem item é OMITIDA, nunca
+    //     vira uma linha dizendo que não há nada — três frentes vazias viravam
+    //     três linhas de "nada", que era o grosso do "resumo comprido";
+    //   - daqui: proibido EXPLICAR por que um bloco veio vazio. A instrução
+    //     antiga ("se não houver nada relevante, diga isso em uma linha") era
+    //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
+    //     "as fontes de notícias estão indisponíveis no momento" num dia em
+    //     que a única verdade disponível era "não há sinal".
+    "NÃO explique por que um bloco veio vazio. " +
     "OMITA por completo as frentes que não tiverem nenhum item — não escreva o nome " +
     "delas nem uma linha dizendo que não há nada. Só se NENHUMA frente tiver item, " +
-    "escreva uma única linha dizendo isso. Vale o mesmo pros blocos de agenda e " +
-    "sinais: vazio se resolve em uma linha, nunca em uma lista de vazios. " +
+    "escreva uma única linha dizendo isso. Vale o mesmo pro bloco de agenda: " +
+    "vazio se resolve em uma linha, nunca em uma lista de vazios. " +
     "Não faça perguntas, só entregue." +
     (sinaisBlock ? `\n\n${sinaisBlock}` : "");
 
@@ -1936,7 +1986,7 @@ function diaSPdeMs(ms: number): string {
 async function runEveningRecap(
   env: EnvFn,
   tenant: Tenant,
-): Promise<{ len: number; tarefas: number; compromissos: number; pulado?: string }> {
+): Promise<{ len: number; tarefas: number; compromissos: number; lembretes?: number; pulado?: string }> {
   const entrega = resolveEntrega(tenant, env);
   if (!entrega) return { len: 0, tarefas: 0, compromissos: 0, pulado: "sem destino/envio configurado" };
 
@@ -1978,9 +2028,63 @@ async function runEveningRecap(
     }
   }
 
-  const message = montaMensagemFimDoDia(tarefas, compromissos);
+  // Lembretes que a PRÓPRIA secretária entregou hoje — a terceira fonte
+  // (02/09/2026). Sem ela, quem não usa gerenciador de tarefas nem tem agenda
+  // conectada recebia "dia limpo" horas depois de ter sido cutucado por ela
+  // mesma: foi o caso do "Lembra de procurar o bolo 🎂" das 11h, seguido de
+  // "Nada com prazo hoje na sua lista" às 19h, no mesmo dia e no mesmo chat.
+  //
+  // Escopo duplo e obrigatório: `tenant_id` (isolamento) E `user_id` do
+  // DESTINO resolvido — um lembrete criado por outra pessoa do mesmo tenant
+  // não é assunto de quem está recebendo este fim de dia.
+  const lembretes = await lembretesEntreguesHoje(tenant.id, entrega.destino.userId, hoje);
+
+  const message = montaMensagemFimDoDia(tarefas, compromissos, lembretes);
   await enviarTextoTenant(entrega, message, tenant.id);
-  return { len: message.length, tarefas: tarefas.length, compromissos: compromissos.length };
+  return {
+    len: message.length,
+    tarefas: tarefas.length,
+    compromissos: compromissos.length,
+    lembretes: lembretes.length,
+  };
+}
+
+/**
+ * Lembretes já ENTREGUES hoje (sent_at preenchido) pra este tenant e este
+ * destinatário. Falha de leitura devolve lista vazia em vez de derrubar o fim
+ * do dia: perder uma seção é melhor que sumir às 19h sem explicação — mesmo
+ * critério que as outras duas fontes acima já usam.
+ */
+async function lembretesEntreguesHoje(
+  tenantId: string,
+  userId: string,
+  hojeSP: string,
+): Promise<LembreteDoDia[]> {
+  // O dia civil de SP em UTC: 00:00 em São Paulo é 03:00Z (UTC−3, sem horário
+  // de verão desde 2019). Mesma janela que o resto do arquivo usa.
+  const inicio = new Date(`${hojeSP}T03:00:00.000Z`);
+  const fim = new Date(inicio.getTime() + 24 * 3600_000);
+  try {
+    const { data, error } = await getSupabaseClient()
+      .from("scheduled_reminders")
+      .select("text, sent_at")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .not("sent_at", "is", null)
+      .gte("sent_at", inicio.toISOString())
+      .lt("sent_at", fim.toISOString())
+      .order("sent_at", { ascending: true })
+      .limit(RECAP_MAX_ITENS);
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Array<{ text: string; sent_at: string }>).map((r) => ({
+      texto: r.text,
+      hora: fmtTime(r.sent_at),
+    }));
+  } catch (err) {
+    // Nunca o texto do lembrete no log: é conteúdo pessoal.
+    console.error(`[cron] recap: lembretes falharam p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return [];
+  }
 }
 
 // ─── Lugar novo (proativo por DETECÇÃO, silêncio é o normal) ─────────────────
