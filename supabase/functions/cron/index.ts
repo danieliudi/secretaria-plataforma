@@ -103,7 +103,9 @@ import {
 } from "../_shared/google-ads.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import {
-  buscaCambio,
+  avaliaCambio,
+  buscaSeriePtax,
+  cambioAtual,
   buscaEditais,
   montaBlocoSinais,
   normalizaUfs,
@@ -1649,6 +1651,28 @@ function leitorDeEmailDoTenant(env: EnvFn): LeitorDeEmail {
 }
 
 /**
+ * Grava um aviso em `avisos_enviados` e diz se ele é INÉDITO.
+ *
+ * `false` significa "já mandei isso" — 23505 é a chave única fazendo o
+ * trabalho, não um erro. Falha de banco devolve `false` de propósito: na
+ * dúvida, cala. Repetir todo dia o mesmo alerta de câmbio é exatamente o que
+ * o dedupe existe pra impedir.
+ */
+async function marcaAvisoInedito(tenantId: string, tipo: string, chave: string): Promise<boolean> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo, chave });
+    if (!error) return true;
+    if ((error as { code?: string }).code === "23505") return false;
+    throw new Error(error.message);
+  } catch (err) {
+    console.error(`[cron] dedupe '${tipo}' falhou p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return false;
+  }
+}
+
+/**
  * Marca que o resumo de hoje saiu — é o que permite ao runAlerts não repetir o
  * que este resumo já listou. Falha aqui não derruba um brief já entregue: no
  * pior caso o alerta duplica, que era o comportamento antigo.
@@ -1758,6 +1782,22 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
       sinais = editais.map((e) => ({ titulo: e.titulo, detalhe: e.detalhe }));
     } catch (err) {
       console.error("[cron] brief: editais falharam:", semDadoPessoal(err));
+    }
+  }
+
+  // CÂMBIO no diário: só quando cruza um dos dois limiares medidos
+  // (_shared/sinais.ts). Deriva fica ligada por dias seguidos, então a chave
+  // do episódio passa por avisos_enviados — o segundo dia do mesmo movimento
+  // não vira mensagem nova.
+  const frenteCambio = frenteDeCambio(tenant);
+  if (frenteCambio) {
+    try {
+      const alerta = avaliaCambio(await buscaSeriePtax(new Date()), frenteCambio);
+      if (alerta && await marcaAvisoInedito(tenantId, "cambio", alerta.chave)) {
+        sinais.push({ titulo: alerta.sinal.titulo, detalhe: alerta.sinal.detalhe });
+      }
+    } catch (err) {
+      console.error("[cron] brief: câmbio falhou:", semDadoPessoal(err));
     }
   }
 
@@ -2026,7 +2066,9 @@ async function runWeekly(env: EnvFn, tenant: Tenant): Promise<{ len: number; pul
   const frenteCambio = frenteDeCambio(tenant);
   if (frenteCambio) {
     try {
-      const cambio = await buscaCambio(new Date(), frenteCambio);
+      // No semanal a cotação entra SEMPRE — é contexto, e uma vez por semana
+      // não pesa. O limiar só governa o diário (ver runBrief).
+      const cambio = cambioAtual(await buscaSeriePtax(new Date()), frenteCambio);
       const bloco = montaBlocoSinais(cambio ? [cambio] : []);
       if (bloco) leitura.push(`CÂMBIO:\n${bloco}`);
     } catch (err) {
