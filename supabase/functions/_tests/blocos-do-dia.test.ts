@@ -13,9 +13,11 @@ import { assert, assertEquals, assertStringIncludes } from "https://deno.land/st
 import {
   AGRUPA_POR_FRENTE_ACIMA_DE,
   linhaAgenda,
+  listaDeFontes,
   montaBlocoAgenda,
   montaBlocoPendencias,
   montaResumoDaManha,
+  PENDENCIAS_MAX,
   type Pendencia,
 } from "../_shared/blocos-do-dia.ts";
 
@@ -95,4 +97,48 @@ Deno.test("sinais entram só quando existem, e sempre por último", () => {
   assertStringIncludes(com, "*Sinais*\n· Edital X");
   assert(com.indexOf("*Sinais*") > com.indexOf("*Agenda*"), "sinais vieram antes da agenda");
   assert(!montaResumoDaManha("Terça", [{ titulo: "Call", hora: "14:00" }], [], "   ").includes("Sinais"));
+});
+
+Deno.test("fonte que falhou vira ressalva no fim, não some", () => {
+  // Uma lista incompleta é indistinguível de um dia tranquilo. A ressalva é o
+  // que separa "não tem nada" de "não consegui olhar".
+  const msg = montaResumoDaManha("Terça, 01/09", [], [p("Enviar NF", "acme", "01/09", false)], "", ["agenda"]);
+  assertStringIncludes(msg, "Não consegui ler a agenda agora");
+  assertStringIncludes(msg, "Enviar NF");
+  assert(msg.trimEnd().endsWith("faltado coisa._"), `ressalva não ficou por último:\n${msg}`);
+});
+
+Deno.test("nada lido + fonte falhando não vira dia limpo", () => {
+  const msg = montaResumoDaManha("Terça, 01/09", [], [], "", ["agenda", "lista de tarefas"]);
+  assert(!msg.includes("Dia limpo"), msg);
+  assertStringIncludes(msg, "a agenda e a lista de tarefas");
+});
+
+Deno.test("sem falha nenhuma, nenhuma ressalva aparece", () => {
+  const msg = montaResumoDaManha("Terça, 01/09", [{ titulo: "Call", hora: "14:00" }], []);
+  assert(!msg.includes("Não consegui"), msg);
+});
+
+Deno.test("listaDeFontes escreve pra caber no meio da frase", () => {
+  assertEquals(listaDeFontes([]), "");
+  assertEquals(listaDeFontes(["agenda"]), "a agenda");
+  assertEquals(listaDeFontes(["agenda", "lista de tarefas"]), "a agenda e a lista de tarefas");
+});
+
+Deno.test("lista estourada corta, mas o cabeçalho continua contando tudo", () => {
+  // A lista deixou de ser resumida por modelo: sem teto, 60 atrasadas viram 60
+  // linhas às 06:00. E contar só o mostrado esconderia o tamanho do problema,
+  // que é justamente o que essa pessoa precisa ver.
+  const muitas = Array.from({ length: PENDENCIAS_MAX + 17 }, (_, i) =>
+    p(`Tarefa ${i}`, i % 2 === 0 ? "A" : "B", "31/08", true));
+  const bloco = montaBlocoPendencias(muitas);
+
+  assertStringIncludes(bloco, `*Pendências (${PENDENCIAS_MAX + 17})*`);
+  assertStringIncludes(bloco, `(mostrei ${PENDENCIAS_MAX} de ${PENDENCIAS_MAX + 17})`);
+  assertEquals(bloco.split("\n").filter((l) => l.startsWith("· ")).length, PENDENCIAS_MAX);
+});
+
+Deno.test("no teto exato não aparece rodapé de corte", () => {
+  const exatas = Array.from({ length: PENDENCIAS_MAX }, (_, i) => p(`T${i}`, "A", "31/08", true));
+  assert(!montaBlocoPendencias(exatas).includes("mostrei"));
 });

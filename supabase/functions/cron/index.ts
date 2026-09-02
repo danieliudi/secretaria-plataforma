@@ -2,14 +2,16 @@
 // de agenda e alertas de prazo do gerenciador de tarefas.
 //
 // Modos (POST { task }):
-//   - "brief":     resumo do dia (agenda + tarefas por cliente, via /fast).
+//   - "brief":     resumo do dia (agenda + pendências montadas no código; só o
+//                  bloco de sinais passa pelo /fast).
 //   - "weekly":    panorama da semana por frente (via /fast).
 //   - "reminders": eventos de agenda começando dentro da janela → lembrete.
 //   - "alerts":    tasks vencendo/vencidas (TaskProvider ativo) → alerta (dedup).
 //   - "scheduled": lembretes que o Daniel agendou via tool schedule_reminder
 //                  (suporta recorrência: daily/weekly/monthly_first_business_day).
 //   - "marketing": review semanal por frente (GA4 + tarefas) com otimizações.
-//   - "evening_recap": recap de fim de dia (o que ficou em aberto hoje).
+//   - "evening_recap": pergunta de fim de dia com tudo que está pendente —
+//                  atrasado e do dia. Não passa por modelo nenhum.
 //   - "whatsapp_watchdog": checa se a instância compartilhada da Evolution
 //                  API está conectada, tenta reconectar sozinha e só avisa
 //                  (Telegram, dedup) se continuar fora do ar depois disso —
@@ -35,10 +37,10 @@
 // conflito_check, semana_check, atrasadas_check, resumo_diario, reunioes,
 // ads_check — ver
 // TASKS_MULTI_TENANT) rodam MULTI-TENANT: o Deno.serve abaixo despacha uma execução isolada por
-// tenant elegível (coordenador → executor). As tasks que passam pelo /fast
-// (brief, weekly, marketing, evening_recap) e as de plataforma (novos_
-// cadastros, feedback_novo, whatsapp_watchdog, reuniao_retencao) continuam
-// single-tenant — ver
+// tenant elegível (coordenador → executor). Brief, weekly e evening_recap
+// entraram no fan-out em 31/08/2026; seguem single-tenant só o `marketing`
+// (caro e inútil pra quem não anuncia) e as tasks de plataforma
+// (novos_cadastros, feedback_novo, whatsapp_watchdog, reuniao_retencao) — ver
 // comentário em TASKS_MULTI_TENANT pro motivo. O `env` de cada execução é resolvido 1x
 // (buildTenantEnv) e passado pra tudo que tem override por tenant — Calendar
 // (Google), GA4, TaskProvider e canal de entrega. Sem override no tenant, cai
@@ -111,11 +113,12 @@ import {
   MESES_DE_HISTORICO,
   montaAvisoLugarNovo,
 } from "../_shared/lugar-novo.ts";
+import { montaMensagemFimDoDia } from "../_shared/fim-do-dia.ts";
 import {
-  type CompromissoDoDia,
-  montaMensagemFimDoDia,
-  type TarefaDoDia,
-} from "../_shared/fim-do-dia.ts";
+  type ItemAgenda,
+  montaResumoDaManha,
+  type Pendencia,
+} from "../_shared/blocos-do-dia.ts";
 import {
   cargaPorDia,
   detectaConflitos,
@@ -499,6 +502,32 @@ const TZ = "America/Sao_Paulo";
  *  a data em SP (YYYY-MM-DD), então é uma linha por tenant por dia. */
 const BRIEF_TIPO = "brief_do_dia";
 
+/**
+ * Resposta combinada quando nada nos dados brutos vale uma linha. Existe pra
+ * distinguir "li e não há sinal" de "não consegui ler" — sem isso o modelo
+ * preenchia o silêncio com uma explicação inventada ("as fontes de notícias
+ * estão indisponíveis" num dia em que estavam de pé e simplesmente não havia
+ * nada).
+ */
+const SEM_SINAL = "SEM_SINAL";
+
+/**
+ * O ÚNICO prompt que sobrou no resumo da manhã.
+ *
+ * Agenda e pendências saíram daqui em 02/09/2026: nome e data de tarefa são
+ * fato, não redação, e pedi-los ao modelo custava caro em dois sentidos — a
+ * mesma tarefa saía "Prazo hoje" às 06:00 e "venceu 31/08" às 08:00, e o
+ * "por frente (suas frentes)" do prompt antigo vazava literal pro texto de
+ * tenant sem frente cadastrada. O que ficou é síntese de texto corrido, que é
+ * justamente o que o código não sabe fazer.
+ */
+const PROMPT_SINAIS = "Resuma os sinais abaixo em tópicos curtos, um por linha, cada linha " +
+  'começando com "· ". Priorize edital público (é oportunidade com prazo) sobre notícia. Para ' +
+  "cada edital diga órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
+  "com a data. NÃO invente nada além do que está listado, NÃO escreva título, introdução nem " +
+  "conclusão, e NÃO explique por que algo não veio. Se nada abaixo valer uma linha, responda " +
+  `exatamente ${SEM_SINAL}. Não faça perguntas, só entregue as linhas.`;
+
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
 
@@ -520,6 +549,23 @@ function fmtDateTime(ms: number): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(ms));
+}
+
+/** Só o dia: "31/08". Vencimento de tarefa não precisa de hora pra priorizar. */
+function fmtDate(ms: number): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: TZ,
+    day: "2-digit",
+    month: "2-digit",
+  }).format(new Date(ms));
+}
+
+/** Cabeçalho do resumo da manhã: "Terça, 02/09". */
+function dataPorExtensoSP(agora = new Date()): string {
+  const diaDaSemana = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" })
+    .format(agora)
+    .replace("-feira", "");
+  return `${diaDaSemana.charAt(0).toUpperCase()}${diaDaSemana.slice(1)}, ${fmtDate(agora.getTime())}`;
 }
 
 // ─── /fast (reuso do loop de tools pra compor textos) ────────────────────────
@@ -616,6 +662,82 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
     list: t.list,
     url: t.url,
   }));
+}
+
+// ─── As duas listas do dia (agenda + pendências) ─────────────────────────────
+//
+// Servem o resumo das 06:00 E a pergunta das 19:00. Ficam juntas porque falam
+// do MESMO dia: até 01/09/2026 cada mensagem lia por um caminho próprio — o
+// resumo pedia a lista pro modelo, o fim do dia montava a sua no código — e as
+// duas do mesmo dia se contradiziam. O FORMATO do texto está em
+// _shared/blocos-do-dia.ts; aqui só a leitura.
+
+/**
+ * Compromissos de uma janela, DIA INTEIRO INCLUSO.
+ *
+ * Não reusa getEventosEntre de propósito: aquela existe pra ANÁLISE DE CARGA
+ * (maratona, conflito, semana pesada) e descarta evento sem horário com razão
+ * — sem `end` não há hora pra somar, e um evento de dia inteiro se sobreporia
+ * a tudo. Aqui a pergunta é outra ("o que tem no dia?"), e evento sem horário
+ * é item do dia como qualquer outro. Era esse filtro, aplicado à pergunta
+ * errada, que sumia com o "TROCAR FILTRO CHUVEIRO" às 19h de 01/09.
+ *
+ * Ordem: com horário primeiro, cronológico; dia inteiro por último. O Google
+ * devolve dia inteiro como meia-noite, então ordenar cru pelo início jogaria a
+ * troca do filtro na frente da reunião das 09:00.
+ */
+async function getAgendaDoDia(
+  deISO: string,
+  ateISO: string,
+  env: EnvFn,
+): Promise<Array<ItemAgenda & { inicioMs: number }>> {
+  const eventos = await getEventsBetween(deISO, ateISO, calendarDeps(env));
+  // linhaSegura: título de evento é texto de fora (Google, e quem tiver
+  // convidado o usuário). Sem isso, um "*" no título quebra a formatação da
+  // mensagem inteira e uma quebra de linha vira item fantasma na lista.
+  const item = (e: CalendarEvent) => ({
+    titulo: linhaSegura(e.title, 90),
+    hora: e.time,
+    inicioMs: new Date(e.startISO).getTime(),
+  });
+  return [
+    ...eventos.filter((e) => e.time !== null).map(item).sort((a, b) => a.inicioMs - b.inicioMs),
+    ...eventos.filter((e) => e.time === null).map(item),
+  ];
+}
+
+/**
+ * Tudo que está em aberto e o dia de hoje precisa encarar: venceu antes de
+ * hoje, ou vence hoje. Atrasadas primeiro, por ordem de vencimento.
+ *
+ * O corte antigo era "vence EXATAMENTE hoje", e foi ele que fez 01/09 — quatro
+ * tarefas em aberto — virar "Tinha 1 coisa hoje". Atrasada não deixa de ser
+ * pendência por ter passado da data; é justamente a que mais precisa aparecer.
+ */
+async function getPendenciasDeHoje(env: EnvFn): Promise<Pendencia[]> {
+  const hoje = hojeEmSP();
+  return (await getTasksWithDue(env))
+    // Comparação de string em YYYY-MM-DD: ordem lexicográfica é a cronológica.
+    .filter((t) => diaSPdeMs(t.dueMs) <= hoje)
+    .sort((a, b) => a.dueMs - b.dueMs)
+    // Mesmo motivo do título de evento: nome de tarefa vem do ClickUp/Notion/
+    // Trello, e cai numa mensagem formatada. Cortar em 90 é seguro pro fluxo de
+    // resposta: complete_task/remarcar_tarefa casam por trecho do nome.
+    .map((t) => ({
+      nome: linhaSegura(t.name, 90),
+      frente: linhaSegura(t.frente ?? "", 30),
+      vence: fmtDate(t.dueMs),
+      atrasada: diaSPdeMs(t.dueMs) < hoje,
+    }));
+}
+
+/** A janela de hoje em SP, em ISO: [00:00, 24:00). */
+function janelaDeHoje(): { inicioISO: string; fimISO: string } {
+  const inicio = new Date(`${hojeEmSP()}T03:00:00.000Z`); // 00:00 SP = 03:00 UTC
+  return {
+    inicioISO: inicio.toISOString(),
+    fimISO: new Date(inicio.getTime() + 24 * 3600_000).toISOString(),
+  };
 }
 
 // Lembretes de agenda: evento começando dentro de LEAD_MIN ainda não avisado.
@@ -1226,13 +1348,16 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
   const tasks = await getTasksWithDue(env);
   let sent = 0;
 
-  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo já
-  // lista "prazo pra hoje ou atrasadas", então tudo que JÁ estava vencido
-  // naquele momento ele contou — e repetir duas horas depois, uma mensagem por
-  // tarefa, era o grosso do "muito texto".
+  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo
+  // lista exatamente "atrasada ou com prazo pra hoje" (getPendenciasDeHoje),
+  // então tudo que já estava vencido naquele momento ele contou — e repetir
+  // duas horas depois, uma mensagem por tarefa, era o grosso do "muito texto".
   //
-  // O que o resumo lista é: atrasada NAQUELE momento, ou com prazo pra hoje.
-  // Então o alerta só fala de uma tarefa quando ela vira NOTÍCIA depois disso —
+  // Desde 02/09/2026 esse conjunto é montado no código, não escrito pelo
+  // modelo: a regra abaixo casa com a lista de verdade, não com uma instrução
+  // de prompt que o modelo podia interpretar de outro jeito.
+  //
+  // O alerta só fala de uma tarefa quando ela vira NOTÍCIA depois do resumo —
   // venceu de verdade no meio do dia, ou o prazo nem era de hoje.
   const briefMs = await horaDoBriefDeHoje(tenant.id);
 
@@ -1538,8 +1663,11 @@ async function jaEnviouTemplate(
   return Array.isArray(data) && data.length > 0;
 }
 
-// Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
-// (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
+// Resumo diário: agenda + pendências (montadas no código, ver getAgendaDoDia e
+// getPendenciasDeHoje) + um bloco de sinais sintetizado pelo modelo a partir de
+// PNCP/BCB/notícias. O texto final é montado por montaResumoDaManha
+// (_shared/blocos-do-dia.ts), a mesma função de formato que o fim do dia usa —
+// é o que garante que as duas mensagens do mesmo dia contem a mesma história.
 async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
   const tenantId = tenant.id;
   const entrega = resolveEntrega(tenant, env);
@@ -1594,34 +1722,49 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
 
   const sinaisBlock = blocos.join("\n\n");
 
-  const prompt =
-    "Monte meu resumo da manhã, conciso e em tópicos curtos. Inclua: " +
-    "(1) os compromissos de hoje na minha agenda, com horário; " +
-    `(2) por frente (${frentesEmTexto(tenant)}): entregas/tarefas com prazo ` +
-    "pra hoje ou atrasadas, e reuniões pautadas; " +
-    // (3) reescrito na junção de 01/09/2026, preservando DUAS regras que
-    // nasceram separadas e resolvem coisas diferentes do mesmo texto:
-    //   - do main (mockup aprovado no dia): frente sem item é OMITIDA, nunca
-    //     vira uma linha dizendo que não há nada — três frentes vazias viravam
-    //     três linhas de "nada", que era o grosso do "resumo comprido";
-    //   - daqui: proibido EXPLICAR por que um bloco veio vazio. A instrução
-    //     antiga ("se não houver nada relevante, diga isso em uma linha") era
-    //     vaga o bastante pro modelo inventar a CAUSA — foi assim que saiu
-    //     "as fontes de notícias estão indisponíveis no momento" num dia em
-    //     que a única verdade disponível era "não há sinal".
-    "(3) um bloco SINAIS, com base SÓ nos dados abaixo. Priorize edital " +
-    "público (é oportunidade com prazo) sobre notícia. Para cada edital diga " +
-    "órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
-    "com a data. NÃO invente nada além do que está listado, e NÃO explique por " +
-    "que um bloco veio vazio — se não há sinal, diga só 'sem sinal novo hoje'. " +
-    "OMITA por completo as frentes que não tiverem nenhum item — não escreva o nome " +
-    "delas nem uma linha dizendo que não há nada. Só se NENHUMA frente tiver item, " +
-    "escreva uma única linha dizendo isso. Vale o mesmo pros blocos de agenda e " +
-    "sinais: vazio se resolve em uma linha, nunca em uma lista de vazios. " +
-    "Não faça perguntas, só entregue." +
-    (sinaisBlock ? `\n\n${sinaisBlock}` : "");
+  // ─── As duas listas do dia, montadas no código ────────────────────────────
+  //
+  // Falha de fonte não derruba o resumo, mas VAI JUNTO no texto: metade da
+  // lista com cara de lista inteira é pior que uma lista curta que se explica.
+  const naoConsegui: string[] = [];
 
-  const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
+  let agenda: ItemAgenda[] = [];
+  if (googleConectado(tenant)) {
+    try {
+      const { inicioISO, fimISO } = janelaDeHoje();
+      agenda = (await getAgendaDoDia(inicioISO, fimISO, env))
+        .map((e) => ({ titulo: e.titulo, hora: e.hora }));
+    } catch (err) {
+      naoConsegui.push("agenda");
+      await marcaGoogleRevogadoSeAplicavel(tenantId, err);
+      console.error("[cron] brief: agenda falhou:", semDadoPessoal(err));
+    }
+  }
+
+  let pendencias: Pendencia[] = [];
+  if (taskProviderConfigurado(tenant)) {
+    try {
+      pendencias = await getPendenciasDeHoje(env);
+    } catch (err) {
+      naoConsegui.push("lista de tarefas");
+      console.error("[cron] brief: tarefas falharam:", semDadoPessoal(err));
+    }
+  }
+
+  // Sem dado bruto não há chamada de modelo: economiza tokens e, mais
+  // importante, tira do modelo a chance de preencher o vazio com uma causa
+  // inventada. Falha na síntese cala só os sinais — o resumo sai sem eles.
+  let sinais = "";
+  if (sinaisBlock) {
+    try {
+      const resposta = await askFast(`${PROMPT_SINAIS}\n\n${sinaisBlock}`, env, tenant.slug);
+      sinais = resposta.toUpperCase().includes(SEM_SINAL) ? "" : resposta;
+    } catch (err) {
+      console.error("[cron] brief: síntese de sinais falhou:", semDadoPessoal(err));
+    }
+  }
+
+  const text = montaResumoDaManha(dataPorExtensoSP(), agenda, pendencias, sinais, naoConsegui);
   await enviarTextoTenant(entrega, text, tenantId);
 
   // Marca que o resumo de hoje saiu. É o que permite ao runAlerts não repetir
@@ -1940,47 +2083,47 @@ async function runEveningRecap(
   const entrega = resolveEntrega(tenant, env);
   if (!entrega) return { len: 0, tarefas: 0, compromissos: 0, pulado: "sem destino/envio configurado" };
 
-  const hoje = hojeEmSP();
+  // Falha de uma fonte não derruba a mensagem — perguntar sobre metade do dia é
+  // melhor que sumir sem explicação às 19h. Mas o que falhou VAI JUNTO no
+  // texto: sem isso, meia lista sai com cara de lista inteira, que foi
+  // exatamente o problema de 01/09 com outra causa.
+  const naoConsegui: string[] = [];
 
-  // Tarefas abertas com prazo HOJE. Vencidas de dias anteriores ficam de fora
-  // de propósito: elas já têm canal próprio (runAlerts/atrasadas_check), e
-  // arrastar tudo pra cá transformaria a pergunta de fim de dia na mesma lista
-  // longa que o resto do sistema já manda.
-  //
-  // Falha de qualquer uma das duas fontes não derruba a mensagem: perguntar
-  // sobre metade do dia é melhor que sumir sem explicação às 19h.
-  let tarefas: TarefaDoDia[] = [];
+  // Tudo que está em aberto: atrasado E do dia. O corte antigo ("vence
+  // exatamente hoje") escondia as quatro atrasadas do 01/09 e transformou a
+  // pergunta em "Tinha 1 coisa hoje".
+  let pendencias: Pendencia[] = [];
   if (taskProviderConfigurado(tenant)) {
     try {
-      tarefas = (await getTasksWithDue(env))
-        .filter((t) => diaSPdeMs(t.dueMs) === hoje)
-        .map((t) => ({ name: t.name, frente: t.frente, list: t.list }));
+      pendencias = await getPendenciasDeHoje(env);
     } catch (err) {
+      naoConsegui.push("lista de tarefas");
       console.error(`[cron] recap: tasks falharam p/ tenant ${tenant.id}:`, semDadoPessoal(err));
     }
   }
 
   // Compromissos de hoje que JÁ COMEÇARAM. Um evento das 20h não entra numa
   // pergunta feita às 19h — perguntar "o que andou?" sobre algo que ainda nem
-  // aconteceu é o tipo de erro que faz ele parar de responder.
+  // aconteceu é o tipo de erro que faz ele parar de responder. Evento de dia
+  // inteiro conta como já começado: ele é o dia.
   const agora = Date.now();
-  let compromissos: CompromissoDoDia[] = [];
+  let compromissos: ItemAgenda[] = [];
   if (googleConectado(tenant)) {
     try {
-      const inicio = new Date(`${hoje}T03:00:00.000Z`); // 00:00 SP
-      const fim = new Date(inicio.getTime() + 24 * 3600_000);
-      compromissos = (await getEventosEntre(inicio.toISOString(), fim.toISOString(), env))
-        .filter((e) => e.inicio.getTime() <= agora)
-        .map((e) => ({ titulo: e.titulo, hora: fmtTime(e.inicio.toISOString()) }));
+      const { inicioISO, fimISO } = janelaDeHoje();
+      compromissos = (await getAgendaDoDia(inicioISO, fimISO, env))
+        .filter((e) => e.hora === null || e.inicioMs <= agora)
+        .map((e) => ({ titulo: e.titulo, hora: e.hora }));
     } catch (err) {
+      naoConsegui.push("agenda");
       await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
       console.error(`[cron] recap: agenda falhou p/ tenant ${tenant.id}:`, semDadoPessoal(err));
     }
   }
 
-  const message = montaMensagemFimDoDia(tarefas, compromissos);
+  const message = montaMensagemFimDoDia(pendencias, compromissos, naoConsegui);
   await enviarTextoTenant(entrega, message, tenant.id);
-  return { len: message.length, tarefas: tarefas.length, compromissos: compromissos.length };
+  return { len: message.length, tarefas: pendencias.length, compromissos: compromissos.length };
 }
 
 // ─── Lugar novo (proativo por DETECÇÃO, silêncio é o normal) ─────────────────
@@ -2089,8 +2232,15 @@ async function runLugarNovo(
 // uma sequência de reuniões coladas amanhã. Silêncio é o resultado normal.
 
 /**
- * Eventos com hora marcada (ignora dia-inteiro) num intervalo, no formato que
- * a análise de carga usa.
+ * Eventos com hora marcada num intervalo, no formato que a ANÁLISE DE CARGA
+ * usa (maratona, conflito, semana pesada).
+ *
+ * Ignorar dia-inteiro aqui é correto e proposital, não o bug de 01/09: sem
+ * `end` não há duração pra somar, e um evento de dia inteiro se sobreporia a
+ * todos os outros, inventando conflito onde não há. Quem quer "o que tem no
+ * dia" — resumo da manhã e fim do dia — usa getAgendaDoDia, que mantém os dois
+ * tipos. Se um dia isto passar a aceitar dia-inteiro, detectaConflitos e
+ * cargaPorDia começam a mentir.
  *
  * Mesma história do getUpcoming: era fetch cru duplicado, sem paginação. O
  * `endISO` que isto precisa passou a existir no leitor compartilhado.

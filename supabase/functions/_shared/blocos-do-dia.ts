@@ -43,6 +43,14 @@ export interface Pendencia {
  */
 export const AGRUPA_POR_FRENTE_ACIMA_DE = 8;
 
+/**
+ * Teto de pendências listadas. Existe porque a lista deixou de ser resumida por
+ * um modelo: agora ela é literal, e uma conta com 60 tarefas atrasadas viraria
+ * 60 linhas às 06:00. Lista que ninguém lê inteira não informa nada — o total
+ * de verdade continua no cabeçalho, e o rodapé diz que houve corte.
+ */
+export const PENDENCIAS_MAX = 15;
+
 /** "· 09:00 Alinhamento" ou "· Dia todo Trocar filtro" — nunca um 00:00 falso. */
 export function linhaAgenda(i: ItemAgenda): string {
   return `· ${i.hora ?? "Dia todo"} ${i.titulo}`;
@@ -70,33 +78,58 @@ export function montaBlocoAgenda(itens: ItemAgenda[]): string {
  */
 export function montaBlocoPendencias(itens: Pendencia[]): string {
   if (itens.length === 0) return "";
-  const cabecalho = `*Pendências (${itens.length})*`;
-  const frentes = new Set(itens.map((p) => p.frente).filter((f) => f.trim() !== ""));
+
+  // O cabeçalho conta TUDO; a lista mostra até o teto. Contar só o mostrado
+  // esconderia o tamanho real do problema, que é a informação mais útil de
+  // quem está com a lista estourada.
+  const total = itens.length;
+  const lista = itens.slice(0, PENDENCIAS_MAX);
+  const corte = total > PENDENCIAS_MAX ? `\n(mostrei ${PENDENCIAS_MAX} de ${total})` : "";
+  const cabecalho = `*Pendências (${total})*`;
+  const frentes = new Set(lista.map((p) => p.frente).filter((f) => f.trim() !== ""));
 
   if (frentes.size <= 1) {
-    return `${cabecalho}\n${itens.map((p) => `· ${p.nome} · ${prazo(p)}`).join("\n")}`;
+    return `${cabecalho}\n${lista.map((p) => `· ${p.nome} · ${prazo(p)}`).join("\n")}${corte}`;
   }
 
-  if (itens.length <= AGRUPA_POR_FRENTE_ACIMA_DE) {
-    return `${cabecalho}\n${itens.map((p) => `· ${p.nome} · ${p.frente} · ${prazo(p)}`).join("\n")}`;
+  if (lista.length <= AGRUPA_POR_FRENTE_ACIMA_DE) {
+    return `${cabecalho}\n${lista.map((p) => `· ${p.nome} · ${p.frente} · ${prazo(p)}`).join("\n")}${corte}`;
   }
 
   // Ordem de aparição, não alfabética: quem tem mais coisa pendente costuma ser
   // a frente que o dia vai girar em volta, e ela já vem primeiro de quem chama.
   const porFrente = new Map<string, Pendencia[]>();
-  for (const p of itens) {
+  for (const p of lista) {
     const chave = p.frente.trim() === "" ? "Outras" : p.frente;
     porFrente.set(chave, [...(porFrente.get(chave) ?? []), p]);
   }
   const grupos = [...porFrente.entries()].map(([frente, ps]) =>
     `*${frente} (${ps.length})*\n${ps.map((p) => `· ${p.nome} · ${prazo(p)}`).join("\n")}`
   );
-  return `${cabecalho}\n\n${grupos.join("\n\n")}`;
+  return `${cabecalho}\n\n${grupos.join("\n\n")}${corte}`;
+}
+
+/**
+ * Fontes que não responderam, escritas pra entrar no meio de uma frase:
+ * ["agenda"] vira "a agenda", ["agenda","lista de tarefas"] vira "a agenda e a
+ * lista de tarefas". Lista vazia devolve "".
+ */
+export function listaDeFontes(fontes: string[]): string {
+  const fs = fontes.filter((f) => f.trim() !== "").map((f) => `a ${f.trim()}`);
+  if (fs.length === 0) return "";
+  if (fs.length === 1) return fs[0];
+  return `${fs.slice(0, -1).join(", ")} e ${fs[fs.length - 1]}`;
 }
 
 /**
  * O resumo da manhã inteiro. `sinais` é a única parte escrita pelo modelo —
  * entra pronta, ou vazia quando não há sinal (e aí o bloco não existe).
+ *
+ * `naoConsegui` são as fontes que falharam nesta execução. Existe porque uma
+ * lista incompleta é INDISTINGUÍVEL de um dia tranquilo: se a agenda não
+ * responde e a mensagem sai só com as tarefas, ela afirma um dia que ninguém
+ * verificou. Com a ressalva, o pior caso vira "pode ter faltado coisa" — que
+ * é verdade — em vez de uma lista errada com cara de certa.
  *
  * Dia sem nada devolve uma linha só. Silêncio total seria pior: some sem
  * explicar por quê, e a pessoa fica sem saber se a Mia quebrou.
@@ -106,13 +139,23 @@ export function montaResumoDaManha(
   agenda: ItemAgenda[],
   pendencias: Pendencia[],
   sinais = "",
+  naoConsegui: string[] = [],
 ): string {
+  const fontes = listaDeFontes(naoConsegui);
+  const ressalva = fontes ? `_Não consegui ler ${fontes} agora — pode ter faltado coisa._` : "";
+
   const blocos = [
     montaBlocoAgenda(agenda),
     montaBlocoPendencias(pendencias),
     sinais.trim() ? `*Sinais*\n${sinais.trim()}` : "",
+    ressalva,
   ].filter((b) => b !== "");
 
+  // Dia limpo só pode ser afirmado quando TUDO foi lido. Com fonte falhando, o
+  // que existe é desconhecimento, não tranquilidade.
   if (blocos.length === 0) return `*${dataPorExtenso}*\n\nDia limpo — nada na agenda e nada pendente.`;
+  if (blocos.length === 1 && ressalva !== "") {
+    return `*${dataPorExtenso}*\n\nNão consegui ler ${fontes} agora, então não sei dizer o que tem hoje. Me pergunta daqui a pouco que eu tento de novo.`;
+  }
   return `*${dataPorExtenso}*\n\n${blocos.join("\n\n")}`;
 }

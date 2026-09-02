@@ -1,5 +1,6 @@
 import { getSupabaseClient } from "../_shared/supabase.ts";
 import { callFastEndpoint } from "../_shared/fast-proxy.ts";
+import { leCorpoJsonLimitado } from "../_shared/corpo-limitado.ts";
 import {
   getTelegramFileBytes,
   sendTelegramChatAction,
