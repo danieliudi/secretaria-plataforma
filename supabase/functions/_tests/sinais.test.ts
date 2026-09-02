@@ -1,7 +1,11 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  buscaCambio,
+  avaliaCambio,
   buscaEditais,
+  buscaSeriePtax,
+  CAMBIO_DERIVA_PREGOES,
+  cambioAtual,
+  type CotacaoPtax,
   dataPncp,
   editalParaSinal,
   ehEditalRelevante,
@@ -219,22 +223,103 @@ Deno.test("buscaEditais respeita o teto de páginas", async () => {
   assertEquals(chamadas, 12);
 });
 
-Deno.test("buscaCambio anda pra trás até achar dia útil", async () => {
-  let tentativas = 0;
-  const fake = (): Promise<Response> => {
-    tentativas++;
-    // Os dois primeiros são fim de semana (value vazio), o terceiro tem dado.
-    const value = tentativas >= 3 ? [{ cotacaoVenda: 5.2005 }] : [];
-    return Promise.resolve(new Response(JSON.stringify({ value }), { status: 200 }));
-  };
-  const s = await buscaCambio(new Date(), "Sanwey", fake);
-  assert(s);
-  assertStringIncludes(s.titulo, "5,2005");
-  // Data no corpo é obrigatória: número de câmbio sem data vira citação errada.
-  assertStringIncludes(s.detalhe, "fechamento de");
+// ─── Câmbio: os dois limiares medidos ───────────────────────────────────────
+// Os números vieram da série PTAX de 127 pregões (mar–set/2026) — ver o
+// cabeçalho do bloco de câmbio em _shared/sinais.ts.
+
+/** Série sintética estável, pra medir só o que o limiar faz. */
+function serie(valores: number[]): CotacaoPtax[] {
+  return valores.map((venda, i) => ({
+    dia: `2026-09-${String(i + 1).padStart(2, "0")}`,
+    venda,
+  }));
+}
+/** 16 pregões parados + os que vierem depois — o mínimo pra deriva existir. */
+const parada = (n: number, v = 5.0) => Array.from({ length: n }, () => v);
+
+Deno.test("dia normal não vira linha no diário", () => {
+  // 0,36% é a mediana medida: o dia típico não pode falar.
+  const s = serie([...parada(CAMBIO_DERIVA_PREGOES), 5.0, 5.018]);
+  assertEquals(avaliaCambio(s, "sanwey"), null);
 });
 
-Deno.test("buscaCambio devolve null em vez de lançar quando o BCB cai", async () => {
-  const fake = (): Promise<Response> => Promise.resolve(new Response("", { status: 503 }));
-  assertEquals(await buscaCambio(new Date(), "Sanwey", fake), null);
+Deno.test("salto de 1% ou mais vira linha, com direção e as duas pontas", () => {
+  const s = serie([...parada(CAMBIO_DERIVA_PREGOES), 5.0, 5.06]);
+  const a = avaliaCambio(s, "sanwey")!;
+  assertEquals(a.tipo, "salto");
+  assertStringIncludes(a.sinal.titulo, "subiu");
+  assertStringIncludes(a.sinal.titulo, "1,2%");
+  assertStringIncludes(a.sinal.detalhe, "vinha de 5,0000");
+});
+
+Deno.test("queda também dispara — o limiar é sobre módulo", () => {
+  const s = serie([...parada(CAMBIO_DERIVA_PREGOES), 5.0, 4.93]);
+  assertStringIncludes(avaliaCambio(s, "sanwey")!.sinal.titulo, "caiu");
+});
+
+Deno.test("deriva de 3% em 15 pregões dispara mesmo sem nenhum salto diário", () => {
+  // Sobe ~0,2% por pregão: nenhum dia chega perto de 1%, mas o patamar anda.
+  const s = serie(Array.from({ length: CAMBIO_DERIVA_PREGOES + 1 }, (_, i) => 5.0 * (1.002 ** i)));
+  const a = avaliaCambio(s, "sanwey")!;
+  assertEquals(a.tipo, "deriva");
+  assertStringIncludes(a.sinal.titulo, "acumula alta");
+  assertStringIncludes(a.sinal.detalhe, "estava 5,0000");
+});
+
+// Foram 16 dias acima de 3% em apenas 6 episódios na série real. Sem esta
+// chave, seriam 16 mensagens.
+Deno.test("a chave é do EPISÓDIO: dias seguidos do mesmo movimento repetem a chave", () => {
+  // 0,25%/pregão: 3,8% na janela, com folga suficiente pra continuar acima
+  // quando a base rolar um pregão pra frente no dia seguinte.
+  const base = Array.from({ length: CAMBIO_DERIVA_PREGOES + 1 }, (_, i) => 5.0 * (1.0025 ** i));
+  const dia1 = avaliaCambio(serie(base), "sanwey")!;
+  const dia2 = avaliaCambio(serie([...base, base[base.length - 1] * 1.001]), "sanwey")!;
+  assertEquals(dia1.tipo, "deriva");
+  assertEquals(dia2.tipo, "deriva");
+  assertEquals(dia1.chave, dia2.chave, "o segundo dia geraria uma mensagem nova");
+});
+
+// A janela é DESLIZANTE: a base anda junto com o dia. Uma subida que fica
+// raspando o limiar pode cair abaixo dele no dia seguinte, mesmo continuando a
+// subir — a base de comparação também subiu. Quando isso acontece e a deriva
+// volta depois, é episódio NOVO, com chave nova. Está certo assim: se o
+// movimento sumiu do radar por dias e voltou, avisar de novo é o certo.
+Deno.test("deriva raspando o limiar pode desligar quando a base desliza", () => {
+  const raspando = Array.from({ length: CAMBIO_DERIVA_PREGOES + 1 }, (_, i) => 5.0 * (1.002 ** i));
+  assertEquals(avaliaCambio(serie(raspando), "sanwey")?.tipo, "deriva");
+  const amanha = [...raspando, raspando[raspando.length - 1] * 1.001];
+  assertEquals(avaliaCambio(serie(amanha), "sanwey"), null);
+});
+
+Deno.test("salto ganha da deriva quando os dois disparam — é a notícia mais fresca", () => {
+  const s = serie([...parada(CAMBIO_DERIVA_PREGOES, 5.0), 5.0, 5.2]);
+  assertEquals(avaliaCambio(s, "sanwey")!.tipo, "salto");
+});
+
+Deno.test("série curta demais não inventa alerta", () => {
+  assertEquals(avaliaCambio(serie([5.0]), "sanwey"), null);
+  assertEquals(avaliaCambio([], "sanwey"), null);
+});
+
+Deno.test("a cotação do semanal sai sempre, e sempre com a data", () => {
+  const c = cambioAtual(serie([5.0, 5.1234]), "sanwey")!;
+  assertStringIncludes(c.titulo, "Dólar 5,1234");
+  assertStringIncludes(c.detalhe, "/09");
+});
+
+Deno.test("BCB fora do ar devolve série vazia, não derruba o resumo", async () => {
+  const s = await buscaSeriePtax(new Date(), 40, () => Promise.reject(new Error("BCB 503")));
+  assertEquals(s, []);
+});
+
+Deno.test("a série volta em ordem cronológica, ignorando linha sem cotação", async () => {
+  const resposta = new Response(JSON.stringify({
+    value: [
+      { cotacaoVenda: 5.2, dataHoraCotacao: "2026-09-02 13:00:00.0" },
+      { cotacaoVenda: 0, dataHoraCotacao: "2026-09-03 13:00:00.0" },
+      { cotacaoVenda: 5.1, dataHoraCotacao: "2026-09-01 13:00:00.0" },
+    ],
+  }));
+  const s = await buscaSeriePtax(new Date(), 40, () => Promise.resolve(resposta));
+  assertEquals(s.map((c) => c.dia), ["2026-09-01", "2026-09-02"]);
 });

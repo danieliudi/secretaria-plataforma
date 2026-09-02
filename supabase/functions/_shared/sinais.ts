@@ -261,41 +261,166 @@ export async function buscaEditais(
   return achados;
 }
 
-/** Dólar PTAX do último dia útil com cotação. Volta null em vez de lançar. */
-export async function buscaCambio(
-  hoje: Date,
-  frente: string,
+// ─── Câmbio ─────────────────────────────────────────────────────────────────
+//
+// LIMIARES MEDIDOS, não escolhidos no olho (02/09/2026). Série PTAX de venda,
+// 127 pregões entre março e setembro de 2026:
+//
+//   mediana do dia .... 0,36%      amplitude no período ... 7,4%
+//   média ............. 0,48%      (4,8973 → 5,2599)
+//   percentil 90 ...... 1,10%      deriva média em 15 pregões ... 1,83%
+//   maior salto ....... 1,92%
+//
+// Quantos dias cada limiar diário pegaria, em 127 pregões: 0,5% → 47 (um a
+// cada 2,7 dias, vira ruído); 1,0% → 14 (~2/mês); 1,5% → 4; 2,0% → NENHUM.
+//
+// Por que DUAS regras e não uma: pra quem usa o dólar como INSUMO (resina
+// indexada), um dia de 1% não muda preço — o que muda é o patamar. E o
+// patamar andou 7,4% no período sem nenhum salto diário de 2%. A deriva de 15
+// pregões ≥3% dispararia 6 vezes em 6 meses (10/04, 27/04, 29/05, 09/06,
+// 24/06 e 14/08), ~1 por mês.
+//
+// A deriva FICA LIGADA por dias seguidos — foram 16 dias acima de 3%, em 6
+// episódios. Por isso `chave` identifica o EPISÓDIO (o dia em que a deriva
+// cruzou o limiar), não o dia: quem chama grava em `avisos_enviados` e o
+// segundo dia do mesmo episódio não vira mensagem nova.
+
+/** Salto de um pregão pro outro que merece uma linha no resumo do dia. */
+export const CAMBIO_SALTO_DIA_PCT = 1.0;
+/** Janela da deriva, em pregões (≈3 semanas corridas). */
+export const CAMBIO_DERIVA_PREGOES = 15;
+/** Deriva acumulada na janela que indica mudança de patamar. */
+export const CAMBIO_DERIVA_PCT = 3.0;
+
+export interface CotacaoPtax {
+  /** AAAA-MM-DD */
+  dia: string;
+  venda: number;
+}
+
+export interface AlertaCambio {
+  tipo: "salto" | "deriva";
+  sinal: Sinal;
+  /** Identidade do episódio, pra deduplicar em `avisos_enviados`. */
+  chave: string;
+}
+
+function dataBcb(d: Date): string {
+  return `${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}-${d.getUTCFullYear()}`;
+}
+
+function pct(a: number, b: number): number {
+  return Math.abs(a / b - 1) * 100;
+}
+
+function reais(v: number): string {
+  return v.toFixed(4).replace(".", ",");
+}
+
+/**
+ * A série PTAX de venda da janela, em ordem cronológica.
+ *
+ * UMA chamada, em vez do laço dia-a-dia que existia antes: além de mais
+ * barato, remove um bug real — o `catch` do laço fazia `return null`, então um
+ * 503 num único dia abortava a busca inteira em vez de tentar o dia anterior.
+ * Devolve [] em vez de lançar; fim de semana e feriado simplesmente não vêm.
+ */
+export async function buscaSeriePtax(
+  ate: Date,
+  diasCorridos = 40,
   fetchImpl: FetchLike = fetch,
-): Promise<Sinal | null> {
-  // O BCB não publica em fim de semana/feriado: anda pra trás até achar.
-  for (let i = 1; i <= 5; i++) {
-    const d = new Date(hoje.getTime() - i * 86400000);
-    const mmddyyyy = `${String(d.getUTCMonth() + 1).padStart(2, "0")}-${
-      String(d.getUTCDate()).padStart(2, "0")
-    }-${d.getUTCFullYear()}`;
-    try {
-      const url = "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/" +
-        `CotacaoDolarDia(dataCotacao=@dataCotacao)?@dataCotacao='${mmddyyyy}'&$format=json`;
-      const res = await fetchImpl(url);
-      if (!res.ok) throw new Error(`BCB ${res.status}`);
-      const corpo = await res.json() as { value?: Array<{ cotacaoVenda?: number }> };
-      const venda = corpo.value?.[0]?.cotacaoVenda;
-      if (typeof venda === "number" && venda > 0) {
-        return {
-          fonte: "BCB",
-          frente,
-          titulo: `Dólar ${venda.toFixed(4).replace(".", ",")}`,
-          // A DATA É OBRIGATÓRIA no corpo: número de câmbio sem data vira
-          // citação errada pro cliente semanas depois.
-          detalhe: `PTAX de venda, fechamento de ${d.getUTCDate()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
-        };
-      }
-    } catch (err) {
-      console.error(`[sinais] BCB falhou: ${semDadoPessoal(err)}`);
-      return null;
-    }
+): Promise<CotacaoPtax[]> {
+  const de = new Date(ate.getTime() - diasCorridos * 86400000);
+  const url = "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/" +
+    `CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)` +
+    `?@dataInicial='${dataBcb(de)}'&@dataFinalCotacao='${dataBcb(ate)}'` +
+    "&$format=json&$select=cotacaoVenda,dataHoraCotacao";
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) throw new Error(`BCB ${res.status}`);
+    const corpo = await res.json() as {
+      value?: Array<{ cotacaoVenda?: number; dataHoraCotacao?: string }>;
+    };
+    return (corpo.value ?? [])
+      .filter((r) => typeof r.cotacaoVenda === "number" && r.cotacaoVenda > 0 && r.dataHoraCotacao)
+      .map((r) => ({ dia: r.dataHoraCotacao!.slice(0, 10), venda: r.cotacaoVenda! }))
+      .sort((a, b) => a.dia.localeCompare(b.dia));
+  } catch (err) {
+    console.error(`[sinais] série PTAX falhou: ${semDadoPessoal(err)}`);
+    return [];
   }
-  return null;
+}
+
+/**
+ * A cotação de fechamento mais recente da série — o número que o panorama
+ * SEMANAL carrega sempre, sem depender de limiar.
+ */
+export function cambioAtual(serie: CotacaoPtax[], frente: string): Sinal | null {
+  const ultima = serie[serie.length - 1];
+  if (!ultima) return null;
+  return {
+    fonte: "BCB",
+    frente,
+    titulo: `Dólar ${reais(ultima.venda)}`,
+    // A DATA É OBRIGATÓRIA no corpo: número de câmbio sem data vira citação
+    // errada pro cliente semanas depois.
+    detalhe: `PTAX de venda, fechamento de ${ultima.dia.slice(8, 10)}/${ultima.dia.slice(5, 7)}`,
+  };
+}
+
+/**
+ * O câmbio merece uma linha no resumo de HOJE? Só quando um dos dois limiares
+ * medidos acima é cruzado — senão devolve null e o diário não fala de dólar.
+ *
+ * Salto ganha da deriva quando os dois disparam: é a notícia mais fresca, e a
+ * deriva quase sempre continua verdadeira amanhã.
+ */
+export function avaliaCambio(serie: CotacaoPtax[], frente: string): AlertaCambio | null {
+  if (serie.length < 2) return null;
+  const hoje = serie[serie.length - 1];
+  const ontem = serie[serie.length - 2];
+
+  const salto = pct(hoje.venda, ontem.venda);
+  if (salto >= CAMBIO_SALTO_DIA_PCT) {
+    const subiu = hoje.venda > ontem.venda;
+    return {
+      tipo: "salto",
+      chave: `cambio-salto-${hoje.dia}`,
+      sinal: {
+        fonte: "BCB",
+        frente,
+        titulo: `Dólar ${subiu ? "subiu" : "caiu"} ${salto.toFixed(1).replace(".", ",")}% em um pregão, pra ${reais(hoje.venda)}`,
+        detalhe: `PTAX de venda, ${hoje.dia.slice(8, 10)}/${hoje.dia.slice(5, 7)} — vinha de ${reais(ontem.venda)}`,
+      },
+    };
+  }
+
+  const base = serie[serie.length - 1 - CAMBIO_DERIVA_PREGOES];
+  if (!base) return null;
+  const deriva = pct(hoje.venda, base.venda);
+  if (deriva < CAMBIO_DERIVA_PCT) return null;
+
+  // O episódio começou no primeiro pregão em que a deriva cruzou o limiar e
+  // não desceu desde então. É essa data que vira a chave — assim o segundo dia
+  // do mesmo movimento não gera mensagem nova.
+  let inicio = serie.length - 1;
+  for (let i = serie.length - 1; i - CAMBIO_DERIVA_PREGOES >= 0; i--) {
+    const anterior = serie[i - CAMBIO_DERIVA_PREGOES];
+    if (pct(serie[i].venda, anterior.venda) < CAMBIO_DERIVA_PCT) break;
+    inicio = i;
+  }
+
+  const subiu = hoje.venda > base.venda;
+  return {
+    tipo: "deriva",
+    chave: `cambio-deriva-${serie[inicio].dia}`,
+    sinal: {
+      fonte: "BCB",
+      frente,
+      titulo: `Dólar ${subiu ? "acumula alta" : "acumula queda"} de ${deriva.toFixed(1).replace(".", ",")}% em ${CAMBIO_DERIVA_PREGOES} pregões, pra ${reais(hoje.venda)}`,
+      detalhe: `PTAX de venda, ${hoje.dia.slice(8, 10)}/${hoje.dia.slice(5, 7)} — estava ${reais(base.venda)} em ${base.dia.slice(8, 10)}/${base.dia.slice(5, 7)}`,
+    },
+  };
 }
 
 /**

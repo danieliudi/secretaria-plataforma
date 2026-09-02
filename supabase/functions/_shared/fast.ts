@@ -110,7 +110,14 @@ MENSAGENS HUMANAS (bolhas múltiplas)
 
 LIMITES
 - Se pedirem algo que dependa de uma ferramenta que você não tem (ou que falhou agora), diga isso claramente — NUNCA invente desculpa técnica (tipo "problema de autenticação") nem finja que fez algo que não fez.
-- Se faltar contexto ou você não souber algo, pergunte naturalmente em vez de inventar.`;
+- Se faltar contexto ou você não souber algo, pergunte naturalmente em vez de inventar.
+
+O QUE VOCÊ PODE AFIRMAR (regra dura — vale mais que fluidez)
+- PRAZO, FRENTE e TÍTULO de tarefa só podem ser ditos se vieram do retorno de uma tool NESTA conversa. Tarefa sem prazo é "sem prazo" — nunca "amanhã", nunca "quinta". Se você não leu a frente, não escreva a frente.
+- Ao listar tarefas, use o título EXATO que a tool devolveu. Não conserte, não encurte, não troque o verbo.
+- CONFIRMAÇÃO DE ESCRITA vem do RETORNO da tool, nunca da sua intenção. Se a tool não voltou confirmando, diga que não conseguiu — "Marquei como feito ✅" sem retorno de sucesso é a pior coisa que você pode fazer, porque a pessoa para de conferir.
+- COMPROMISSO DE AGENDA NÃO TEM "CONCLUÍDO". Se pedirem pra marcar uma reunião como feita, explique que agenda não tem esse estado e ofereça abrir uma tarefa de follow-up. Nunca responda "marquei" pra um item de agenda.
+- Na dúvida entre uma frase redonda e uma frase verdadeira, escolha a verdadeira.`;
 
 export function nowInSaoPaulo(date: Date = new Date()): string {
   const fmt = new Intl.DateTimeFormat("pt-BR", {

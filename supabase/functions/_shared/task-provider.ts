@@ -70,6 +70,32 @@ export type RescheduleTaskResult =
 const REMARCAR_MAX_ANOS = 5;
 
 /**
+ * Converte o `due_date` que veio do provider em epoch ms, ANCORADO AO MEIO-DIA
+ * UTC quando ele é só data (sem hora).
+ *
+ * Por que isso não é detalhe (achado de 02/09/2026): `new Date("2026-09-01")`
+ * é lido pelo JavaScript como MEIA-NOITE UTC. Convertido pra São Paulo (UTC−3)
+ * vira 31/08 às 21:00 — ou seja, o dia do prazo anda um dia PRA TRÁS. Como
+ * praticamente todo provider devolve prazo só como data (sanwey_tasks, Google
+ * Tasks, Notion), isso desviava o sistema proativo inteiro em um dia:
+ *
+ *   - o fim do dia descartava as tarefas que venciam HOJE (elas "eram" ontem),
+ *     e foi por isso que a mensagem das 19h de 01/09 disse "Tinha 1 coisa hoje"
+ *     quando tinha três;
+ *   - `atrasadas_check` e `runAlerts` davam a tarefa como vencida um dia antes.
+ *
+ * Meio-dia UTC é o mesmo truque que `validaDueDate` logo abaixo e o `hojeEmSP`
+ * do cron já usam: fica longe das duas bordas do dia em qualquer fuso do
+ * Brasil, então nunca vira de dia na conversão. Prazo que JÁ vem com hora
+ * (ClickUp manda epoch, Outlook manda ISO completo) passa direto — ali a hora
+ * é informação de verdade, não artefato de formato.
+ */
+export function msDoPrazo(due: string): number {
+  const so_data = /^\d{4}-\d{2}-\d{2}$/.test(due.trim());
+  return new Date(so_data ? `${due.trim()}T12:00:00Z` : due).getTime();
+}
+
+/**
  * Valida o `due_date` que o MODELO produziu, antes de ele chegar em qualquer
  * provider. Devolve a data normalizada (YYYY-MM-DD) ou lança com um texto que
  * o modelo consegue ler e corrigir.

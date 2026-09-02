@@ -2,16 +2,14 @@
 // de agenda e alertas de prazo do gerenciador de tarefas.
 //
 // Modos (POST { task }):
-//   - "brief":     resumo do dia (agenda + pendências montadas no código; só o
-//                  bloco de sinais passa pelo /fast).
+//   - "brief":     resumo do dia (agenda + tarefas por cliente, via /fast).
 //   - "weekly":    panorama da semana por frente (via /fast).
 //   - "reminders": eventos de agenda começando dentro da janela → lembrete.
 //   - "alerts":    tasks vencendo/vencidas (TaskProvider ativo) → alerta (dedup).
 //   - "scheduled": lembretes que o Daniel agendou via tool schedule_reminder
 //                  (suporta recorrência: daily/weekly/monthly_first_business_day).
 //   - "marketing": review semanal por frente (GA4 + tarefas) com otimizações.
-//   - "evening_recap": pergunta de fim de dia com tudo que está pendente —
-//                  atrasado e do dia. Não passa por modelo nenhum.
+//   - "evening_recap": recap de fim de dia (o que ficou em aberto hoje).
 //   - "whatsapp_watchdog": checa se a instância compartilhada da Evolution
 //                  API está conectada, tenta reconectar sozinha e só avisa
 //                  (Telegram, dedup) se continuar fora do ar depois disso —
@@ -37,10 +35,10 @@
 // conflito_check, semana_check, atrasadas_check, resumo_diario, reunioes,
 // ads_check — ver
 // TASKS_MULTI_TENANT) rodam MULTI-TENANT: o Deno.serve abaixo despacha uma execução isolada por
-// tenant elegível (coordenador → executor). Brief, weekly e evening_recap
-// entraram no fan-out em 31/08/2026; seguem single-tenant só o `marketing`
-// (caro e inútil pra quem não anuncia) e as tasks de plataforma
-// (novos_cadastros, feedback_novo, whatsapp_watchdog, reuniao_retencao) — ver
+// tenant elegível (coordenador → executor). As tasks que passam pelo /fast
+// (brief, weekly, marketing, evening_recap) e as de plataforma (novos_
+// cadastros, feedback_novo, whatsapp_watchdog, reuniao_retencao) continuam
+// single-tenant — ver
 // comentário em TASKS_MULTI_TENANT pro motivo. O `env` de cada execução é resolvido 1x
 // (buildTenantEnv) e passado pra tudo que tem override por tenant — Calendar
 // (Google), GA4, TaskProvider e canal de entrega. Sem override no tenant, cai
@@ -62,6 +60,23 @@ import { channelFromUserId, telegramChatId } from "../_shared/channel.ts";
 import { getGa4Snapshot, tryLoadGa4Map } from "../_shared/ga4.ts";
 import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-reminders.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
+import { msDoPrazo } from "../_shared/task-provider.ts";
+import {
+  briefDeDiaVazio,
+  type CompromissoBrief,
+  type EmailBrief,
+  montaBlocoDoBrief,
+  promptDoBrief,
+  type LembreteBrief,
+  type SinalBrief,
+  type TarefaBrief,
+} from "../_shared/brief-manha.ts";
+import { leEmailsDoBrief, type LeitorDeEmail } from "../_shared/brief-email.ts";
+import { listRecentEmails as gmailListRecentEmails } from "../fast/tools/gmail-read.ts";
+import {
+  listRecentEmails as outlookListRecentEmails,
+  outlookMailReadDepsFromEnv,
+} from "../_shared/providers/outlook-mail-provider.ts";
 import {
   buildTenantEnv,
   getPlatformOwnerTenant,
@@ -88,7 +103,9 @@ import {
 } from "../_shared/google-ads.ts";
 import { getSectorNewsBlock } from "../_shared/news.ts";
 import {
-  buscaCambio,
+  avaliaCambio,
+  buscaSeriePtax,
+  cambioAtual,
   buscaEditais,
   montaBlocoSinais,
   normalizaUfs,
@@ -113,12 +130,13 @@ import {
   MESES_DE_HISTORICO,
   montaAvisoLugarNovo,
 } from "../_shared/lugar-novo.ts";
-import { montaMensagemFimDoDia } from "../_shared/fim-do-dia.ts";
 import {
-  type ItemAgenda,
-  montaResumoDaManha,
-  type Pendencia,
-} from "../_shared/blocos-do-dia.ts";
+  type CompromissoDoDia,
+  type LembreteDoDia,
+  montaMensagemFimDoDia,
+  RECAP_MAX_ITENS,
+  type TarefaDoDia,
+} from "../_shared/fim-do-dia.ts";
 import {
   cargaPorDia,
   detectaConflitos,
@@ -164,14 +182,44 @@ function frenteDeEdital(tenant: Tenant): string {
  * pra tenant que só opera no mercado interno.
  */
 function frenteDeCambio(tenant: Tenant): string | null {
+  // Mesmo portão de dono que o radar e as notícias (02/09/2026): "sanwey" é o
+  // negócio do dono da plataforma, não uma categoria de produto.
+  if (!tenant.is_platform_owner) return null;
   const fs = tenant.frentes ?? [];
   return fs.find((f) => f.toLowerCase() === "sanwey") ?? null;
 }
 
-/** Notícia só das frentes do tenant que têm fonte configurada. */
+/**
+ * Notícia só das frentes do tenant que têm fonte configurada — E só pro DONO
+ * da plataforma (02/09/2026).
+ *
+ * As duas únicas frentes com cobertura de imprensa são "resibag" e "sanwey",
+ * que são literalmente os negócios do dono. Sem este portão, qualquer cliente
+ * que batizasse uma frente com um desses nomes passaria a receber a leitura de
+ * mercado DELE — e, mais importante, a feature ficou parecendo estrutura da
+ * plataforma quando nasceu como ferramenta pessoal.
+ *
+ * Isto não fecha a porta: no dia em que houver fonte de imprensa por
+ * frente configurável pelo cliente, o portão sai daqui e vira coluna.
+ */
 function newsFrentesDoTenant(tenant: Tenant): Array<"resibag" | "sanwey"> {
+  if (!tenant.is_platform_owner) return [];
   const dele = new Set((tenant.frentes ?? []).map((f) => f.toLowerCase()));
   return NEWS_FRENTES_COBERTAS.filter((f) => dele.has(f));
+}
+
+/**
+ * UFs do radar de editais deste tenant — vazio quando o radar não vale pra ele.
+ *
+ * Mesma política de `newsFrentesDoTenant` (02/09/2026): recurso do dono,
+ * DESLIGADO por padrão. `radar_ufs` já nasce `{}` pra todo mundo, então o
+ * portão é sobre INTENÇÃO — deixa explícito no código que ligar o radar pra um
+ * cliente é uma decisão de produto que ainda não foi tomada, em vez de um
+ * efeito colateral de preencher uma coluna.
+ */
+function radarUfsDoTenant(tenant: Tenant): string[] {
+  if (!tenant.is_platform_owner) return [];
+  return normalizaUfs(tenant.radar_ufs);
 }
 
 /**
@@ -502,32 +550,6 @@ const TZ = "America/Sao_Paulo";
  *  a data em SP (YYYY-MM-DD), então é uma linha por tenant por dia. */
 const BRIEF_TIPO = "brief_do_dia";
 
-/**
- * Resposta combinada quando nada nos dados brutos vale uma linha. Existe pra
- * distinguir "li e não há sinal" de "não consegui ler" — sem isso o modelo
- * preenchia o silêncio com uma explicação inventada ("as fontes de notícias
- * estão indisponíveis" num dia em que estavam de pé e simplesmente não havia
- * nada).
- */
-const SEM_SINAL = "SEM_SINAL";
-
-/**
- * O ÚNICO prompt que sobrou no resumo da manhã.
- *
- * Agenda e pendências saíram daqui em 02/09/2026: nome e data de tarefa são
- * fato, não redação, e pedi-los ao modelo custava caro em dois sentidos — a
- * mesma tarefa saía "Prazo hoje" às 06:00 e "venceu 31/08" às 08:00, e o
- * "por frente (suas frentes)" do prompt antigo vazava literal pro texto de
- * tenant sem frente cadastrada. O que ficou é síntese de texto corrido, que é
- * justamente o que o código não sabe fazer.
- */
-const PROMPT_SINAIS = "Resuma os sinais abaixo em tópicos curtos, um por linha, cada linha " +
-  'começando com "· ". Priorize edital público (é oportunidade com prazo) sobre notícia. Para ' +
-  "cada edital diga órgão, objeto em poucas palavras, valor e prazo. Número de câmbio SEMPRE " +
-  "com a data. NÃO invente nada além do que está listado, NÃO escreva título, introdução nem " +
-  "conclusão, e NÃO explique por que algo não veio. Se nada abaixo valer uma linha, responda " +
-  `exatamente ${SEM_SINAL}. Não faça perguntas, só entregue as linhas.`;
-
 
 // ─── helpers de formatação ───────────────────────────────────────────────────
 
@@ -549,23 +571,6 @@ function fmtDateTime(ms: number): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(ms));
-}
-
-/** Só o dia: "31/08". Vencimento de tarefa não precisa de hora pra priorizar. */
-function fmtDate(ms: number): string {
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: TZ,
-    day: "2-digit",
-    month: "2-digit",
-  }).format(new Date(ms));
-}
-
-/** Cabeçalho do resumo da manhã: "Terça, 02/09". */
-function dataPorExtensoSP(agora = new Date()): string {
-  const diaDaSemana = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" })
-    .format(agora)
-    .replace("-feira", "");
-  return `${diaDaSemana.charAt(0).toUpperCase()}${diaDaSemana.slice(1)}, ${fmtDate(agora.getTime())}`;
 }
 
 // ─── /fast (reuso do loop de tools pra compor textos) ────────────────────────
@@ -657,20 +662,12 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
   return tasks.map((t) => ({
     id: t.id,
     name: t.name,
-    dueMs: new Date(t.due_date!).getTime(),
+    dueMs: msDoPrazo(t.due_date!),
     frente: t.frente,
     list: t.list,
     url: t.url,
   }));
 }
-
-// ─── As duas listas do dia (agenda + pendências) ─────────────────────────────
-//
-// Servem o resumo das 06:00 E a pergunta das 19:00. Ficam juntas porque falam
-// do MESMO dia: até 01/09/2026 cada mensagem lia por um caminho próprio — o
-// resumo pedia a lista pro modelo, o fim do dia montava a sua no código — e as
-// duas do mesmo dia se contradiziam. O FORMATO do texto está em
-// _shared/blocos-do-dia.ts; aqui só a leitura.
 
 /**
  * Compromissos de uma janela, DIA INTEIRO INCLUSO.
@@ -678,9 +675,10 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
  * Não reusa getEventosEntre de propósito: aquela existe pra ANÁLISE DE CARGA
  * (maratona, conflito, semana pesada) e descarta evento sem horário com razão
  * — sem `end` não há hora pra somar, e um evento de dia inteiro se sobreporia
- * a tudo. Aqui a pergunta é outra ("o que tem no dia?"), e evento sem horário
- * é item do dia como qualquer outro. Era esse filtro, aplicado à pergunta
- * errada, que sumia com o "TROCAR FILTRO CHUVEIRO" às 19h de 01/09.
+ * a tudo, inventando conflito onde não há. Aqui a pergunta é outra ("o que tem
+ * no dia?"), e evento sem horário é item do dia como qualquer outro. Era esse
+ * filtro, aplicado à pergunta errada, que sumia com o "TROCAR FILTRO CHUVEIRO"
+ * às 19h de 01/09.
  *
  * Ordem: com horário primeiro, cronológico; dia inteiro por último. O Google
  * devolve dia inteiro como meia-noite, então ordenar cru pelo início jogaria a
@@ -690,11 +688,10 @@ async function getAgendaDoDia(
   deISO: string,
   ateISO: string,
   env: EnvFn,
-): Promise<Array<ItemAgenda & { inicioMs: number }>> {
+): Promise<Array<CompromissoDoDia & { inicioMs: number }>> {
   const eventos = await getEventsBetween(deISO, ateISO, calendarDeps(env));
   // linhaSegura: título de evento é texto de fora (Google, e quem tiver
-  // convidado o usuário). Sem isso, um "*" no título quebra a formatação da
-  // mensagem inteira e uma quebra de linha vira item fantasma na lista.
+  // convidado o usuário). Uma quebra de linha ali vira item fantasma na lista.
   const item = (e: CalendarEvent) => ({
     titulo: linhaSegura(e.title, 90),
     hora: e.time,
@@ -712,21 +709,23 @@ async function getAgendaDoDia(
  *
  * O corte antigo era "vence EXATAMENTE hoje", e foi ele que fez 01/09 — quatro
  * tarefas em aberto — virar "Tinha 1 coisa hoje". Atrasada não deixa de ser
- * pendência por ter passado da data; é justamente a que mais precisa aparecer.
+ * pendência por ter passado da data; é justamente a que mais precisa aparecer
+ * antes de virar amanhã.
  */
-async function getPendenciasDeHoje(env: EnvFn): Promise<Pendencia[]> {
+async function getPendenciasDeHoje(env: EnvFn): Promise<TarefaDoDia[]> {
   const hoje = hojeEmSP();
   return (await getTasksWithDue(env))
     // Comparação de string em YYYY-MM-DD: ordem lexicográfica é a cronológica.
+    // `dueMs` já vem por msDoPrazo, então "hoje" aqui é mesmo hoje em SP.
     .filter((t) => diaSPdeMs(t.dueMs) <= hoje)
     .sort((a, b) => a.dueMs - b.dueMs)
     // Mesmo motivo do título de evento: nome de tarefa vem do ClickUp/Notion/
-    // Trello, e cai numa mensagem formatada. Cortar em 90 é seguro pro fluxo de
-    // resposta: complete_task/remarcar_tarefa casam por trecho do nome.
+    // Trello. Cortar em 90 é seguro pro fluxo de resposta — complete_task e
+    // remarcar_tarefa casam por TRECHO do nome.
     .map((t) => ({
-      nome: linhaSegura(t.name, 90),
+      name: linhaSegura(t.name, 90),
       frente: linhaSegura(t.frente ?? "", 30),
-      vence: fmtDate(t.dueMs),
+      list: t.list,
       atrasada: diaSPdeMs(t.dueMs) < hoje,
     }));
 }
@@ -1348,16 +1347,13 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
   const tasks = await getTasksWithDue(env);
   let sent = 0;
 
-  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo
-  // lista exatamente "atrasada ou com prazo pra hoje" (getPendenciasDeHoje),
-  // então tudo que já estava vencido naquele momento ele contou — e repetir
-  // duas horas depois, uma mensagem por tarefa, era o grosso do "muito texto".
+  // Quando o resumo da manhã de HOJE saiu (null = ainda não saiu). O resumo já
+  // lista "prazo pra hoje ou atrasadas", então tudo que JÁ estava vencido
+  // naquele momento ele contou — e repetir duas horas depois, uma mensagem por
+  // tarefa, era o grosso do "muito texto".
   //
-  // Desde 02/09/2026 esse conjunto é montado no código, não escrito pelo
-  // modelo: a regra abaixo casa com a lista de verdade, não com uma instrução
-  // de prompt que o modelo podia interpretar de outro jeito.
-  //
-  // O alerta só fala de uma tarefa quando ela vira NOTÍCIA depois do resumo —
+  // O que o resumo lista é: atrasada NAQUELE momento, ou com prazo pra hoje.
+  // Então o alerta só fala de uma tarefa quando ela vira NOTÍCIA depois disso —
   // venceu de verdade no meio do dia, ou o prazo nem era de hoje.
   const briefMs = await horaDoBriefDeHoje(tenant.id);
 
@@ -1663,11 +1659,108 @@ async function jaEnviouTemplate(
   return Array.isArray(data) && data.length > 0;
 }
 
-// Resumo diário: agenda + pendências (montadas no código, ver getAgendaDoDia e
-// getPendenciasDeHoje) + um bloco de sinais sintetizado pelo modelo a partir de
-// PNCP/BCB/notícias. O texto final é montado por montaResumoDaManha
-// (_shared/blocos-do-dia.ts), a mesma função de formato que o fim do dia usa —
-// é o que garante que as duas mensagens do mesmo dia contem a mesma história.
+// Resumo diário: agenda + tarefas por cliente (via /fast) + notícias de setor
+// (Resibag/Sanwey, últimos 3 dias via RSS — ver _shared/news.ts).
+/** "terça, 02/09" — a data como ela abre a mensagem. */
+function dataExtensaSP(hojeISO: string): string {
+  const d = new Date(`${hojeISO}T12:00:00Z`); // meio-dia UTC: nunca vira de dia
+  const semana = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long" }).format(d);
+  return `${semana.replace("-feira", "")}, ${hojeISO.slice(8, 10)}/${hojeISO.slice(5, 7)}`;
+}
+
+/**
+ * Lembretes AGENDADOS pra hoje que ainda NÃO saíram.
+ *
+ * É o inverso do que o fim do dia lê (lá são os já entregues). Mesmo escopo
+ * duplo: tenant_id E user_id do destino — lembrete criado por outra pessoa do
+ * mesmo tenant não é assunto de quem recebe este resumo.
+ */
+async function lembretesDeHoje(
+  tenantId: string,
+  userId: string,
+  hojeSP: string,
+): Promise<LembreteBrief[]> {
+  const inicio = new Date(`${hojeSP}T03:00:00.000Z`); // 00:00 em SP
+  const fim = new Date(inicio.getTime() + 24 * 3600_000);
+  try {
+    const { data, error } = await getSupabaseClient()
+      .from("scheduled_reminders")
+      .select("text, fire_at")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .is("sent_at", null)
+      .is("desistiu_em", null)
+      .gte("fire_at", inicio.toISOString())
+      .lt("fire_at", fim.toISOString())
+      .order("fire_at", { ascending: true })
+      .limit(10);
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Array<{ text: string; fire_at: string }>).map((r) => ({
+      texto: r.text,
+      hora: fmtTime(r.fire_at),
+    }));
+  } catch (err) {
+    // Nunca o texto do lembrete no log: é conteúdo pessoal.
+    console.error(`[cron] brief: lembretes falharam p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return [];
+  }
+}
+
+/**
+ * O leitor de e-mail do tenant, no mesmo critério que o /fast usa pra escolher
+ * Calendar/E-mail (CALENDAR_MAIL_PROVIDER). Os dois providers expõem a mesma
+ * assinatura, então `leEmailsDoBrief` não sabe qual está rodando.
+ */
+function leitorDeEmailDoTenant(env: EnvFn): LeitorDeEmail {
+  if (env("CALENDAR_MAIL_PROVIDER") === "outlook") {
+    const deps = outlookMailReadDepsFromEnv(env);
+    return (input) => outlookListRecentEmails(input, deps);
+  }
+  const deps = { getAccessToken: () => getGoogleAccessToken({ env, fetch }), fetch };
+  return (input) => gmailListRecentEmails(input, deps);
+}
+
+/**
+ * Grava um aviso em `avisos_enviados` e diz se ele é INÉDITO.
+ *
+ * `false` significa "já mandei isso" — 23505 é a chave única fazendo o
+ * trabalho, não um erro. Falha de banco devolve `false` de propósito: na
+ * dúvida, cala. Repetir todo dia o mesmo alerta de câmbio é exatamente o que
+ * o dedupe existe pra impedir.
+ */
+async function marcaAvisoInedito(tenantId: string, tipo: string, chave: string): Promise<boolean> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo, chave });
+    if (!error) return true;
+    if ((error as { code?: string }).code === "23505") return false;
+    throw new Error(error.message);
+  } catch (err) {
+    console.error(`[cron] dedupe '${tipo}' falhou p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    return false;
+  }
+}
+
+/**
+ * Marca que o resumo de hoje saiu — é o que permite ao runAlerts não repetir o
+ * que este resumo já listou. Falha aqui não derruba um brief já entregue: no
+ * pior caso o alerta duplica, que era o comportamento antigo.
+ */
+async function marcaBriefDoDia(tenantId: string): Promise<void> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("avisos_enviados")
+      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hojeEmSP() });
+    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
+    if (error && (error as { code?: string }).code !== "23505") {
+      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(error.message));
+    }
+  } catch (err) {
+    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
+  }
+}
+
 async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pulado?: string }> {
   const tenantId = tenant.id;
   const entrega = resolveEntrega(tenant, env);
@@ -1680,110 +1773,130 @@ async function runBrief(env: EnvFn, tenant: Tenant): Promise<{ len: number; pula
     console.error("[cron] brief: bloco de novidade falhou:", semDadoPessoal(err));
   }
 
-  // SINAIS DE FONTE PRIMÁRIA (01/09/2026). Antes daqui só havia manchete de
-  // Google Notícias, e medido no dia ela rendia ZERO — evento regulatório e
-  // edital público quase nunca viram notícia, morrem no registro de origem.
-  // Agora vêm primeiro PNCP e BCB, que respondem "isto aconteceu?" em vez de
-  // "alguém escreveu sobre isto?". Cada fonte falha sozinha.
-  const blocos: string[] = [];
+  // DADOS PRIMEIRO (02/09/2026). Até aqui o brief era "o modelo com tools":
+  // ele decidia o que ler e escrevia por cima — e foi por esse caminho que
+  // saíram os prazos e as frentes inventados de 01/09. Agora o código busca,
+  // monta um bloco fixo (_shared/brief-manha.ts) e o modelo só redige.
+  // Cada fonte falha sozinha; nenhuma derruba o resumo.
+  const hojeSP = hojeEmSP();
+  const inicioHoje = new Date(`${hojeSP}T03:00:00.000Z`); // 00:00 em SP
+  const fimHoje = new Date(inicioHoje.getTime() + 24 * 3600_000);
+  const fimAmanha = new Date(inicioHoje.getTime() + 48 * 3600_000);
 
-  const ufs = normalizaUfs(tenant.radar_ufs);
+  let compromissosHoje: CompromissoBrief[] = [];
+  let compromissosAmanha: CompromissoBrief[] = [];
+  if (googleConectado(tenant)) {
+    try {
+      const deHoje = await getEventosEntre(inicioHoje.toISOString(), fimHoje.toISOString(), env);
+      compromissosHoje = deHoje.map((e) => ({
+        titulo: e.titulo,
+        hora: fmtTime(e.inicio.toISOString()),
+        fim: e.fim ? fmtTime(e.fim.toISOString()) : undefined,
+      }));
+      const deAmanha = await getEventosEntre(fimHoje.toISOString(), fimAmanha.toISOString(), env);
+      compromissosAmanha = deAmanha.map((e) => ({
+        titulo: e.titulo,
+        hora: fmtTime(e.inicio.toISOString()),
+      }));
+    } catch (err) {
+      await marcaGoogleRevogadoSeAplicavel(tenant.id, err);
+      console.error("[cron] brief: agenda falhou:", semDadoPessoal(err));
+    }
+  }
+
+  let tarefas: TarefaBrief[] = [];
+  if (taskProviderConfigurado(tenant)) {
+    try {
+      // Prazo futuro fica de fora: o resumo é sobre HOJE, e tarefa de sexta
+      // numa terça é ruído — ela volta no dia dela.
+      tarefas = (await getTasksWithDue(env))
+        .map((t) => ({ ...t, dia: diaSPdeMs(t.dueMs) }))
+        .filter((t) => t.dia <= hojeSP)
+        .map((t): TarefaBrief => ({
+          nome: t.name,
+          frente: t.frente,
+          situacao: t.dia < hojeSP ? "vencida" : "hoje",
+          quando: `${t.dia.slice(8, 10)}/${t.dia.slice(5, 7)}`,
+        }));
+    } catch (err) {
+      console.error("[cron] brief: tarefas falharam:", semDadoPessoal(err));
+    }
+  }
+
+  // Lembretes AGENDADOS pra hoje que ainda não saíram — o inverso do fim do
+  // dia (que olha os já entregues). É o que o brief tem a dizer pra quem não
+  // usa gerenciador de tarefas.
+  const lembretesHoje = await lembretesDeHoje(tenantId, entrega.destino.userId, hojeSP);
+
+  // E-MAIL: recurso do dono da plataforma, DESLIGADO por padrão, mesma
+  // política do radar e das notícias. Vira coluna no dia em que um segundo
+  // tenant quiser — hoje não há tela nem decisão de custo tomada pra isso.
+  let emails: EmailBrief[] = [];
+  if (tenant.is_platform_owner) {
+    try {
+      emails = await leEmailsDoBrief(leitorDeEmailDoTenant(env));
+    } catch (err) {
+      console.error("[cron] brief: e-mail falhou:", semDadoPessoal(err));
+    }
+  }
+
+  // SINAIS, só o que é ACIONÁVEL (02/09/2026). Notícia sem data ocupava 6 das
+  // 17 linhas do resumo e não pedia ação nenhuma — foi medido no dia. Edital
+  // do PNCP tem órgão, valor e prazo: esse continua. Manchete vai pro semanal.
+  let sinais: SinalBrief[] = [];
+  const ufs = radarUfsDoTenant(tenant);
   if (ufs.length > 0) {
     try {
-      const hoje = new Date();
-      const ontem = new Date(hoje.getTime() - 86400000);
-      const editais = await buscaEditais(ufs, ontem, hoje, frenteDeEdital(tenant));
-      const bloco = montaBlocoSinais(editais);
-      if (bloco) blocos.push(`EDITAIS PÚBLICOS (PNCP, últimas 24h):\n${bloco}`);
+      const ontem = new Date(Date.now() - 86400000);
+      const editais = await buscaEditais(ufs, ontem, new Date(), frenteDeEdital(tenant));
+      sinais = editais.map((e) => ({ titulo: e.titulo, detalhe: e.detalhe }));
     } catch (err) {
       console.error("[cron] brief: editais falharam:", semDadoPessoal(err));
     }
   }
 
-  if (frenteDeCambio(tenant)) {
+  // CÂMBIO no diário: só quando cruza um dos dois limiares medidos
+  // (_shared/sinais.ts). Deriva fica ligada por dias seguidos, então a chave
+  // do episódio passa por avisos_enviados — o segundo dia do mesmo movimento
+  // não vira mensagem nova.
+  const frenteCambio = frenteDeCambio(tenant);
+  if (frenteCambio) {
     try {
-      const cambio = await buscaCambio(new Date(), frenteDeCambio(tenant)!);
-      const bloco = montaBlocoSinais(cambio ? [cambio] : []);
-      if (bloco) blocos.push(`CÂMBIO:\n${bloco}`);
+      const alerta = avaliaCambio(await buscaSeriePtax(new Date()), frenteCambio);
+      if (alerta && await marcaAvisoInedito(tenantId, "cambio", alerta.chave)) {
+        sinais.push({ titulo: alerta.sinal.titulo, detalhe: alerta.sinal.detalhe });
+      }
     } catch (err) {
       console.error("[cron] brief: câmbio falhou:", semDadoPessoal(err));
     }
   }
 
-  const newsFrentes = newsFrentesDoTenant(tenant);
-  if (newsFrentes.length > 0) {
-    try {
-      const newsBlock = await getSectorNewsBlock(newsFrentes);
-      if (newsBlock) blocos.push(`NOTÍCIAS DO SETOR (últimos dias, por categoria):\n${newsBlock}`);
-    } catch (err) {
-      console.error("[cron] brief: notícias falharam:", semDadoPessoal(err));
-    }
+  const bloco = montaBlocoDoBrief({
+    dataExtenso: dataExtensaSP(hojeSP),
+    compromissosHoje,
+    compromissosAmanha,
+    tarefas,
+    emails,
+    sinais,
+    lembretesHoje,
+  });
+
+  // Dia sem nada em fonte nenhuma não gasta chamada de modelo: a frase é fixa.
+  if (bloco.vazio) {
+    const vazio = briefDeDiaVazio(dataExtensaSP(hojeSP));
+    await enviarTextoTenant(entrega, vazio, tenantId);
+    await marcaBriefDoDia(tenantId);
+    return { len: vazio.length };
   }
 
-  const sinaisBlock = blocos.join("\n\n");
+  const prompt = promptDoBrief(bloco);
 
-  // ─── As duas listas do dia, montadas no código ────────────────────────────
-  //
-  // Falha de fonte não derruba o resumo, mas VAI JUNTO no texto: metade da
-  // lista com cara de lista inteira é pior que uma lista curta que se explica.
-  const naoConsegui: string[] = [];
-
-  let agenda: ItemAgenda[] = [];
-  if (googleConectado(tenant)) {
-    try {
-      const { inicioISO, fimISO } = janelaDeHoje();
-      agenda = (await getAgendaDoDia(inicioISO, fimISO, env))
-        .map((e) => ({ titulo: e.titulo, hora: e.hora }));
-    } catch (err) {
-      naoConsegui.push("agenda");
-      await marcaGoogleRevogadoSeAplicavel(tenantId, err);
-      console.error("[cron] brief: agenda falhou:", semDadoPessoal(err));
-    }
-  }
-
-  let pendencias: Pendencia[] = [];
-  if (taskProviderConfigurado(tenant)) {
-    try {
-      pendencias = await getPendenciasDeHoje(env);
-    } catch (err) {
-      naoConsegui.push("lista de tarefas");
-      console.error("[cron] brief: tarefas falharam:", semDadoPessoal(err));
-    }
-  }
-
-  // Sem dado bruto não há chamada de modelo: economiza tokens e, mais
-  // importante, tira do modelo a chance de preencher o vazio com uma causa
-  // inventada. Falha na síntese cala só os sinais — o resumo sai sem eles.
-  let sinais = "";
-  if (sinaisBlock) {
-    try {
-      const resposta = await askFast(`${PROMPT_SINAIS}\n\n${sinaisBlock}`, env, tenant.slug);
-      sinais = resposta.toUpperCase().includes(SEM_SINAL) ? "" : resposta;
-    } catch (err) {
-      console.error("[cron] brief: síntese de sinais falhou:", semDadoPessoal(err));
-    }
-  }
-
-  const text = montaResumoDaManha(dataPorExtensoSP(), agenda, pendencias, sinais, naoConsegui);
+  const text = await askFast(prompt, env, tenant.slug) || "Sem itens pra hoje. Bom dia!";
   await enviarTextoTenant(entrega, text, tenantId);
 
-  // Marca que o resumo de hoje saiu. É o que permite ao runAlerts não repetir
-  // o que este resumo já listou (ver o comentário lá). Gravado DEPOIS do envio
-  // de propósito: resumo que não chegou não pode calar o alerta.
-  // Falha aqui não derruba um brief já entregue — no pior caso o alerta
-  // duplica, que é o comportamento antigo.
-  try {
-    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-    const { error: briefErr } = await getSupabaseClient()
-      .from("avisos_enviados")
-      .insert({ tenant_id: tenantId, tipo: BRIEF_TIPO, chave: hoje });
-    // 23505 = já existe (brief rodou duas vezes no mesmo dia). Não é erro.
-    if (briefErr && (briefErr as { code?: string }).code !== "23505") {
-      console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(briefErr.message));
-    }
-  } catch (err) {
-    console.error("[cron] brief: marca do dia falhou:", semDadoPessoal(err));
-  }
+  // Gravado DEPOIS do envio de propósito: resumo que não chegou não pode
+  // calar o alerta.
+  await marcaBriefDoDia(tenantId);
 
   // Depois do resumo, e em try próprio: falha de calendário aqui não pode
   // derrubar um brief que já foi entregue com sucesso.
@@ -2004,11 +2117,49 @@ async function runWeekly(env: EnvFn, tenant: Tenant): Promise<{ len: number; pul
   const entrega = resolveEntrega(tenant, env);
   if (!entrega) return { len: 0, pulado: "sem destino/envio configurado" };
 
+  // LEITURA DE MERCADO mudou de lugar em 02/09/2026: notícia e câmbio saíram
+  // do resumo da manhã e vieram pra cá. Motivo medido no dia — os quatro
+  // sinais daquela manhã eram manchete sem data e sem ação, e ocupavam 6 das
+  // 17 linhas de uma mensagem que existe pra decidir o dia. Notícia é leitura;
+  // leitura cabe numa vez por semana. Edital do PNCP, que tem órgão, valor e
+  // prazo, continua no diário.
+  const leitura: string[] = [];
+  const newsFrentes = newsFrentesDoTenant(tenant);
+  if (newsFrentes.length > 0) {
+    try {
+      const bloco = await getSectorNewsBlock(newsFrentes);
+      if (bloco) leitura.push(`NOTÍCIAS DO SETOR:\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] weekly: notícias falharam:", semDadoPessoal(err));
+    }
+  }
+  const frenteCambio = frenteDeCambio(tenant);
+  if (frenteCambio) {
+    try {
+      // No semanal a cotação entra SEMPRE — é contexto, e uma vez por semana
+      // não pesa. O limiar só governa o diário (ver runBrief).
+      const cambio = cambioAtual(await buscaSeriePtax(new Date()), frenteCambio);
+      const bloco = montaBlocoSinais(cambio ? [cambio] : []);
+      if (bloco) leitura.push(`CÂMBIO:\n${bloco}`);
+    } catch (err) {
+      console.error("[cron] weekly: câmbio falhou:", semDadoPessoal(err));
+    }
+  }
+  const blocoLeitura = leitura.join("\n\n");
+
   const text = await askFast(
     `Monte um panorama da minha semana, em tópicos por frente (${frentesEmTexto(tenant)}). ` +
       "Pra cada uma liste as tarefas/entregas em aberto com prazo nesta semana, " +
       "o que está atrasado, e campanhas/pautas em andamento. " +
-      "Seja objetivo, agrupe por frente. Não faça perguntas, só entregue o panorama.",
+      (blocoLeitura
+        ? "No fim, uma seção LEITURA DE MERCADO com base SÓ nos dados abaixo — " +
+          "no máximo 4 linhas, número de câmbio sempre com a data, e NÃO invente " +
+          "nada além do que está listado. "
+        : "") +
+      "OMITA por completo a frente que não tiver nenhum item — não escreva o nome " +
+      "dela nem uma linha dizendo que não há nada. NÃO explique por que algo veio vazio. " +
+      "Seja objetivo, agrupe por frente. Não faça perguntas, só entregue o panorama." +
+      (blocoLeitura ? `\n\n${blocoLeitura}` : ""),
     env,
     tenant.slug,
   ) || "Sem itens em aberto esta semana.";
@@ -2079,23 +2230,21 @@ function diaSPdeMs(ms: number): string {
 async function runEveningRecap(
   env: EnvFn,
   tenant: Tenant,
-): Promise<{ len: number; tarefas: number; compromissos: number; pulado?: string }> {
+): Promise<{ len: number; tarefas: number; compromissos: number; lembretes?: number; pulado?: string }> {
   const entrega = resolveEntrega(tenant, env);
   if (!entrega) return { len: 0, tarefas: 0, compromissos: 0, pulado: "sem destino/envio configurado" };
 
   // Falha de uma fonte não derruba a mensagem — perguntar sobre metade do dia é
-  // melhor que sumir sem explicação às 19h. Mas o que falhou VAI JUNTO no
-  // texto: sem isso, meia lista sai com cara de lista inteira, que foi
-  // exatamente o problema de 01/09 com outra causa.
+  // melhor que sumir sem explicação às 19h. Mas o que falhou VAI JUNTO no texto:
+  // meia lista com cara de lista inteira é o mesmo erro do 01/09 com outra
+  // causa, porque a pessoa lê e acredita.
   const naoConsegui: string[] = [];
 
-  // Tudo que está em aberto: atrasado E do dia. O corte antigo ("vence
-  // exatamente hoje") escondia as quatro atrasadas do 01/09 e transformou a
-  // pergunta em "Tinha 1 coisa hoje".
-  let pendencias: Pendencia[] = [];
+  // Tudo que está em aberto: atrasado E do dia.
+  let tarefas: TarefaDoDia[] = [];
   if (taskProviderConfigurado(tenant)) {
     try {
-      pendencias = await getPendenciasDeHoje(env);
+      tarefas = await getPendenciasDeHoje(env);
     } catch (err) {
       naoConsegui.push("lista de tarefas");
       console.error(`[cron] recap: tasks falharam p/ tenant ${tenant.id}:`, semDadoPessoal(err));
@@ -2107,7 +2256,7 @@ async function runEveningRecap(
   // aconteceu é o tipo de erro que faz ele parar de responder. Evento de dia
   // inteiro conta como já começado: ele é o dia.
   const agora = Date.now();
-  let compromissos: ItemAgenda[] = [];
+  let compromissos: CompromissoDoDia[] = [];
   if (googleConectado(tenant)) {
     try {
       const { inicioISO, fimISO } = janelaDeHoje();
@@ -2121,9 +2270,70 @@ async function runEveningRecap(
     }
   }
 
-  const message = montaMensagemFimDoDia(pendencias, compromissos, naoConsegui);
+  // Lembretes que a PRÓPRIA secretária entregou hoje — a terceira fonte
+  // (02/09/2026). Sem ela, quem não usa gerenciador de tarefas nem tem agenda
+  // conectada recebia "dia limpo" horas depois de ter sido cutucado por ela
+  // mesma: foi o caso do "Lembra de procurar o bolo 🎂" das 11h, seguido de
+  // "Nada com prazo hoje na sua lista" às 19h, no mesmo dia e no mesmo chat.
+  //
+  // Escopo duplo e obrigatório: `tenant_id` (isolamento) E `user_id` do
+  // DESTINO resolvido — um lembrete criado por outra pessoa do mesmo tenant
+  // não é assunto de quem está recebendo este fim de dia.
+  const lembretes = await lembretesEntreguesHoje(tenant.id, entrega.destino.userId, hojeEmSP());
+  if (lembretes.falhou) naoConsegui.push("lista de lembretes");
+
+  const message = montaMensagemFimDoDia(tarefas, compromissos, lembretes.itens, [], naoConsegui);
   await enviarTextoTenant(entrega, message, tenant.id);
-  return { len: message.length, tarefas: pendencias.length, compromissos: compromissos.length };
+  return {
+    len: message.length,
+    tarefas: tarefas.length,
+    compromissos: compromissos.length,
+    lembretes: lembretes.itens.length,
+  };
+}
+
+/**
+ * Lembretes já ENTREGUES hoje (sent_at preenchido) pra este tenant e este
+ * destinatário. Falha de leitura devolve lista vazia MAIS a marca `falhou`, em
+ * vez de derrubar o fim do dia: perder uma seção é melhor que sumir às 19h sem
+ * explicação — mesmo critério que as outras duas fontes acima já usam. A marca
+ * existe porque calar sobre a falha faria meia lista parecer lista inteira.
+ */
+async function lembretesEntreguesHoje(
+  tenantId: string,
+  userId: string,
+  hojeSP: string,
+): Promise<{ itens: LembreteDoDia[]; falhou: boolean }> {
+  // O dia civil de SP em UTC: 00:00 em São Paulo é 03:00Z (UTC−3, sem horário
+  // de verão desde 2019). Mesma janela que o resto do arquivo usa.
+  const inicio = new Date(`${hojeSP}T03:00:00.000Z`);
+  const fim = new Date(inicio.getTime() + 24 * 3600_000);
+  try {
+    const { data, error } = await getSupabaseClient()
+      .from("scheduled_reminders")
+      .select("text, sent_at")
+      .eq("tenant_id", tenantId)
+      .eq("user_id", userId)
+      .not("sent_at", "is", null)
+      .gte("sent_at", inicio.toISOString())
+      .lt("sent_at", fim.toISOString())
+      .order("sent_at", { ascending: true })
+      .limit(RECAP_MAX_ITENS);
+    if (error) throw new Error(error.message);
+    return {
+      itens: ((data ?? []) as Array<{ text: string; sent_at: string }>).map((r) => ({
+        texto: r.text,
+        hora: fmtTime(r.sent_at),
+      })),
+      falhou: false,
+    };
+  } catch (err) {
+    // Nunca o texto do lembrete no log: é conteúdo pessoal.
+    console.error(`[cron] recap: lembretes falharam p/ tenant ${tenantId}:`, semDadoPessoal(err));
+    // Continua sem derrubar o fim do dia, mas devolve a falha: quem monta a
+    // mensagem precisa poder dizer que a lista veio incompleta.
+    return { itens: [], falhou: true };
+  }
 }
 
 // ─── Lugar novo (proativo por DETECÇÃO, silêncio é o normal) ─────────────────
@@ -2235,12 +2445,11 @@ async function runLugarNovo(
  * Eventos com hora marcada num intervalo, no formato que a ANÁLISE DE CARGA
  * usa (maratona, conflito, semana pesada).
  *
- * Ignorar dia-inteiro aqui é correto e proposital, não o bug de 01/09: sem
- * `end` não há duração pra somar, e um evento de dia inteiro se sobreporia a
- * todos os outros, inventando conflito onde não há. Quem quer "o que tem no
- * dia" — resumo da manhã e fim do dia — usa getAgendaDoDia, que mantém os dois
- * tipos. Se um dia isto passar a aceitar dia-inteiro, detectaConflitos e
- * cargaPorDia começam a mentir.
+ * Ignorar dia-inteiro aqui é correto e proposital: sem `end` não há duração
+ * pra somar, e um evento de dia inteiro se sobreporia a todos os outros,
+ * inventando conflito onde não há. Quem quer "o que tem no dia" — o fim do dia
+ * — usa getAgendaDoDia, que mantém os dois tipos. Se um dia isto passar a
+ * aceitar dia-inteiro, detectaConflitos e cargaPorDia começam a mentir.
  *
  * Mesma história do getUpcoming: era fetch cru duplicado, sem paginação. O
  * `endISO` que isto precisa passou a existir no leitor compartilhado.
