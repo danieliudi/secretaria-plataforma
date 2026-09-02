@@ -27,11 +27,9 @@ import { semDadoPessoal } from "../_shared/log-seguro.ts";
 import {
   buildTenantEnv,
   consumeWhatsAppLinkCode,
-  DEFAULT_TENANT_SLUG,
   getTenantByAuthorizedPhone,
   numeroAguardandoAprovacao,
   getTenantByWhatsAppInstance,
-  getTenantBySlug,
   normalizeWhatsAppJidToE164,
   tenantElegivel,
   type Tenant,
@@ -151,22 +149,48 @@ async function classify(text: string, frentes: string[], tenantId?: string | nul
   return decision;
 }
 
-// Roteamento por tenant (fase 2 — PREPARADO): resolve o tenant pela
-// `instance` da Evolution (quando o n8n passar a mandar). Usado tanto pro
-// envio (WhatsAppDeps) quanto pro /fast usar as MESMAS credenciais nas tools
-// (calendar/tarefas/GA4) — ver tenantSlug em callFastEndpoint. Qualquer falha
-// (DB fora do ar, tenant não achado) cai em `null` — sendWhatsAppMessages e
-// /fast usam os defaults (env global, comportamento de antes desta mudança).
-async function resolveTenant(instance?: string): Promise<Tenant | null> {
+/**
+ * De quem é esta mensagem. Duas vias, nesta ordem, e NENHUM tenant padrão.
+ *
+ *   1. `instance` da Evolution → tenant com instância dedicada.
+ *   2. `from` → tenant que tem esse número em whatsapp_authorized_number.
+ *
+ * Até 02/09/2026 a via 2 não existia e o fim da função era
+ * `getTenantBySlug(DEFAULT_TENANT_SLUG)` — o tenant do DONO DA PLATAFORMA.
+ * Ou seja: instância desconhecida virava "é o dono". Como o /fast só recusa
+ * quando o `tenant_slug` VEM e falha (slug ausente cai no env global, ver
+ * fast/index.ts), uma chamada com o segredo de webhook, uma `instance`
+ * qualquer e um `from` escolhido recebia a resposta montada com o Google, o
+ * Gmail e o CRM do dono — entregue no número escolhido. Mesma classe do que
+ * o /fast fechou em 01/09 (commit b61ba8b) e que aqui continuava aberta.
+ *
+ * A via 2 é o que permite fechar isso SEM perder o killswitch documentado
+ * logo abaixo (platformEvolutionInstance): com PLATFORM_EVOLUTION_INSTANCE
+ * desligado, o n8n continua mandando `instance: "secretaria"`, que não bate
+ * com tenant nenhum — antes isso caía no dono por sorte, agora resolve pelo
+ * número dele, que é o critério correto e o mesmo do número compartilhado.
+ * Verificado em 02/09/2026: os três tenants ativos têm
+ * whatsapp_authorized_number batendo com o número que de fato manda mensagem
+ * (o backfill errado que motivou o killswitch já foi corrigido).
+ *
+ * `null` = não deu pra confirmar. Quem chama RECUSA — nunca segue no global.
+ */
+async function resolveTenant(instance?: string, fromJid?: string): Promise<Tenant | null> {
   try {
     if (instance) {
-      const tenant = await getTenantByWhatsAppInstance(instance);
-      if (tenant) return tenant;
-      console.error(`[reflex] instance '${instance}' não encontrada/inativa — usando fallback`);
+      const porInstancia = await getTenantByWhatsAppInstance(instance);
+      if (porInstancia) return porInstancia;
     }
-    return await getTenantBySlug(DEFAULT_TENANT_SLUG);
+    // Sem `instance`, ou com uma que não existe: confirma por QUEM MANDOU.
+    // getTenantByAuthorizedPhone já exige active + aprovado_em.
+    const e164 = fromJid ? normalizeWhatsAppJidToE164(fromJid) : null;
+    if (!e164) return null;
+    return await getTenantByAuthorizedPhone(e164);
   } catch (err) {
-    console.error(`[reflex] resolveTenant falhou, seguindo com env global: ${semDadoPessoal(err)}`);
+    // Blip de banco também é "não sei de quem é" — e a resposta segura pra
+    // isso é a mesma: não responder. Cair no env global aqui era servir a
+    // conta do dono a quem quer que estivesse do outro lado.
+    console.error(`[reflex] resolveTenant falhou — recusando: ${semDadoPessoal(err)}`);
     return null;
   }
 }
@@ -585,7 +609,18 @@ Deno.serve(async (req: Request) => {
     // precisa das frentes REAIS de quem está falando (achado da auditoria de
     // "prompt mestre", 21/08/2026), e os 3 usos abaixo (reflex, fast síncrono,
     // fast assíncrono) reconsultavam o mesmo tenant cada um por conta própria.
-    const tenant = await resolveTenant(instance);
+    const tenant = await resolveTenant(instance, fromRaw);
+
+    // Não deu pra confirmar de quem é a mensagem: recusa aqui, ANTES de
+    // gastar modelo (classificador, visão) e antes de qualquer tool.
+    //
+    // Este ponto não existia até 02/09/2026 porque `resolveTenant` nunca
+    // devolvia null na prática — ele caía no tenant do dono da plataforma.
+    // Ver o cabeçalho da função pro caminho de vazamento que isso abria.
+    if (!tenant) {
+      console.warn("[reflex] não foi possível confirmar de quem é a mensagem — recusando");
+      return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
+    }
 
     // Portão de acesso (achado da auditoria de 28/08/2026). O comentário do
     // /fast afirmava que "/reflex, /telegram e o cron já barram tenant não
@@ -594,7 +629,11 @@ Deno.serve(async (req: Request) => {
     // coberto de carona (o /fast barra por conta própria), mas o tier "reflex"
     // chama orchestrateReflex direto e gravava saúde/medicação/hábito de quem
     // estava pausado.
-    if (tenant && !tenantElegivel(tenant)) {
+    //
+    // Continua valendo mesmo com getTenantByAuthorizedPhone já filtrando
+    // aprovado_em: a via da `instance` não filtra, e `recusado_em` não é
+    // checado por nenhum dos dois resolvedores (ver S-2 da auditoria).
+    if (!tenantElegivel(tenant)) {
       console.warn(`[reflex] tenant '${tenant.slug}' sem acesso liberado — recusando`);
       return resp({ error: "tenant sem acesso liberado" }, 403);
     }
@@ -604,7 +643,7 @@ Deno.serve(async (req: Request) => {
     // (a) saber de quem é a conta, pro custo entrar em `uso_modelo` com dono, e
     // (b) o portão de acesso — quem está pausado não gasta modelo nenhum.
     if (imagem) {
-      const convertida = await imagemViraTexto(imagem, text, tenant?.id ?? null);
+      const convertida = await imagemViraTexto(imagem, text, tenant.id);
       if (!convertida.ok) {
         // A recusa precisa CHEGAR na pessoa. O n8n descarta o corpo da
         // resposta (o node "Respond to Webhook" devolve um "OK" fixo pra
@@ -621,7 +660,7 @@ Deno.serve(async (req: Request) => {
     // também deixava QUALQUER chamador escolher o tier (e portanto o
     // orçamento/tools liberados) da própria mensagem sem passar pelo Haiku.
     // Nenhum caller legítimo do repositório manda esse campo hoje.
-    let decision = await classify(text, tenant?.frentes ?? [], tenant?.id ?? null);
+    let decision = await classify(text, tenant.frentes, tenant.id);
     // Nunca logue `text`: é o conteúdo integral da mensagem do usuário —
     // conversa pessoal, e eventualmente um segredo que ele digitou no chat.
     // A classificação sozinha já basta pra diagnóstico.
@@ -674,7 +713,7 @@ Deno.serve(async (req: Request) => {
               decision,
               from,
               timeoutMs: FAST_BG_TIMEOUT_MS,
-              tenantSlug: tenant?.slug,
+              tenantSlug: tenant.slug,
             });
             const bubbles = splitMessages(result.message);
             await dbg.from("async_debug").insert({
@@ -726,7 +765,7 @@ Deno.serve(async (req: Request) => {
         console.warn("[reflex] chamada sem 'from' no caminho síncrono — recusando em vez de responder pelo tenant padrão");
         return resp({ error: "não foi possível identificar o usuário desta mensagem" }, 409);
       }
-      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenant?.slug });
+      const result = await callFastEndpoint({ text, decision, from, tenantSlug: tenant.slug });
       return resp(result, 200);
     }
 
