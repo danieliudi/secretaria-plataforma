@@ -803,7 +803,19 @@ export default function OnboardingWizard(props: {
                   Já usa ClickUp, Notion ou Trello? Clique aqui.
                 </summary>
                 <div className="flex flex-col gap-2 border-t border-aurora-line-soft p-3">
-                  {PROVIDER_OPTIONS.filter((o) => o.value !== "google_tasks" && o.value !== "microsoft_todo").map((opt) => (
+                  {/*
+                    `sanwey_tasks` só aparece pro DONO da plataforma. É o "Meu
+                    To-Do" pessoal dele dentro do sanwey-crm — nome de pessoa e
+                    de sistema interno numa tela que todo cliente vê, e uma
+                    opção que ninguém mais consegue usar (o token é um secret
+                    de outra function). O portão de verdade está no backend,
+                    em app/api/onboarding/task-provider/route.ts; isto aqui só
+                    evita oferecer o que seria recusado.
+                  */}
+                  {PROVIDER_OPTIONS.filter((o) =>
+                    o.value !== "google_tasks" && o.value !== "microsoft_todo" &&
+                    (o.value !== "sanwey_tasks" || props.isPlatformOwner)
+                  ).map((opt) => (
                     <ProviderOption
                       key={opt.value}
                       opt={opt}
