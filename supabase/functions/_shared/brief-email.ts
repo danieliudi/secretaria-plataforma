@@ -63,6 +63,26 @@ function ms(iso: string): number {
 }
 
 /**
+ * Promoção e rede social fora da leitura.
+ *
+ * Em 03/09/2026 o resumo da manhã terminou assim: "Fechou sem você: Audible,
+ * Noun Project, Starbuzz, Samsung, Candy AI, Google, Netlify, Cutterman, Play,
+ * Cinemark, Granola." Onze nomes, nenhum deles uma coisa que fechou — era a
+ * caixa de entrada crua, que numa manhã qualquer é quase toda mala direta. O
+ * modelo não inventou: recebeu doze e-mails sem filtro e fez o que dava pra
+ * fazer com eles.
+ *
+ * `updates` NÃO entra no corte. É onde o Gmail joga confirmação de pedido e
+ * aviso de fornecedor junto com notificação de deploy — cortar tiraria ruído e
+ * levaria junto e-mail que importa, sem avisar ninguém. Ruído a mais é
+ * incômodo; e-mail real sumindo em silêncio é o erro caro.
+ *
+ * O provider do Outlook traduz a mesma sintaxe (ver traduzQueryParaFiltroGraph);
+ * onde a categoria não existir, o termo simplesmente não filtra nada.
+ */
+const SEM_MALA_DIRETA = "-category:promotions -category:social";
+
+/**
  * Recebidos da janela, cada um marcado com "existe resposta minha depois
  * disto, com este assunto?".
  *
@@ -82,7 +102,10 @@ export async function leEmailsDoBrief(
     String(desde.getDate()).padStart(2, "0")
   }`;
 
-  const recebidos = await ler({ n: MAX_EMAILS_RECEBIDOS, query: `in:inbox ${depoisDe}` });
+  const recebidos = await ler({
+    n: MAX_EMAILS_RECEBIDOS,
+    query: `in:inbox ${SEM_MALA_DIRETA} ${depoisDe}`,
+  });
   if (recebidos.length === 0) return [];
 
   let enviados: EmailCru[] = [];

@@ -13,7 +13,7 @@
 // chamadas escreviam um cache que ninguém leu.
 
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { blocoAgora, buildFastSystemPrompt, nowInSaoPaulo } from "../_shared/fast.ts";
+import { blocoAgora, buildFastSystemPrompt } from "../_shared/fast.ts";
 
 const PERSONA = {
   nome: "Fulano de Tal",
@@ -30,6 +30,16 @@ Deno.test("prefixo estável não carrega data nem hora", () => {
   assert(!estavel.includes("Agora:"), "linha 'Agora:' vazou pro prefixo");
   assert(!/\d{2}:\d{2}/.test(estavel), `hora (HH:MM) vazou pro prefixo: ${estavel.match(/.{0,40}\d{2}:\d{2}.{0,40}/)?.[0]}`);
   assert(!/\d{2}\/\d{2}\/\d{4}/.test(estavel), "data (DD/MM/AAAA) vazou pro prefixo");
+  // O calendário de 14 dias muda TODO DIA. No prefixo, invalidaria ~17k tokens
+  // de cache uma vez por dia pra cada tenant — o problema que o breakpoint
+  // resolveu em 31/08, de volta por outra porta.
+  //
+  // O que não pode vazar é a TABELA, não a palavra: o prefixo cita "CALENDÁRIO"
+  // numa regra fixa ("a data vem do CALENDÁRIO no contexto"), e texto estático
+  // não invalida cache nenhum. Por isso a asserção mira o cabeçalho da tabela e
+  // as datas ISO, que são o que muda de um dia pro outro.
+  assert(!estavel.includes("a data de cada dia"), "tabela do calendário vazou pro prefixo");
+  assert(!/\d{4}-\d{2}-\d{2}/.test(estavel), "data ISO vazou pro prefixo cacheado");
 });
 
 Deno.test("prefixo estável é idêntico em minutos diferentes", () => {
@@ -41,7 +51,7 @@ Deno.test("prefixo estável é idêntico em minutos diferentes", () => {
 });
 
 Deno.test("bloco 'agora' carrega a hora e sai separado", () => {
-  const agora = blocoAgora(nowInSaoPaulo(new Date("2026-08-31T14:37:00Z")));
+  const agora = blocoAgora(new Date("2026-08-31T14:37:00Z"));
   assertStringIncludes(agora, "CONTEXTO ATUAL");
   assertStringIncludes(agora, "11:37");
 });
@@ -49,14 +59,14 @@ Deno.test("bloco 'agora' carrega a hora e sai separado", () => {
 Deno.test("com datetime, o prompt sai completo (caminho sem tools)", () => {
   // O handler antigo (`handleFast`, sem tool use) não usa cache e continua
   // mandando um bloco só — passando a string, nada muda pra ele.
-  const completo = buildFastSystemPrompt(nowInSaoPaulo(new Date("2026-08-31T14:37:00Z")), PERSONA);
+  const completo = buildFastSystemPrompt(new Date("2026-08-31T14:37:00Z"), PERSONA);
   assertStringIncludes(completo, "CONTEXTO ATUAL");
   assertStringIncludes(completo, "11:37");
   assert(!completo.includes("{{"), "sobrou placeholder no prompt");
 });
 
 Deno.test("nenhum placeholder sobra em nenhum dos dois modos", () => {
-  for (const p of [buildFastSystemPrompt(null, PERSONA), buildFastSystemPrompt("agora", PERSONA)]) {
+  for (const p of [buildFastSystemPrompt(null, PERSONA), buildFastSystemPrompt(new Date("2026-08-31T14:37:00Z"), PERSONA)]) {
     assert(!p.includes("{{"), "sobrou placeholder no prompt");
     assert(!p.includes("undefined"), "'undefined' vazou pro prompt");
   }

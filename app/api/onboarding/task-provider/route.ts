@@ -48,7 +48,7 @@ export async function POST(request: Request) {
   const { data: tenant, error: loadErr } = await admin
     .from("tenants")
     .select(
-      "id, frentes, task_provider_token_secret_id, trello_api_key_secret_id, task_provider, task_provider_list_map, google_refresh_token_secret_id, outlook_refresh_token_secret_id",
+      "id, frentes, is_platform_owner, task_provider_token_secret_id, trello_api_key_secret_id, task_provider, task_provider_list_map, google_refresh_token_secret_id, outlook_refresh_token_secret_id",
     )
     .eq("auth_user_id", user.id)
     .maybeSingle();
@@ -58,6 +58,15 @@ export async function POST(request: Request) {
       { error: "tenant não encontrado — complete o passo de persona primeiro" },
       { status: 404 },
     );
+  }
+
+  // `sanwey_tasks` é o "Meu To-Do" pessoal do dono da plataforma dentro do
+  // sanwey-crm — não é um produto que outra conta possa usar (o token é o
+  // PERSONAL_TASKS_AGENT_KEY de outra Edge Function). O wizard já esconde a
+  // opção de quem não é dono; este portão é o que vale, porque a tela é só
+  // uma sugestão: um POST direto aqui contornaria o filtro do React.
+  if (provider === "sanwey_tasks" && !tenant.is_platform_owner) {
+    return NextResponse.json({ error: `provider inválido: '${provider}'` }, { status: 400 });
   }
 
   let secretId = tenant.task_provider_token_secret_id as string | null;
@@ -139,6 +148,21 @@ export async function POST(request: Request) {
     }
   });
 
+  // Quem termina o wizard sem declarar frente nenhuma ganha uma lista chamada
+  // `DEFAULT_FRENTE` — mas até 03/09/2026 esse nome NÃO era gravado em
+  // `tenants.frentes`, e as duas fontes ficavam se contradizendo dentro do
+  // MESMO system prompt: o bloco do provider dizia "Frentes com Notion
+  // configurado: geral" enquanto o bloco de persona dizia que o usuário não
+  // tem frente nenhuma.
+  //
+  // O efeito real (Erika, 02/09): ela pediu pra criar uma tarefa, a secretária
+  // não soube em qual frente, e acabou afirmando três vezes que "o Notion não
+  // está integrado" — com a integração funcionando e o database criado. Diante
+  // de duas afirmações incompatíveis, o modelo escolheu a errada e ainda
+  // reforçou ("não é instabilidade"). Sincronizar aqui é o que impede a
+  // contradição de existir.
+  const frentesParaGravar = frentesTenant.length > 0 ? frentesTenant : [DEFAULT_FRENTE];
+
   const { error } = await admin
     .from("tenants")
     .update({
@@ -146,6 +170,7 @@ export async function POST(request: Request) {
       task_provider_list_map: novoMap,
       task_provider_token_secret_id: secretId,
       trello_api_key_secret_id: trelloApiKeySecretId,
+      frentes: frentesParaGravar,
       updated_at: new Date().toISOString(),
     })
     .eq("id", tenant.id);
