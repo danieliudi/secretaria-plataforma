@@ -91,8 +91,39 @@ const REMARCAR_MAX_ANOS = 5;
  * é informação de verdade, não artefato de formato.
  */
 export function msDoPrazo(due: string): number {
-  const so_data = /^\d{4}-\d{2}-\d{2}$/.test(due.trim());
-  return new Date(so_data ? `${due.trim()}T12:00:00Z` : due).getTime();
+  return new Date(prazoSoTemData(due) ? `${due.trim()}T12:00:00Z` : due).getTime();
+}
+
+/**
+ * O prazo veio SEM hora ("2026-09-03")?
+ *
+ * Existe porque a âncora do meio-dia de `msDoPrazo` acerta o DIA e, justamente
+ * por isso, produz uma HORA que ninguém marcou — meio-dia UTC é 09:00 em São
+ * Paulo. Em 03/09/2026 isso apareceu duas vezes no mesmo minuto:
+ *
+ *   - a mensagem exibia "vence 03/09, 09:00" pra um prazo que era só a data;
+ *   - e o alerta declarou três tarefas VENCIDAS às 14:00, quando elas ainda
+ *     tinham 10 horas — porque comparou `agora` com a âncora.
+ *
+ * Quem sabe se há hora consegue fazer as duas coisas certas: não imprimir hora
+ * inventada, e medir o vencimento pelo FIM do dia (ver fimDoPrazoMs).
+ */
+export function prazoSoTemData(due: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(due.trim());
+}
+
+/**
+ * O instante em que o prazo REALMENTE acaba, em ms.
+ *
+ * Prazo com hora acaba na hora marcada. Prazo só com data acaba às 23:59:59,9
+ * daquele dia em São Paulo — é o que qualquer pessoa entende por "vence dia 3",
+ * e é a diferença entre avisar que algo venceu e avisar que ainda dá tempo.
+ */
+export function fimDoPrazoMs(due: string): number {
+  if (!prazoSoTemData(due)) return new Date(due).getTime();
+  // 00:00 do dia SEGUINTE em SP (= 03:00Z), menos 1 ms.
+  const dia = new Date(`${due.trim()}T03:00:00.000Z`);
+  return dia.getTime() + 24 * 3600_000 - 1;
 }
 
 /**

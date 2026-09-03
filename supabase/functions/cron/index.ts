@@ -64,7 +64,8 @@ import { channelFromUserId, telegramChatId } from "../_shared/channel.ts";
 import { getGa4Snapshot, tryLoadGa4Map } from "../_shared/ga4.ts";
 import { nextOccurrence, type RecurrenceType } from "../_shared/scheduled-reminders.ts";
 import { getTaskProvider } from "../_shared/task-provider-factory.ts";
-import { msDoPrazo } from "../_shared/task-provider.ts";
+import { fimDoPrazoMs, msDoPrazo, prazoSoTemData } from "../_shared/task-provider.ts";
+import { montaMensagemDePrazos, type PrazoEmAberto } from "../_shared/prazos.ts";
 import {
   briefDeDiaVazio,
   type CompromissoBrief,
@@ -582,6 +583,24 @@ function fmtDateTime(ms: number): string {
   }).format(new Date(ms));
 }
 
+/** Só o dia: "31/08". */
+function fmtDia(ms: number): string {
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit" })
+    .format(new Date(ms));
+}
+
+/**
+ * O prazo escrito como ele é: com hora quando o provider mandou hora, só a
+ * data quando não mandou.
+ *
+ * Em 03/09/2026 todas as quatro linhas de prazo diziam "09:00" — que é a
+ * âncora do meio-dia UTC vista de São Paulo, não um horário que alguém marcou.
+ * É a mesma regra do "Dia todo" da agenda: melhor não dizer a hora do que
+ * inventar uma que parece certa.
+ */
+function fmtPrazo(t: { dueMs: number; soData: boolean }): string {
+  return t.soData ? fmtDia(t.dueMs) : fmtDateTime(t.dueMs);
+}
 // ─── /fast (reuso do loop de tools pra compor textos) ────────────────────────
 
 /**
@@ -659,7 +678,17 @@ async function getUpcoming(aheadMin: number, env: EnvFn): Promise<UpcomingEvent[
 interface TaskDue {
   id: string;
   name: string;
+  /** Âncora do prazo (meio-dia UTC quando é só data). Serve pra saber o DIA. */
   dueMs: number;
+  /**
+   * Quando o prazo REALMENTE acaba. Só data => 23:59:59,9 daquele dia em SP.
+   *
+   * Separado de `dueMs` por causa de 03/09/2026: comparar `agora` com a âncora
+   * declarou três tarefas vencidas às 14:00 quando elas ainda tinham 10 horas.
+   */
+  fimMs: number;
+  /** O provider mandou o prazo sem hora — então não existe hora pra exibir. */
+  soData: boolean;
   frente: string;
   /** Nem toda plataforma tem sub-lista (Notion/Google Tasks não têm). */
   list?: string;
@@ -672,6 +701,8 @@ async function getTasksWithDue(env: EnvFn): Promise<TaskDue[]> {
     id: t.id,
     name: t.name,
     dueMs: msDoPrazo(t.due_date!),
+    fimMs: fimDoPrazoMs(t.due_date!),
+    soData: prazoSoTemData(t.due_date!),
     frente: t.frente,
     list: t.list,
     url: t.url,
@@ -1366,23 +1397,28 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
   // venceu de verdade no meio do dia, ou o prazo nem era de hoje.
   const briefMs = await horaDoBriefDeHoje(tenant.id);
 
-  // Agrupa por (frente, vencida?) antes de mandar. Uma mensagem por grupo em
-  // vez de uma por tarefa; o rótulo do grupo só é honesto se vencida e
-  // vencendo não se misturarem.
-  type Grupo = { label: string; overdue: boolean; itens: typeof tasks };
-  const grupos = new Map<string, Grupo>();
+  // UMA mensagem por disparo, vencidas primeiro. Antes era um agrupamento por
+  // (frente × vencida?), que num dia de duas frentes virava até quatro bolhas
+  // no mesmo minuto e fora de ordem de urgência — foi o que chegou em 03/09.
+  const vencidas: PrazoEmAberto[] = [];
+  const vencendo: PrazoEmAberto[] = [];
+  const reivindicadas: TaskDue[] = [];
 
-  for (const t of tasks) {
-    const overdue = t.dueMs < now;
-    const dueSoon = t.dueMs >= now && t.dueMs <= now + ALERT_AHEAD_MS;
+  // Ordenar antes de montar: dentro de cada seção, o mais antigo primeiro.
+  for (const t of [...tasks].sort((a, b) => a.fimMs - b.fimMs)) {
+    // `fimMs`, não `dueMs`: prazo só com data acaba às 23:59, não na âncora do
+    // meio-dia UTC. Comparar com a âncora era o que fazia a Mia anunciar como
+    // vencida, às 14:00, uma tarefa que ainda tinha 10 horas.
+    const overdue = t.fimMs < now;
+    const dueSoon = t.fimMs >= now && t.fimMs <= now + ALERT_AHEAD_MS;
     if (!overdue && !dueSoon) continue;
     if (briefMs !== null) {
       // Estava no resumo de hoje se já tinha vencido quando ele saiu, ou se o
-      // prazo é de hoje ("Prazo hoje" é uma das linhas que ele escreve).
-      const estavaNoResumo = t.dueMs < briefMs || mesmoDiaEm(t.dueMs, briefMs);
+      // prazo é de hoje (o resumo lista o que vence hoje).
+      const estavaNoResumo = t.fimMs < briefMs || mesmoDiaEm(t.fimMs, briefMs);
       // ...mas se venceu DEPOIS do resumo, virou informação nova: o resumo
       // disse "vence hoje às 15h", e agora são 15h05 e passou.
-      const venceuDepoisDoResumo = overdue && t.dueMs >= briefMs;
+      const venceuDepoisDoResumo = overdue && t.fimMs >= briefMs;
       if (estavaNoResumo && !venceuDepoisDoResumo) continue;
     }
 
@@ -1390,36 +1426,32 @@ async function runAlerts(env: EnvFn, tenant: Tenant): Promise<{ sent: number; sc
     // legado (era ClickUp-only) — dedup funciona igual pra qualquer provider.
     const reivindicado = await reivindicaAlerta(tenant.id, t.id, t.dueMs);
     if (!reivindicado) continue;
+    reivindicadas.push(t);
 
     // Sem "Beehave": era o nome da agência do Daniel, hardcoded numa task
-    // que hoje já roda multi-tenant — `label` já carrega a frente/lista
+    // que hoje já roda multi-tenant — `frente` já carrega a frente/lista
     // real de QUALQUER tenant, não precisa de marca nenhuma na frente.
-    const label = t.list ? `${t.frente}/${t.list}` : t.frente;
-    const chave = `${label}\u0000${overdue}`;
-    const grupo = grupos.get(chave) ?? { label, overdue, itens: [] };
-    grupo.itens.push(t);
-    grupos.set(chave, grupo);
+    const item: PrazoEmAberto = {
+      nome: linhaSegura(t.name, 90),
+      frente: linhaSegura(t.list ? `${t.frente}/${t.list}` : t.frente, 40),
+      quando: fmtPrazo(t),
+    };
+    (overdue ? vencidas : vencendo).push(item);
   }
 
-  for (const g of grupos.values()) {
-    const icon = g.overdue ? "🔴" : "🟡";
-    const verbo = g.overdue ? "venceu" : "vence";
-    // Uma tarefa só não vira lista: cabeçalho + um marcador pra uma linha é
-    // mais texto, não menos, que é o oposto do ponto.
-    const text = g.itens.length === 1
-      ? `${icon} Prazo — ${g.label}: "${g.itens[0].name}" ${verbo} ${fmtDateTime(g.itens[0].dueMs)}`
-      : `${icon} *${g.overdue ? "Prazos vencidos" : "Vencendo em breve"} — ${g.label} (${g.itens.length})*\n` +
-        g.itens.map((t) => `· ${t.name} — ${verbo} ${fmtDateTime(t.dueMs)}`).join("\n");
-    try {
-      await enviarTextoTenant(entrega, text, tenant.id);
-    } catch (err) {
-      // Rollback do grupo inteiro: sem isso, o que já tinha sido reivindicado
-      // nunca mais alertaria, e a mensagem que o carregava não chegou.
-      for (const t of g.itens) await desfazAlerta(tenant.id, t.id, t.dueMs);
-      throw err;
-    }
-    sent += g.itens.length;
+  const text = montaMensagemDePrazos(vencidas, vencendo);
+  if (text === null) return { sent: 0, scanned: tasks.length };
+
+  try {
+    await enviarTextoTenant(entrega, text, tenant.id);
+  } catch (err) {
+    // Rollback de tudo que entrou nesta mensagem: sem isso, o que já tinha
+    // sido reivindicado nunca mais alertaria, e a mensagem não chegou.
+    for (const t of reivindicadas) await desfazAlerta(tenant.id, t.id, t.dueMs);
+    throw err;
   }
+  sent = reivindicadas.length;
+
   return { sent, scanned: tasks.length };
 }
 
@@ -2082,7 +2114,7 @@ async function runMarketing(env: EnvFn, tenant: Tenant): Promise<{ sent: number;
       .map((t) => ({
         name: t.name,
         list: t.list,
-        due: fmtDateTime(t.dueMs),
+        due: fmtPrazo(t),
         overdue: t.dueMs < Date.now(),
       }));
 
@@ -2956,8 +2988,9 @@ async function runAtrasadasCheck(
   const tarefas = await getTasksWithDue(env);
   const atrasadas = priorizaAtrasadas(
     tarefas
-      .filter((t) => t.dueMs < agora)
-      .map((t) => ({ titulo: t.name, diasAtraso: Math.floor((agora - t.dueMs) / 86_400_000) })),
+      // Mesma correção do runAlerts: prazo só com data acaba às 23:59.
+      .filter((t) => t.fimMs < agora)
+      .map((t) => ({ titulo: t.name, diasAtraso: Math.floor((agora - t.fimMs) / 86_400_000) })),
   ) ?? (dryRun
     ? [
       { titulo: "Exemplo A", diasAtraso: 9 },

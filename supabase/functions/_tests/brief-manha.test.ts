@@ -3,6 +3,7 @@ import {
   briefDeDiaVazio,
   type FontesDoBrief,
   MAX_DECISOES,
+  MAX_EMAILS,
   MAX_TAMBEM,
   montaBlocoDoBrief,
   promptDoBrief,
@@ -102,9 +103,15 @@ Deno.test("o prompt proíbe markdown — a mesma string vai pros dois canais", (
   assertStringIncludes(p, "NÃO use asterisco");
 });
 
-Deno.test("o prompt carrega o teto de itens numerados", () => {
+Deno.test("o teto de itens numerados saiu do prompt e virou estrutura", () => {
+  // Até 03/09/2026 o prompt dizia "NO MÁXIMO 3, havendo mais numere as 3 mais
+  // urgentes e termine com (+N)". Num dia de três vencendo, o modelo numerou
+  // UMA e não escreveu rodapé — o teto era um pedido, e pedido se ignora.
+  // Agora o corte acontece no bloco e o prompt manda numerar TODOS.
   const p = promptDoBrief(montaBlocoDoBrief(com({ compromissosHoje: [{ titulo: "X", hora: "09:00" }] })));
-  assertStringIncludes(p, `NO MÁXIMO ${MAX_DECISOES}`);
+  assertStringIncludes(p, "TODOS eles, na ordem em que aparecem");
+  assertStringIncludes(p, "Não escolha, não corte, não reordene");
+  assert(!p.includes(`NO MÁXIMO ${MAX_DECISOES}`), "o teto voltou a ser pedido no prompt");
 });
 
 Deno.test("o prompt manda hedgar a ausência de resposta, não afirmar", () => {
@@ -218,4 +225,71 @@ Deno.test("'updates' continua entrando — e-mail transacional mora lá", async 
   await leEmailsDoBrief(ler);
   const inbox = queries.find((q) => q.includes("in:inbox")) ?? "";
   assert(!inbox.includes("category:updates"), inbox);
+});
+
+// ── O que 03/09/2026 ensinou: teto pedido no prompt não é teto ──────────────
+Deno.test("a escolha das decisões é do código, não do modelo", () => {
+  // Naquele dia havia três tarefas vencendo e o resumo saiu "1 pra decidir",
+  // sem rodapé nenhum. O bloco agora manda numerar TODAS as que ele lista, e
+  // diz quantas ficaram de fora.
+  const tarefas = Array.from({ length: MAX_DECISOES + 2 }, (_, i) => ({
+    nome: `Tarefa ${i + 1}`,
+    frente: "Resibag",
+    situacao: "hoje" as const,
+  }));
+  const bloco = montaBlocoDoBrief(com({ tarefas }));
+
+  assertStringIncludes(bloco.texto, "numere TODOS");
+  assertStringIncludes(bloco.texto, "SOBRARAM: 2");
+  assertStringIncludes(bloco.texto, '"(+2 na lista)"');
+  const listadas = bloco.texto.split("\n").filter((l) => l.startsWith("- [tarefa"));
+  assertEquals(listadas.length, MAX_DECISOES, "mandou mais itens do que o teto");
+});
+
+Deno.test("no teto exato não existe linha de sobra", () => {
+  const tarefas = Array.from({ length: MAX_DECISOES }, (_, i) => ({
+    nome: `Tarefa ${i + 1}`,
+    frente: "Resibag",
+    situacao: "hoje" as const,
+  }));
+  const bloco = montaBlocoDoBrief(com({ tarefas }));
+  assert(!bloco.texto.includes("SOBRARAM"), bloco.texto);
+});
+
+Deno.test("e-mail tem teto estrutural, e o total real vai junto", () => {
+  // O excedente não chega no modelo; o cabeçalho diz quantos existem, porque
+  // a linha que ele escreve é uma contagem.
+  const emails = Array.from({ length: MAX_EMAILS + 7 }, (_, i) => ({
+    de: `Remetente ${i} <r${i}@x.com>`,
+    assunto: `Assunto ${i}`,
+    trecho: "…",
+    respostaSuaEncontrada: false,
+  }));
+  const bloco = montaBlocoDoBrief(com({ emails }));
+
+  assertStringIncludes(bloco.texto, `${MAX_EMAILS + 7} no total`);
+  const listados = bloco.texto.split("\n").filter((l) => l.startsWith("- de: "));
+  assertEquals(listados.length, MAX_EMAILS);
+});
+
+Deno.test("o prompt proíbe listar remetente e exige contagem", () => {
+  // A linha de 03/09 tinha onze nomes de promoção e recibo apresentados como
+  // trabalho que andou sozinho.
+  const prompt = promptDoBrief(montaBlocoDoBrief(vazio));
+  assertStringIncludes(prompt, "é uma CONTAGEM, nunca uma lista de remetentes");
+  assertStringIncludes(prompt, "NUNCA escreva os nomes de quem mandou");
+  assert(!prompt.includes("fechou sem mim"), "sobrou a instrução antiga");
+});
+
+Deno.test("o prompt pede a hora de INÍCIO na frase do dia", () => {
+  // "Atualizar playbook até 11h" fez o leitor entender prazo, quando era uma
+  // reunião das 10h às 11h.
+  const prompt = promptDoBrief(montaBlocoDoBrief(vazio));
+  assertStringIncludes(prompt, "hora de INÍCIO");
+});
+
+Deno.test("o prompt adapta o rodapé quando só existe um item", () => {
+  const prompt = promptDoBrief(montaBlocoDoBrief(vazio));
+  assertStringIncludes(prompt, "com UM item só");
+  assertStringIncludes(prompt, "Quer que eu toque?");
 });
