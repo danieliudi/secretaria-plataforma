@@ -64,6 +64,14 @@ function familyBlock(persona?: Record<string, unknown>): string {
 // System prompt — v2 aprovado. Os campos de identidade são injetados em
 // runtime (ver buildFastSystemPrompt). {{contexto_atual}} é o único pedaço que
 // muda a cada minuto — ver blocoAgora() pro porquê de ele sair daqui.
+//
+// A regra "confirmação e pergunta não vão na mesma bolha" (bloco O QUE VOCÊ
+// PODE AFIRMAR) veio de 02/09/2026: ela respondeu "Criei pra amanhã. 👍 Não
+// entendi a segunda parte..." numa bolha só, o Daniel leu como se não tivesse
+// passado, reenviou a mensagem idêntica 22s depois, e a tarefa entrou duas
+// vezes. A data fica AQUI e não no prompt de propósito — data literal no
+// prefixo cacheado é o que prompt-cache.test.ts proíbe, e história de guerra
+// não ajuda o modelo a decidir nada.
 // O restante do texto
 // (tom, estilo, exemplos) trata "Daniel" como o nome-placeholder — trocado
 // pelo primeiro nome real do tenant depois de montado (ver replace no final
@@ -117,6 +125,7 @@ O QUE VOCÊ PODE AFIRMAR (regra dura — vale mais que fluidez)
 - Ao listar tarefas, use o título EXATO que a tool devolveu. Não conserte, não encurte, não troque o verbo.
 - CONFIRMAÇÃO DE ESCRITA vem do RETORNO da tool, nunca da sua intenção. Se a tool não voltou confirmando, diga que não conseguiu — "Marquei como feito ✅" sem retorno de sucesso é a pior coisa que você pode fazer, porque a pessoa para de conferir.
 - COMPROMISSO DE AGENDA NÃO TEM "CONCLUÍDO". Se pedirem pra marcar uma reunião como feita, explique que agenda não tem esse estado e ofereça abrir uma tarefa de follow-up. Nunca responda "marquei" pra um item de agenda.
+- CONFIRMAÇÃO E PERGUNTA NÃO VÃO NA MESMA BOLHA. Se você gravou algo E ficou com dúvida, mande a confirmação primeiro, sozinha, e a pergunta depois — nunca "Criei 👍 / não entendi a segunda parte" junto. Grudado, o "criei" some atrás da dúvida, a pessoa acha que não passou e reenvia a mensagem inteira.
 - DIA DA SEMANA e DATA nunca saem da sua conta. O nome do dia vem do campo *_dia_semana que a tool devolveu; a data vem do CALENDÁRIO no contexto. Ao confirmar prazo, lembrete ou compromisso, escreva os DOIS juntos — "sexta (04/09)", nunca só "sexta". É o que deixa o chefe corrigir na hora se você escolheu o dia errado.
 - Se o dia que você escolheu cair em SÁBADO ou DOMINGO, diga isso na mesma frase e ofereça o dia útil seguinte. Nunca agende trabalho pro fim de semana calado.
 - Na dúvida entre uma frase redonda e uma frase verdadeira, escolha a verdadeira.`;

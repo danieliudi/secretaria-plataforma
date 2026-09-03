@@ -24,6 +24,7 @@ import {
   type TenantPersona,
 } from "../_shared/fast.ts";
 import { comDiaDaSemana } from "../_shared/dia-semana.ts";
+import { achaTarefasParecidas } from "../_shared/tarefa-duplicada.ts";
 import { instrucaoRedacao, normalizaPersonalidade } from "../_shared/personalidade.ts";
 import type { Decision, ReflexResult } from "../_shared/types.ts";
 import {
@@ -407,7 +408,7 @@ const TOOLS = [
   {
     name: "create_task",
     description:
-      "Cria uma task no gerenciador de tarefas configurado, na frente do usuário. Use para 'cria task X em Pauta & Reuniões da frente Y', 'adiciona X em Site / Web da frente Z'. SE a plataforma exigir sub-lista (ver system prompt) e o usuário não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt.",
+      "Cria uma task no gerenciador de tarefas configurado, na frente do usuário. Use para 'cria task X em Pauta & Reuniões da frente Y', 'adiciona X em Site / Web da frente Z'. SE a plataforma exigir sub-lista (ver system prompt) e o usuário não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt. Se o resultado vier com `created: false` e `conflict` (já existe tarefa aberta com nome parecido nessa frente), NÃO crie sozinho: mostre a que já existe e pergunte; só chame de novo com confirm_duplicate=true se ele confirmar.",
     input_schema: {
       type: "object",
       properties: {
@@ -430,6 +431,10 @@ const TOOLS = [
         due_date: {
           type: "string",
           description: "(opcional) Prazo em ISO 8601 com offset (ex: '2026-06-15T18:00:00-03:00').",
+        },
+        confirm_duplicate: {
+          type: "boolean",
+          description: "Só true depois de o usuário confirmar que quer criar mesmo havendo tarefa aberta parecida.",
         },
       },
       required: ["frente", "title"],
@@ -1644,14 +1649,43 @@ async function executeTool(
       return { tasks };
     }
     if (name === "create_task") {
+      const frente = String(input.frente);
+      const list = input.list ? String(input.list) : undefined;
+      const title = String(input.title);
+
+      // Guarda de duplicata, espelhando a que schedule_reminder já tinha. Em
+      // 02/09 o Daniel reenviou a mesma mensagem 22s depois (a resposta
+      // anterior confirmava E perguntava na mesma bolha, e ele leu como se não
+      // tivesse passado) — e a secretária gravou a tarefa duas vezes sem
+      // notar. Ver _shared/tarefa-duplicada.ts.
+      if (!input.confirm_duplicate) {
+        try {
+          const abertas = await deps.tools.listTasks({ frente, list });
+          const parecidas = achaTarefasParecidas(title, abertas);
+          if (parecidas.length > 0) {
+            return {
+              created: false,
+              conflict: parecidas,
+              aviso:
+                "Já existe tarefa aberta com esse nome nessa frente. NÃO crie de novo por conta própria: " +
+                "mostre a que já existe e pergunte se ele quer criar mesmo assim. Só então chame de novo com confirm_duplicate=true.",
+            };
+          }
+        } catch (err) {
+          // Não conseguir LISTAR não pode impedir de CRIAR: o usuário pediu uma
+          // tarefa, e ficar sem ela é pior que arriscar uma duplicata.
+          console.error(`[fast] create_task: checagem de duplicata falhou: ${semDadoPessoal(err)}`);
+        }
+      }
+
       const task = await deps.tools.createTask({
-        frente: String(input.frente),
-        list: input.list ? String(input.list) : undefined,
-        title: String(input.title),
+        frente,
+        list,
+        title,
         description: input.description ? String(input.description) : undefined,
         due_date: input.due_date ? String(input.due_date) : undefined,
       });
-      return { task };
+      return { created: true, task };
     }
     if (name === "criar_lote") {
       const itens = Array.isArray(input.itens) ? input.itens : [];
