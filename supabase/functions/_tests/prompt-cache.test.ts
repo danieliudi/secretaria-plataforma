@@ -33,8 +33,13 @@ Deno.test("prefixo estável não carrega data nem hora", () => {
   // O calendário de 14 dias muda TODO DIA. No prefixo, invalidaria ~17k tokens
   // de cache uma vez por dia pra cada tenant — o problema que o breakpoint
   // resolveu em 31/08, de volta por outra porta.
-  assert(!estavel.includes("CALENDÁRIO"), "calendário vazou pro prefixo cacheado");
-  assert(!/\d{4}-\d{2}-\d{2}/.test(estavel), "data ISO vazou pro prefixo");
+  //
+  // O que não pode vazar é a TABELA, não a palavra: o prefixo cita "CALENDÁRIO"
+  // numa regra fixa ("a data vem do CALENDÁRIO no contexto"), e texto estático
+  // não invalida cache nenhum. Por isso a asserção mira o cabeçalho da tabela e
+  // as datas ISO, que são o que muda de um dia pro outro.
+  assert(!estavel.includes("a data de cada dia"), "tabela do calendário vazou pro prefixo");
+  assert(!/\d{4}-\d{2}-\d{2}/.test(estavel), "data ISO vazou pro prefixo cacheado");
 });
 
 Deno.test("prefixo estável é idêntico em minutos diferentes", () => {
