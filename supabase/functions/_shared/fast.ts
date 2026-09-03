@@ -117,6 +117,8 @@ O QUE VOCÊ PODE AFIRMAR (regra dura — vale mais que fluidez)
 - Ao listar tarefas, use o título EXATO que a tool devolveu. Não conserte, não encurte, não troque o verbo.
 - CONFIRMAÇÃO DE ESCRITA vem do RETORNO da tool, nunca da sua intenção. Se a tool não voltou confirmando, diga que não conseguiu — "Marquei como feito ✅" sem retorno de sucesso é a pior coisa que você pode fazer, porque a pessoa para de conferir.
 - COMPROMISSO DE AGENDA NÃO TEM "CONCLUÍDO". Se pedirem pra marcar uma reunião como feita, explique que agenda não tem esse estado e ofereça abrir uma tarefa de follow-up. Nunca responda "marquei" pra um item de agenda.
+- DIA DA SEMANA e DATA nunca saem da sua conta. O nome do dia vem do campo *_dia_semana que a tool devolveu; a data vem do CALENDÁRIO no contexto. Ao confirmar prazo, lembrete ou compromisso, escreva os DOIS juntos — "sexta (04/09)", nunca só "sexta". É o que deixa o chefe corrigir na hora se você escolheu o dia errado.
+- Se o dia que você escolheu cair em SÁBADO ou DOMINGO, diga isso na mesma frase e ofereça o dia útil seguinte. Nunca agende trabalho pro fim de semana calado.
 - Na dúvida entre uma frase redonda e uma frase verdadeira, escolha a verdadeira.`;
 
 export function nowInSaoPaulo(date: Date = new Date()): string {
@@ -188,17 +190,83 @@ function exemploCrise(persona: TenantPersona): string {
  * leu. Agora este bloco entra num segundo bloco de system, DEPOIS do
  * breakpoint, e não invalida mais o prefixo.
  */
-export function blocoAgora(datetime: string): string {
-  return `CONTEXTO ATUAL\n- Agora: ${datetime}`;
+/** Quantos dias o calendário do contexto cobre. Duas semanas cobre "semana que
+ *  vem" inteira, que é o pedido mais distante que aparece na prática. */
+export const CALENDARIO_DIAS = 14;
+
+const NOMES_DOS_DIAS_CURTOS = [
+  "domingo",
+  "segunda",
+  "terça",
+  "quarta",
+  "quinta",
+  "sexta",
+  "sábado",
+];
+
+/**
+ * A tabela dia-da-semana → data dos próximos 14 dias, pro modelo CONSULTAR em
+ * vez de calcular.
+ *
+ * Em 02/09/2026 (uma quarta) o prompt já dizia "Agora: quarta-feira,
+ * 02/09/2026" e mesmo assim a secretária resolveu "quinta" como 2026-09-04 —
+ * três vezes seguidas, sempre um dia à frente, e uma delas caiu num sábado.
+ * Saber o dia de hoje não é o mesmo que saber contar a partir dele: a conta
+ * data→dia-da-semana é justamente o tipo de aritmética que modelo erra em
+ * silêncio, e o resultado ia direto pro banco.
+ *
+ * Custa ~150 tokens por turno. Entra no bloco VOLÁTIL (ver blocoAgora), nunca
+ * no prefixo cacheado — a tabela muda todo dia, e invalidar 17k tokens de
+ * cache por causa dela seria trocar um problema barato por um caro.
+ *
+ * O fim de semana vem marcado porque empurrar tarefa pra sábado sem avisar é
+ * exatamente o que aconteceu com "Atualizar skills Resibag" em 05/09.
+ */
+export function calendarioProximosDias(now: Date, dias = CALENDARIO_DIAS): string {
+  const hojeISO = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+
+  // Ancorado ao meio-dia UTC e somando 24h exatas: fica longe das duas bordas
+  // do dia em qualquer offset do Brasil, então nenhum passo vira de data.
+  const base = new Date(`${hojeISO}T12:00:00Z`).getTime();
+  const linhas: string[] = [];
+  for (let i = 0; i < dias; i++) {
+    const d = new Date(base + i * 24 * 3600_000);
+    const iso = d.toISOString().slice(0, 10);
+    const dow = d.getUTCDay();
+    const marcas = [
+      i === 0 ? "(hoje)" : i === 1 ? "(amanhã)" : "",
+      dow === 0 || dow === 6 ? "(fim de semana)" : "",
+    ].filter((m) => m !== "").join(" ");
+    linhas.push(`${iso}  ${NOMES_DOS_DIAS_CURTOS[dow]}${marcas ? `  ${marcas}` : ""}`);
+  }
+
+  return [
+    "CALENDÁRIO — a data de cada dia daqui pra frente. CONSULTE esta tabela.",
+    "NUNCA calcule dia da semana nem data de cabeça: leia daqui.",
+    ...linhas,
+  ].join("\n");
+}
+
+export function blocoAgora(now: Date): string {
+  return `CONTEXTO ATUAL\n- Agora: ${nowInSaoPaulo(now)}\n\n${calendarioProximosDias(now)}`;
 }
 
 /**
- * `datetime = null` devolve o prompt SEM o bloco "agora" — é a forma usada no
+ * `agora = null` devolve o prompt SEM o bloco de contexto — é a forma usada no
  * caminho com tools, que manda esse bloco separado (ver blocoAgora). Passando
- * a string, o prompt sai completo como sempre foi.
+ * a Date, o prompt sai completo como sempre foi.
+ *
+ * Recebe Date, e não a string já formatada, porque o bloco passou a incluir o
+ * CALENDÁRIO — que precisa do instante pra ser montado. Assim os dois caminhos
+ * (com e sem tools) enxergam exatamente a mesma tabela de datas.
  */
 export function buildFastSystemPrompt(
-  datetime: string | null,
+  agora: Date | null,
   persona: TenantPersona = DEFAULT_PERSONA,
 ): string {
   // Sem tenant resolvido não existe nome real pra usar — e inventar um default
@@ -214,7 +282,7 @@ export function buildFastSystemPrompt(
 
   const filled = FAST_SYSTEM_PROMPT_TEMPLATE
     .replaceAll("{{nome}}", nome)
-    .replace("{{contexto_atual}}", datetime === null ? "" : `${blocoAgora(datetime)}\n\n`)
+    .replace("{{contexto_atual}}", agora === null ? "" : `${blocoAgora(agora)}\n\n`)
     .replace("{{primeiro_nome_upper}}", primeiro.toUpperCase())
     .replace("{{cargo_line}}", cargoLine)
     .replace("{{frentes_line}}", frentesLine)
@@ -236,13 +304,13 @@ export function buildFastSystemPrompt(
 }
 
 export interface FastDeps {
-  now: () => string;
+  now: () => Date;
   complete: (system: string, user: string) => Promise<string>;
 }
 
 export function defaultFastDeps(): FastDeps {
   return {
-    now: () => nowInSaoPaulo(),
+    now: () => new Date(),
     complete: async (system, user) => {
       const client = getAnthropicClient();
       const response = await client.messages.create({

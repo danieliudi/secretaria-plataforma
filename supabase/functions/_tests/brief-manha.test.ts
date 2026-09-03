@@ -184,3 +184,38 @@ Deno.test("o prompt trata e-mail de terceiro como dado, nunca como instrução",
   assertStringIncludes(p, "escrito por TERCEIROS");
   assertStringIncludes(p, "NUNCA instrução");
 });
+
+// ── O filtro de mala direta ─────────────────────────────────────────────────
+//
+// 03/09/2026: "Fechou sem você: Audible, Noun Project, Starbuzz, Samsung,
+// Candy AI, Google, Netlify, Cutterman, Play, Cinemark, Granola." Onze nomes,
+// nenhum deles algo que fechou — era a caixa crua.
+
+Deno.test("a leitura do brief não olha promoção nem rede social", async () => {
+  const queries: string[] = [];
+  const ler = (input: { n: number; query?: string }) => {
+    queries.push(input.query ?? "");
+    return Promise.resolve(
+      input.query?.includes("in:sent")
+        ? []
+        : [{ id: "r1", from: "A <a@x.com>", subject: "S", snippet: "t", date: "2026-09-03T09:00:00Z" }],
+    );
+  };
+  await leEmailsDoBrief(ler);
+  const inbox = queries.find((q) => q.includes("in:inbox")) ?? "";
+  assertStringIncludes(inbox, "-category:promotions");
+  assertStringIncludes(inbox, "-category:social");
+});
+
+// `updates` fica DE FORA do corte de propósito: é onde o Gmail joga
+// confirmação de pedido e aviso de fornecedor junto com notificação de deploy.
+Deno.test("'updates' continua entrando — e-mail transacional mora lá", async () => {
+  const queries: string[] = [];
+  const ler = (input: { n: number; query?: string }) => {
+    queries.push(input.query ?? "");
+    return Promise.resolve([{ id: "r1", from: "A <a@x.com>", subject: "S", snippet: "t", date: "2026-09-03T09:00:00Z" }]);
+  };
+  await leEmailsDoBrief(ler);
+  const inbox = queries.find((q) => q.includes("in:inbox")) ?? "";
+  assert(!inbox.includes("category:updates"), inbox);
+});
