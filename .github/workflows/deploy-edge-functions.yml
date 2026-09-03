@@ -16,7 +16,29 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # VERSÃO FIXA, não `latest`. Duas razões, na ordem de peso:
+          #
+          # 1. `latest` obriga a action a consultar a API do GitHub pra resolver
+          #    qual é a última release. Em 03/09/2026 isso derrubou o deploy do
+          #    merge do PR #32 com "Failed to resolve latest Supabase CLI
+          #    release: rate limit exceeded" — os runners dividem faixa de IP, e
+          #    a chamada é não autenticada. Falhou ANTES de qualquer passo de
+          #    deploy, então nada subiu; um rerun resolveu. Mas é uma falha que
+          #    volta sozinha, em horário que ninguém escolhe.
+          #
+          # 2. A razão mais forte: aqui merge na main É deploy em produção. Com
+          #    `latest`, uma release nova do CLI entra no caminho de produção
+          #    sem ninguém ter mudado uma linha — e uma regressão dele quebra o
+          #    deploy num momento que não tem relação com o que foi mergeado.
+          #
+          # 2.116.0 é o que o `latest` resolveu no deploy bem-sucedido de
+          # 03/09 12:01 UTC, então fixar aqui não muda comportamento: congela o
+          # que já rodou. Pra atualizar, suba o número e confira o deploy.
+          #
+          # A action também aceita `github-token`, que autentica a resolução e
+          # afasta só o limite de taxa. Não usamos: mantém `latest`, e é o
+          # `latest` que o motivo 2 rejeita.
+          version: 2.116.0
 
       - name: Deploy all functions
         # --prune: remove no Supabase qualquer função que não exista mais em
