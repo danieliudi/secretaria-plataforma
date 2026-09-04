@@ -24,6 +24,18 @@ export interface TaskItem {
   url: string;
   /** Nome da list/sub-agrupador, quando a plataforma suporta. */
   list?: string;
+  /**
+   * Por que o prazo pedido não pôde ser gravado. Só aparece quando a tarefa
+   * FOI criada mas o prazo ficou de fora — e existe pra que a secretária diga
+   * isso em vez de repetir de volta o que o usuário acabou de pedir.
+   *
+   * Achado em 04/09/2026: a Erika pediu "Procurar bolo para hj às 8:30", a
+   * tarefa nasceu no Notion sem data nenhuma, e a resposta foi "Criado! prazo
+   * hoje 8h30". O banco dela não tem coluna de data, e o provider descartava
+   * o prazo em silêncio — enquanto o remarcar, no mesmo arquivo, já recusava
+   * alto e bom som pelo mesmo motivo.
+   */
+  avisoPrazo?: string;
 }
 
 export interface ListTasksInput {

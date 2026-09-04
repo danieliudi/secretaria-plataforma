@@ -408,7 +408,7 @@ const TOOLS = [
   {
     name: "create_task",
     description:
-      "Cria uma task no gerenciador de tarefas configurado, na frente do usuário. Use para 'cria task X em Pauta & Reuniões da frente Y', 'adiciona X em Site / Web da frente Z'. SE a plataforma exigir sub-lista (ver system prompt) e o usuário não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt. Se o resultado vier com `created: false` e `conflict` (já existe tarefa aberta com nome parecido nessa frente), NÃO crie sozinho: mostre a que já existe e pergunte; só chame de novo com confirm_duplicate=true se ele confirmar.",
+      "Cria uma task no gerenciador de tarefas configurado, na frente do usuário. Use para 'cria task X em Pauta & Reuniões da frente Y', 'adiciona X em Site / Web da frente Z'. SE a plataforma exigir sub-lista (ver system prompt) e o usuário não especificar, PERGUNTE antes de criar — nunca chute. NÃO use pra notas rápidas (save_quick_capture) nem eventos (create_event). Frentes/sub-listas disponíveis estão no system prompt. Se o resultado vier com `created: false` e `conflict` (já existe tarefa aberta com nome parecido nessa frente), NÃO crie sozinho: mostre a que já existe e pergunte; só chame de novo com confirm_duplicate=true se ele confirmar. Se o resultado vier com `prazo_nao_salvo`, a tarefa existe mas o PRAZO NÃO: diga isso, dê o motivo que veio junto, e NUNCA repita a data pedida como se tivesse sido gravada. Ao confirmar uma criação, o prazo que você anuncia tem que vir do campo `due_date` do retorno — nunca do que o usuário pediu.",
     input_schema: {
       type: "object",
       properties: {
@@ -1685,6 +1685,23 @@ async function executeTool(
         description: input.description ? String(input.description) : undefined,
         due_date: input.due_date ? String(input.due_date) : undefined,
       });
+
+      // CONFERE A ESCRITA PELO RETORNO, não pelo pedido (04/09/2026). A Erika
+      // pediu "Procurar bolo para hj às 8:30", a tarefa nasceu no Notion sem
+      // data nenhuma, e a resposta foi "Criado! prazo hoje 8h30" — o modelo
+      // repetiu de volta o que ela tinha acabado de dizer. Aqui a checagem é
+      // do provider REAL, então vale pros quatro: se o prazo foi pedido e não
+      // voltou, o modelo recebe isso escrito e não tem como confirmar.
+      if (input.due_date && !task.due_date) {
+        return {
+          created: true,
+          task,
+          prazo_nao_salvo: task.avisoPrazo ??
+            "o gerenciador de tarefas não devolveu prazo nenhum na tarefa criada",
+          instrucao: "A tarefa existe, o PRAZO NÃO. Diga isso ao usuário com essas palavras, " +
+            "explique o motivo acima e NÃO repita a data que ele pediu como se tivesse sido salva.",
+        };
+      }
       return { created: true, task };
     }
     if (name === "criar_lote") {
