@@ -13,7 +13,7 @@ edge_functions=7
 paginas=15
 rotas_api=9
 migrations=33
-testes=29
+testes=31
 -->
 
 ## Edge functions (7)

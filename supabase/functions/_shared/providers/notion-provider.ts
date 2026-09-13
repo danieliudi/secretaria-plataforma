@@ -374,8 +374,18 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
       const properties: Record<string, any> = {
         [schema.titleProp]: { title: [{ text: { content: input.title } }] },
       };
-      if (input.due_date && schema.dueProp) {
-        properties[schema.dueProp] = { date: { start: input.due_date } };
+      // Sem coluna de data no database, o prazo não tem onde morar. A tarefa
+      // ainda vale a pena (o título é o que ela é), mas o silêncio não: quem
+      // pediu prazo precisa saber que ele não foi gravado. O remarcar já
+      // recusava por este motivo — o criar apenas engolia.
+      let avisoPrazo: string | undefined;
+      if (input.due_date) {
+        if (schema.dueProp) {
+          properties[schema.dueProp] = { date: { start: input.due_date } };
+        } else {
+          avisoPrazo = `o database do Notion usado em '${input.frente}' não tem coluna de data, ` +
+            `então a tarefa foi criada SEM prazo — é preciso adicionar uma coluna do tipo Data lá`;
+        }
       }
       // Descrição: Notion não tem campo "notes" simples pra database pages —
       // criar como um parágrafo no corpo da página, não como propriedade.
@@ -400,7 +410,7 @@ export function createNotionProvider(deps: NotionDeps = defaultNotionDeps()): Ta
         throw new Error(`Notion create page failed: ${res.status} ${await res.text()}`);
       }
       const page = (await res.json()) as NotionPage;
-      return mapPage(page, schema);
+      return { ...mapPage(page, schema), ...(avisoPrazo ? { avisoPrazo } : {}) };
     },
 
     async completeTask(input): Promise<CompleteTaskResult> {

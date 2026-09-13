@@ -6,7 +6,7 @@
 // tarefas como atrasadas um dia antes no atrasadas_check e no runAlerts.
 
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { msDoPrazo } from "../_shared/task-provider.ts";
+import { msDoPrazo, fimDoPrazoMs, prazoSoTemData } from "../_shared/task-provider.ts";
 
 /** Mesma função do cron (cron/index.ts: diaSPdeMs) — o dia civil em SP de um instante. */
 const diaSP = (ms: number) =>
@@ -47,4 +47,40 @@ Deno.test("uma tarefa com prazo hoje entra no fim do dia de hoje", () => {
   // O filtro exato que o runEveningRecap aplica.
   const hoje = diaSP(Date.now());
   assertEquals(diaSP(msDoPrazo(hoje)), hoje, "tarefa com prazo hoje sairia da mensagem das 19h");
+});
+
+// ── O fim do prazo, não a âncora (03/09/2026) ──────────────────────────────
+// Às 14:00 a Mia anunciou "🔴 Prazos vencidos (3)" sobre tarefas que ainda
+// tinham 10 horas. A causa: o código comparava `agora` com a âncora do
+// meio-dia UTC que msDoPrazo usa pra acertar o DIA.
+
+Deno.test("prazo só com data acaba às 23:59:59 daquele dia em São Paulo", () => {
+  const fim = fimDoPrazoMs("2026-09-03");
+  const emSP = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(new Date(fim));
+  assertEquals(emSP, "03/09/2026, 23:59:59");
+});
+
+Deno.test("às 14:00, uma tarefa que vence hoje NÃO está vencida", () => {
+  // É literalmente o caso de 03/09. Se este teste cair, o vermelho falso volta.
+  const agora = new Date("2026-09-03T17:00:00Z").getTime(); // 14:00 em SP
+  assert(fimDoPrazoMs("2026-09-03") > agora, "declarou vencida antes da meia-noite");
+  assert(fimDoPrazoMs("2026-09-02") < agora, "deixou de reconhecer o que venceu ontem");
+});
+
+Deno.test("prazo COM hora acaba na hora marcada, sem virar fim do dia", () => {
+  const comHora = "2026-09-03T11:00:00-03:00";
+  assertEquals(fimDoPrazoMs(comHora), new Date(comHora).getTime());
+  assert(!prazoSoTemData(comHora));
+  assert(prazoSoTemData("2026-09-03"));
+  assert(prazoSoTemData("  2026-09-03  "), "espaço em volta não devia mudar a leitura");
+});
+
+Deno.test("a virada do dia é exata — 23:59:59,999 ainda vale, 00:00 do dia seguinte não", () => {
+  const fim = fimDoPrazoMs("2026-09-03");
+  const meiaNoite = new Date("2026-09-04T03:00:00.000Z").getTime(); // 00:00 de 04/09 em SP
+  assertEquals(meiaNoite - fim, 1);
 });

@@ -50,6 +50,42 @@ O commit `372823b0` quebrou o CI com 6 erros de tipo. O baseline local usa
 
 ## Regra 5 — afirmação carrega a origem
 
+### 04/09/2026 · "prazo hoje 8h30" sobre uma tarefa sem prazo nenhum
+
+A Erika pediu "Procurar bolo para hj às 8:30". A tarefa nasceu no Notion só com
+o título — nenhuma propriedade — e a resposta foi "Criado! A tarefa tá no
+Notion — 'Procurar bolo', prazo hoje 8h30".
+
+Duas falhas empilhadas. O `createTask` do notion-provider fazia
+`if (input.due_date && schema.dueProp)`: sem coluna de data no database, o prazo
+era descartado **em silêncio**. O `rescheduleTask`, no mesmo arquivo, já recusava
+alto pelo mesmo motivo — só o criar engolia. E a confirmação leu o PEDIDO em vez
+da ESCRITA: o retorno da tool já trazia `due_date: null`, e o modelo repetiu de
+volta a data que a usuária tinha acabado de digitar.
+
+**Regra derivada:** ao confirmar uma escrita, o fato dito sai do RETORNO, não do
+argumento. O `/fast` agora compara os dois no `create_task` e devolve
+`prazo_nao_salvo` quando divergem — checagem genérica, vale pros seis
+gerenciadores. E provider que não consegue gravar um campo pedido diz isso; não
+descarta calado.
+
+### 03/09/2026 · "🔴 Prazos vencidos" sobre tarefas com 10 horas pela frente
+
+Às 14:00 chegaram três bolhas seguidas, e a vermelha dizia que três tarefas da
+Resibag tinham vencido "03/09, 09:00". Nenhuma tinha vencido, e ninguém marcou
+09:00 nenhum.
+
+`msDoPrazo` ancora prazo-só-data ao meio-dia UTC pra acertar o DIA — correto, e
+necessário (ver a lição de 02/09 sobre o dia andando pra trás). O resto do
+código passou a tratar a âncora como se fosse o prazo: `t.dueMs < now`. Meio-dia
+UTC é 09:00 em São Paulo, então toda tarefa "vence dia 3" virava vencida às
+09:01 e exibia um horário que não existia.
+
+**Regra derivada:** data e instante não são a mesma coisa. Prazo só-com-data
+acaba às 23:59:59,9 daquele dia no fuso do usuário (`fimDoPrazoMs`), e não se
+imprime hora que o dado não tem (`fmtPrazo`) — mesma regra do "Dia todo" da
+agenda.
+
 ### 02–03/09/2026 · "quinta" gravado como sexta
 
 Às 20:40 de 02/09 (uma quarta) a secretária escreveu *"Relatório da AGCO →
@@ -101,6 +137,23 @@ com notificação de deploy, e e-mail real sumindo em silêncio é pior que ruí
 ---
 
 ## Regra 6 — erro da sessão vira regra
+
+### 04/09/2026 · desdisse uma recomendação certa por acreditar num alarme falso
+
+Ao analisar as mensagens de 03/09 eu escrevi, com todas as letras, que tinha
+errado ao deixar tarefa fora da mensagem das 13:00 — "três prazos morreram às
+09:00 e a mensagem os ignorou". Cheguei a chamar de "recomendação minha e está
+errada", e o passo seguinte seria mudar o desenho.
+
+Não tinha morrido nenhum. Eu li o "venceu 03/09, 09:00" da própria mensagem da
+Mia como se fosse dado, quando era o sintoma do bug que eu estava investigando.
+A recomendação original estava certa; quem mentia era o alerta.
+
+**Regra derivada:** ao diagnosticar a partir de uma saída suspeita, não use
+outro campo da mesma saída como fato. O que a mensagem errada afirma é
+justamente o que está sob suspeita — a conferência tem que vir do código ou do
+banco. Foi rodar `fimDoPrazoMs` contra o relógio daquele momento que mostrou as
+10 horas restantes.
 
 ### 03/09/2026 · o pin do CLI e a saída que eu não conhecia
 
