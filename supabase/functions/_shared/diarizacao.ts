@@ -39,6 +39,71 @@ export type ResultadoDiarizacao =
     }
   | { estado: "erro"; motivo: string };
 
+/**
+ * O que o provedor precisa saber além do áudio.
+ *
+ * `pessoasEsperadas` vem de quem ESTAVA NA SALA — é o único dado aqui que não
+ * dá pra deduzir do arquivo. Sem ele o modelo adivinha quantas vozes existem,
+ * e em áudio de sala erra pra mais: a mesma pessoa muda de tom e vira duas.
+ *
+ * `vocabulario` são palavras que o modelo não conhece e que aparecem o tempo
+ * todo nesta conta — nome de marca, de produto, de sistema. Erra justamente
+ * as palavras que fazem a ata valer alguma coisa.
+ */
+export interface OpcoesDiarizacao {
+  idiomaBcp47?: string;
+  pessoasEsperadas?: number;
+  vocabulario?: string[];
+}
+
+/** Faixa aceita pra `pessoasEsperadas`. Fora dela o campo é ignorado, não
+ *  corrigido: chutar "deve ser 2" é pior que deixar o modelo decidir. */
+export const MIN_PESSOAS = 2;
+export const MAX_PESSOAS = 20;
+
+/**
+ * Normaliza o que veio da tela antes de virar `speakers_expected`.
+ *
+ * Devolve `undefined` — e não um default — pra qualquer coisa fora da faixa,
+ * não-inteira ou ausente. O parâmetro só ajuda quando está certo; com número
+ * errado ele ATRAPALHA, porque força o modelo a espremer ou esticar as vozes
+ * pra caber numa contagem que ninguém confirmou.
+ */
+export function validaPessoasEsperadas(bruto: unknown): number | undefined {
+  const n = typeof bruto === "number" ? bruto : Number(bruto);
+  if (!Number.isInteger(n) || n < MIN_PESSOAS || n > MAX_PESSOAS) return undefined;
+  return n;
+}
+
+/** Teto de termos no vocabulário. Lista longa dilui: o provedor passa a
+ *  "ouvir" o termo em qualquer ruído parecido, e aí piora em vez de melhorar. */
+export const MAX_VOCABULARIO = 40;
+/** Termo curto demais colide com palavra comum ("IA" dentro de "dia"). */
+const MIN_CHARS_TERMO = 4;
+
+/**
+ * Monta o vocabulário a partir das FRENTES DO TENANT — não de uma lista fixa.
+ *
+ * A frente é exatamente o vocabulário próprio de cada conta ("Resibag",
+ * "Sanwey"), já é dado por tenant, e já está no env que o cron carrega. Uma
+ * lista fixa no código seria o mundo de um tenant vazando pra todos, que é o
+ * oposto do que esta plataforma é.
+ */
+export function montaVocabulario(frentes: string[]): string[] {
+  const vistos = new Set<string>();
+  const saida: string[] = [];
+  for (const bruto of frentes) {
+    const termo = bruto.trim().replace(/\s+/g, " ");
+    if (termo.length < MIN_CHARS_TERMO) continue;
+    const chave = termo.toLowerCase();
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    saida.push(termo);
+    if (saida.length >= MAX_VOCABULARIO) break;
+  }
+  return saida;
+}
+
 export interface ProvedorDiarizacao {
   /** Nome curto pra log e pra gravar na linha da reunião — "assemblyai". */
   readonly nome: string;
@@ -49,7 +114,7 @@ export interface ProvedorDiarizacao {
    * pela edge function: uma gravação de uma hora tem 30-60 MB e não cabe na
    * memória de um isolate junto com o resto do trabalho.
    */
-  submeter(audioUrlAssinada: string, opcoes?: { idiomaBcp47?: string }): Promise<string>;
+  submeter(audioUrlAssinada: string, opcoes?: OpcoesDiarizacao): Promise<string>;
 
   /** Estado do job. Chamado pelo cron a cada tick até sair de "processando". */
   consultar(jobId: string): Promise<ResultadoDiarizacao>;

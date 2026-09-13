@@ -16,6 +16,7 @@ import { fetchComRetry } from "../http-retry.ts";
 import {
   MAX_TRANSCRICAO_CHARS,
   MAX_TURNOS,
+  type OpcoesDiarizacao,
   type ProvedorDiarizacao,
   type ResultadoDiarizacao,
   type TurnoFala,
@@ -87,8 +88,12 @@ export function createAssemblyAiProvider(
   return {
     nome: "assemblyai",
 
-    async submeter(audioUrlAssinada: string, opcoes = {}): Promise<string> {
-      const body = {
+    async submeter(audioUrlAssinada: string, opcoes: OpcoesDiarizacao = {}): Promise<string> {
+      // `speakers_expected` e `word_boost` só entram quando têm valor de
+      // verdade. Mandar `undefined` num JSON some o campo, mas mandar lista
+      // vazia ou zero seria pior que não mandar: o provedor trata como
+      // instrução, não como ausência.
+      const body: Record<string, unknown> = {
         audio_url: audioUrlAssinada,
         // O que estamos comprando: os turnos por falante.
         speaker_labels: true,
@@ -99,6 +104,21 @@ export function createAssemblyAiProvider(
         punctuate: true,
         format_text: true,
       };
+
+      // Quantas vozes esperar. Vem de quem estava na sala (ver
+      // validaPessoasEsperadas) — sem isso o modelo adivinha, e em áudio de
+      // sala adivinha pra mais.
+      if (opcoes.pessoasEsperadas !== undefined) {
+        body.speakers_expected = opcoes.pessoasEsperadas;
+      }
+
+      // Palavras do mundo do tenant que o modelo não conhece. `word_boost`
+      // sem `boost_param` usa o peso padrão do provedor — deliberado: subir o
+      // peso faz ele "ouvir" o termo em qualquer ruído parecido.
+      if (opcoes.vocabulario && opcoes.vocabulario.length > 0) {
+        body.word_boost = opcoes.vocabulario;
+      }
+
       const data = await chamar("/transcript", { method: "POST", headers: headers(), body: JSON.stringify(body) });
       if (!data.id) throw new Error("AssemblyAI não devolveu id do job");
       return data.id;

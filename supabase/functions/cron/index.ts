@@ -85,6 +85,7 @@ import {
   buildTenantEnv,
   getPlatformOwnerTenant,
   getTenantById,
+  frentesDoEnv,
   jidFromE164,
   listTenantsElegiveis,
   tenantElegivel,
@@ -93,11 +94,13 @@ import {
 import { envioCompartilhadoEstrito } from "../_shared/proactive-send.ts";
 import {
   erroSeguroDeProvedor,
+  montaVocabulario,
   parseFalantes,
   MAX_TRANSCRICAO_CHARS,
   parseTarefasDaAta,
   type TarefaSugerida,
   type TurnoFala,
+  validaPessoasEsperadas,
 } from "../_shared/diarizacao.ts";
 import {
   campanhasNoLimiteDoOrcamento,
@@ -3668,7 +3671,7 @@ async function runReunioes(
 
   const { data: linhas, error } = await sb
     .from("reunioes")
-    .select("id, status, titulo, audio_path, provider_job_id, tentativas")
+    .select("id, status, titulo, audio_path, provider_job_id, tentativas, pessoas_esperadas")
     .eq("tenant_id", tenant.id)
     .in("status", ["pendente", "transcrevendo"])
     .order("created_at", { ascending: true })
@@ -3689,7 +3692,15 @@ async function runReunioes(
           throw new Error(`não consegui assinar a URL do áudio${urlErr ? `: ${urlErr.message}` : ""}`);
         }
 
-        const jobId = await provedor.submeter(assinada.signedUrl);
+        // O que o provedor precisa saber além do áudio. Os dois campos são
+        // opcionais e SÓ ajudam quando têm valor real — ver OpcoesDiarizacao.
+        // `pessoas_esperadas` é null em reunião que veio pelo compartilhamento
+        // (ninguém tinha onde responder); o vocabulário sai das frentes DESTE
+        // tenant, nunca de uma lista fixa no código.
+        const jobId = await provedor.submeter(assinada.signedUrl, {
+          pessoasEsperadas: validaPessoasEsperadas(linha.pessoas_esperadas),
+          vocabulario: montaVocabulario(frentesDoEnv(env)),
+        });
         await sb
           .from("reunioes")
           // `tentativas: 0` porque o orçamento da etapa de consulta é outro
