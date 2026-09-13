@@ -138,6 +138,22 @@ com notificação de deploy, e e-mail real sumindo em silêncio é pior que ruí
 
 ## Regra 6 — erro da sessão vira regra
 
+### 13/09/2026 · escrevi no mapa um cron que o banco não tem
+
+O `docs/mapa.md` saiu desta sessão com `tarefas-atrasadas` em `0 11 * * 1`
+("seg 08:00"). No banco é `0 11 * * *` — **todo dia**, sábado e domingo
+inclusive. Eu montei a tabela lendo as migrations, e o job foi alterado depois
+delas; a migration é a intenção, `cron.job` é o estado.
+
+Não chegou a virar afirmação errada pro Daniel porque a divergência apareceu
+enquanto eu conferia outra coisa, mas ia: a pergunta em cima da mesa era
+justamente quantas mensagens a Mia manda num sábado, e eu teria respondido uma
+a menos.
+
+**Regra derivada:** contagem e agendamento de pg_cron se conferem em
+`cron.job`, nunca só nas migrations. Vale pro `schedule`, pro `active` e pro
+`jobname`. `doc:check` não pega isso — ele conta arquivo, não estado do banco.
+
 ### 04/09/2026 · desdisse uma recomendação certa por acreditar num alarme falso
 
 Ao analisar as mensagens de 03/09 eu escrevi, com todas as letras, que tinha

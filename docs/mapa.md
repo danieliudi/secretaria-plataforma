@@ -70,7 +70,7 @@ key lida do Vault em execução (nunca embutida no comando).
 | `lugar-novo` | `0 0 * * *` | 21:00 | — |
 | `resumo-diario` | `10 3 * * *` | 00:10 | — |
 | `reuniao-retencao` | `20 4 * * *` | 01:20 | limpeza de áudio |
-| `tarefas-atrasadas` | `0 11 * * 1` | seg 08:00 | — |
+| `tarefas-atrasadas` | `0 11 * * *` | 08:00 | todo dia, inclusive sábado e domingo |
 | `marketing-review` | `0 12 * * 1` | seg 09:00 | — |
 | `beehave-alerts` | `0 11,17 * * *` | 08:00 e 14:00 | — |
 | `beehave-weekly` | `0 11 * * 1` | seg 08:00 | — |
