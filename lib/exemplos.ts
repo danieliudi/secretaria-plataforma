@@ -97,7 +97,7 @@ export const EXEMPLOS: Exemplo[] = [
     // internas viram curvas simples — a Home já envolve cada frase em aspas
     // curvas duplas, e aspas retas dentro delas ficam ilegíveis.
     frases: [
-      "☀️ quinta, 13/09 — 2 pra decidir",
+      "☀️ quinta, 17/09 — 2 pra decidir",
       "☕ Meio do dia — ‘procurar o bolo’, das 11:00, já passou. Andou?",
       "🌙 Fim do dia — o que andou hoje?",
     ],

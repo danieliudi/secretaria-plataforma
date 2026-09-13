@@ -35,8 +35,11 @@ jobs:
       # recusa resolver os `npm:` das edge functions ("Could not find a matching
       # package for 'npm:@anthropic-ai/sdk'"). O flag manda instalar sozinho.
       # Os imports de esm.sh nunca foram problema; só os `npm:`.
+      # --allow-read: _tests/vitrine-datas.test.ts lê lib/exemplos.ts pra
+      # conferir que todo par "dia da semana, DD/MM" da vitrine bate. Só
+      # leitura, e só do próprio checkout.
       - name: Testes offline (não chamam modelo, não custam nada)
-        run: deno test --node-modules-dir=auto --allow-env supabase/functions/_tests/
+        run: deno test --node-modules-dir=auto --allow-env --allow-read=lib,supabase supabase/functions/_tests/
 
       - name: Suíte de comportamento
         # Só quando pedido E com a chave configurada. Sem a chave os casos são
