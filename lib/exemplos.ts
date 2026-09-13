@@ -78,10 +78,35 @@ export const EXEMPLOS: Exemplo[] = [
     ],
   },
   {
+    titulo: "O ritmo do dia",
+    eyebrow: "Ela fala três vezes por dia",
+    descricao:
+      "Às 06h ela abre o dia com o que precisa de decisão sua. À 13h volta pra saber o que passou pela manhã. Às 19h fecha, pergunta o que andou e remarca o que sobrou. Se vocês já conversaram, ela pula a pergunta — não repete o que acabou de ser dito.",
+    // Exceção deliberada ao padrão, a mesma de "Avisos que chegam sozinhos":
+    // aqui as frases são DELAS, não suas. É categoria em que a pessoa não pede
+    // nada — a mensagem chega no horário, e mostrar um pedido do usuário
+    // descreveria errado o que a categoria é.
+    //
+    // As três são a FORMA REAL das mensagens, copiadas de _shared/brief-manha.ts,
+    // _shared/meio-do-dia.ts e _shared/fim-do-dia.ts. Se algum desses textos
+    // mudar, estas mudam junto — vitrine que promete uma frase que o produto
+    // não diz é a mesma classe de erro da secretária que afirma o que o banco
+    // não tem.
+    //
+    // A quebra de linha das mensagens reais vira travessão aqui, e as aspas
+    // internas viram curvas simples — a Home já envolve cada frase em aspas
+    // curvas duplas, e aspas retas dentro delas ficam ilegíveis.
+    frases: [
+      "☀️ quinta, 13/09 — 2 pra decidir",
+      "☕ Meio do dia — ‘procurar o bolo’, das 11:00, já passou. Andou?",
+      "🌙 Fim do dia — o que andou hoje?",
+    ],
+  },
+  {
     titulo: "Ela empurra o dia",
     eyebrow: "Nos dias em que não flui",
     descricao:
-      "Despeje tudo de uma vez num áudio e ela separa. Às 19h ela pergunta o que andou e remarca o que sobrou — olhando antes se o dia novo cabe. E quando você trava, ela dá um passo físico de dois minutos em vez de repetir a lista.",
+      "Despeje tudo de uma vez num áudio e ela separa — o que não tinha prazo na sua fala vira nota, não tarefa com data inventada. E quando você trava, ela dá um passo físico de dois minutos em vez de repetir a lista.",
     frases: [
       "(áudio) preciso pagar o boleto, cobrar o Fulano, agendar a revisão…",
       "fiz a proposta e a call. o resto não deu",
