@@ -100,11 +100,17 @@ export default async function Home() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {/* flex-wrap + justify-center em vez de grid: a última fileira quase
+              nunca fecha (são 10 categorias e 3 colunas), e centralizada ela
+              fica embaixo do miolo em vez de encostada à esquerda com meia
+              fileira vazia. As bases replicam 1 / 2 / 3 colunas descontando o
+              gap-5, então o alinhamento das fileiras cheias é idêntico ao da
+              grade — e continua certo se o número de categorias mudar. */}
+          <div className="flex flex-wrap justify-center gap-5">
             {EXEMPLOS.map((grupo) => (
               <div
                 key={grupo.titulo}
-                className="flex flex-col gap-3 aurora-card rounded-xl border border-aurora-line bg-aurora-surface p-5 backdrop-blur-sm"
+                className="flex basis-full flex-col gap-3 aurora-card rounded-xl border border-aurora-line bg-aurora-surface p-5 backdrop-blur-sm sm:basis-[calc((100%-1.25rem)/2)] lg:basis-[calc((100%-2.5rem)/3)]"
               >
                 <span className="text-[13px] font-bold tracking-tight text-aurora-accent-text">
                   {grupo.titulo}
