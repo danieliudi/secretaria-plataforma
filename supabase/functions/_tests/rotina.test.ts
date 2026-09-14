@@ -7,6 +7,7 @@ import {
   ehDiaUtil,
   feriadoNacionalDe,
   feriadosNacionais,
+  puloPorRotina,
   rotinaDe,
   vesperaDaSemana,
 } from "../_shared/rotina.ts";
@@ -196,4 +197,82 @@ Deno.test("existe exatamente uma véspera por semana em qualquer rotina parcial"
       .filter((d) => vesperaDaSemana(`2026-09-${d}`, r));
     assertEquals(vesperas.length, 1, `dias úteis ${JSON.stringify(dias)} → ${vesperas}`);
   }
+});
+
+// ── o gate das tasks ──────────────────────────────────────────────────────
+//
+// 2026-09-19 é sábado, 2026-09-20 domingo, 2026-09-21 segunda.
+// 2026-09-07 é a Independência, numa segunda.
+
+const SABADO_ISO = "2026-09-19";
+const DOMINGO_ISO = "2026-09-20";
+const SEGUNDA_ISO = "2026-09-21";
+
+Deno.test("no sábado, o que fala de hoje cala", () => {
+  for (const task of ["brief", "meio_do_dia", "evening_recap", "atrasadas_check"]) {
+    const p = puloPorRotina(task, SEG_A_SEX, SABADO_ISO, DOMINGO_ISO);
+    assertEquals(p?.alvo, "hoje", task);
+    assertEquals(p?.iso, SABADO_ISO, task);
+    assertEquals(p?.motivo.tipo, "folga", task);
+  }
+});
+
+Deno.test("no domingo à noite, o que fala de amanhã RODA — porque amanhã é segunda", () => {
+  // O caso que o critério ingênuo ("é fim de semana? cala") quebraria: avisar
+  // no domingo que a segunda está impossível é exatamente quando serve.
+  for (const task of ["agenda_check", "lugar_novo"]) {
+    assertEquals(puloPorRotina(task, SEG_A_SEX, DOMINGO_ISO, SEGUNDA_ISO), null, task);
+  }
+});
+
+Deno.test("na sexta à noite, o que fala de amanhã cala — amanhã é sábado", () => {
+  for (const task of ["agenda_check", "lugar_novo"]) {
+    const p = puloPorRotina(task, SEG_A_SEX, "2026-09-18", SABADO_ISO);
+    assertEquals(p?.alvo, "amanhã", task);
+    assertEquals(p?.iso, SABADO_ISO, task);
+  }
+});
+
+Deno.test("compromisso que a pessoa marcou nunca cala", () => {
+  // Lembrete, evento, reunião: ela pediu. Silenciar quebraria a promessa.
+  for (const task of ["reminders", "scheduled", "prep_reuniao", "reunioes"]) {
+    assertEquals(puloPorRotina(task, SEG_A_SEX, SABADO_ISO, DOMINGO_ISO), null, task);
+  }
+});
+
+Deno.test("sistema e dinheiro nunca calam", () => {
+  for (const task of ["despesa_anomala", "ads_check", "alerts", "resumo_diario", "conflito_check"]) {
+    assertEquals(puloPorRotina(task, SEG_A_SEX, SABADO_ISO, DOMINGO_ISO), null, task);
+  }
+});
+
+Deno.test("task desconhecida roda — na dúvida, não silencia", () => {
+  assertEquals(puloPorRotina("task_que_nao_existe", SEG_A_SEX, SABADO_ISO, DOMINGO_ISO), null);
+  assertEquals(puloPorRotina("", SEG_A_SEX, SABADO_ISO, DOMINGO_ISO), null);
+});
+
+Deno.test("quem trabalha sábado recebe no sábado", () => {
+  const comSabado = rotinaDe([1, 2, 3, 4, 5, 6]);
+  assertEquals(puloPorRotina("brief", comSabado, SABADO_ISO, DOMINGO_ISO), null);
+  assertEquals(puloPorRotina("brief", comSabado, DOMINGO_ISO, SEGUNDA_ISO)?.alvo, "hoje");
+});
+
+Deno.test("feriado cala e o motivo carrega o nome", () => {
+  const p = puloPorRotina("brief", SEG_A_SEX, "2026-09-07", "2026-09-08");
+  assertEquals(p?.motivo.tipo, "feriado");
+  assertEquals(p?.motivo.tipo === "feriado" ? p.motivo.feriado.nome : null, "Independência");
+});
+
+Deno.test("tenant sem rotina cadastrada continua recebendo como sempre", () => {
+  // null no banco = nunca respondeu. Segue seg–sex, que é o comportamento de
+  // hoje pra dia útil — a mudança pra quem não configurou nada é só o silêncio
+  // no fim de semana.
+  const padrao = rotinaDe(null);
+  assertEquals(puloPorRotina("brief", padrao, SEGUNDA_ISO, "2026-09-22"), null);
+  assertEquals(puloPorRotina("brief", padrao, SABADO_ISO, DOMINGO_ISO)?.alvo, "hoje");
+});
+
+Deno.test("data malformada não silencia ninguém", () => {
+  assertEquals(puloPorRotina("brief", SEG_A_SEX, "sábado", "domingo"), null);
+  assertEquals(puloPorRotina("brief", SEG_A_SEX, "", ""), null);
 });

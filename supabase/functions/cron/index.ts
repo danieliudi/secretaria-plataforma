@@ -93,6 +93,7 @@ import {
   type Tenant,
 } from "../_shared/tenant.ts";
 import { envioCompartilhadoEstrito } from "../_shared/proactive-send.ts";
+import { puloPorRotina, rotinaDe } from "../_shared/rotina.ts";
 import {
   erroSeguroDeProvedor,
   montaVocabulario,
@@ -4250,8 +4251,42 @@ async function tenantIdsComDespesaRecente(): Promise<Set<string>> {
   return new Set((data ?? []).map((r: { tenant_id: string }) => r.tenant_id));
 }
 
+// ─── rotina: o que cala fora do dia útil ────────────────────────────────────
+//
+// Um ponto de estrangulamento só, de propósito — mesma escolha de
+// comDiaDaSemana no tool_result. Espalhar o `if` por dentro de cada runX
+// garantiria que o próximo job nascesse sem ele.
+//
+// A decisão (quais tasks calam, e por quê) mora em _shared/rotina.ts, pura e
+// testada. Aqui fica só o que depende do relógio e o texto do motivo.
+
+/** "YYYY-MM-DD" em SP, com deslocamento em dias. */
+function diaEmSP(offsetDias = 0): string {
+  const d = new Date(Date.now() + offsetDias * 24 * 3600_000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);
+}
+
+/**
+ * Devolve o resultado de pulo, ou null quando a task pode rodar.
+ *
+ * Nunca lança: um erro aqui silenciaria a plataforma, e o sintoma seria
+ * ausência de mensagem — a falha que ninguém reporta.
+ */
+function puloDaTask(task: string, tenant: Tenant): { avisou: false; pulado: string } | null {
+  const pulo = puloPorRotina(task, rotinaDe(tenant.dias_uteis), diaEmSP(0), diaEmSP(1));
+  if (!pulo) return null;
+
+  const porque = pulo.motivo.tipo === "feriado"
+    ? `feriado nacional (${pulo.motivo.feriado.nome})`
+    : "fora dos dias úteis do tenant";
+  return { avisou: false, pulado: `${pulo.alvo} ${pulo.iso} não é dia útil — ${porque}` };
+}
+
 /** Roda a task mecânica pro tenant já resolvido e revalidado — chamada pelo executor, dentro de EdgeRuntime.waitUntil. */
 async function executarTaskMecanica(task: string, tenant: Tenant): Promise<unknown> {
+  const pulo = puloDaTask(task, tenant);
+  if (pulo) return pulo;
+
   const env = await buildTenantEnv(tenant);
   switch (task) {
     case "reminders":

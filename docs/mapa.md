@@ -12,7 +12,7 @@ documento defasado não deve travar deploy.
 edge_functions=7
 paginas=15
 rotas_api=9
-migrations=34
+migrations=35
 testes=34
 -->
 

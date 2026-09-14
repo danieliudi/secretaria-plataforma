@@ -254,3 +254,66 @@ export function vesperaDaSemana(iso: string, rotina: Rotina): boolean {
   if (dia === null) return false;
   return new Date(`${iso}T12:00:00Z`).getUTCDay() === dia;
 }
+
+// ─── quais mensagens calam fora do dia útil ─────────────────────────────────
+//
+// O critério não é "é fim de semana", é SOBRE O QUÊ a mensagem fala:
+//
+// - Fala do trabalho de HOJE → cala no dia de folga. Tarefa atrasada no sábado
+//   continua atrasada na segunda; avisar no sábado não adianta pra ninguém.
+// - Fala de AMANHÃ → olha o dia seguinte, não o atual. Domingo à noite
+//   avisando que a segunda está impossível é exatamente quando serve.
+// - Fala de um compromisso que a PESSOA marcou (lembrete pontual, evento,
+//   reunião) → nunca cala. Ela pediu; silenciar quebraria a promessa.
+// - Fala de sistema ou de dinheiro (watchdog, despesa, ads, feedback) → nunca
+//   cala. Não é sobre a rotina de ninguém.
+//
+// REGRA 7: estes valores são o campo `task` que o pg_cron manda no corpo do
+// POST — contrato com o banco, não nome interno. Os seis foram conferidos
+// contra `cron.job` em 14/09/2026. Renomear aqui sem mexer no `cron.job.command`
+// desliga o silêncio sem erro nenhum aparecendo.
+
+export const CALA_SE_HOJE_NAO_E_UTIL: ReadonlySet<string> = new Set([
+  "brief",
+  "meio_do_dia",
+  "evening_recap",
+  "atrasadas_check",
+]);
+
+export const CALA_SE_AMANHA_NAO_E_UTIL: ReadonlySet<string> = new Set([
+  "agenda_check",
+  "lugar_novo",
+]);
+
+export interface PuloDeRotina {
+  alvo: "hoje" | "amanhã";
+  iso: string;
+  motivo: MotivoNaoUtil;
+}
+
+/**
+ * A task deve ser pulada? Devolve o porquê, ou null pra rodar.
+ *
+ * Recebe as duas datas já resolvidas em SP pelo chamador, em vez de calcular —
+ * função pura é testável, e "que dia é hoje" já é decidido num lugar só na
+ * plataforma inteira.
+ *
+ * Na dúvida, RODA. Task desconhecida, data malformada, rotina vazia: tudo
+ * devolve null. Silenciar por engano produz ausência de mensagem, que é a
+ * falha que ninguém reporta — o usuário só acha que a secretária parou.
+ */
+export function puloPorRotina(
+  task: string,
+  rotina: Rotina,
+  hojeISO: string,
+  amanhaISO: string,
+): PuloDeRotina | null {
+  const olhaAmanha = CALA_SE_AMANHA_NAO_E_UTIL.has(task);
+  if (!olhaAmanha && !CALA_SE_HOJE_NAO_E_UTIL.has(task)) return null;
+
+  const iso = olhaAmanha ? amanhaISO : hojeISO;
+  const { util, motivo } = diaUtil(iso, rotina);
+  if (util || !motivo) return null;
+
+  return { alvo: olhaAmanha ? "amanhã" : "hoje", iso, motivo };
+}
