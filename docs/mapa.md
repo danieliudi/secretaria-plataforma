@@ -13,7 +13,7 @@ edge_functions=7
 paginas=15
 rotas_api=9
 migrations=34
-testes=32
+testes=34
 -->
 
 ## Edge functions (7)
@@ -83,8 +83,10 @@ antes de criar — a chance de já existir é alta. Os que mais são reaproveita
 `tenant` (resolve tenant e monta o env) · `internal-auth` (autenticação de
 função) · `task-provider` + `task-provider-factory` (os 6 gerenciadores de
 tarefa) · `dia-semana` (dia da semana de qualquer data, e o eco no retorno de
-tool) · `log-seguro` (`semDadoPessoal`) · `uso` (registro de custo de modelo) ·
-`http-retry` · `proactive-send` (entrega multi-canal com dedupe).
+tool) · `rotina` (dias úteis do tenant, feriados nacionais calculados, e o dia
+do planejamento semanal) · `log-seguro` (`semDadoPessoal`) · `uso` (registro de
+custo de modelo) · `http-retry` · `proactive-send` (entrega multi-canal com
+dedupe).
 
 ## Providers de tarefa (9 arquivos, 6 gerenciadores)
 

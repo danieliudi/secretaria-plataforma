@@ -138,6 +138,33 @@ com notificação de deploy, e e-mail real sumindo em silêncio é pior que ruí
 
 ## Regra 6 — erro da sessão vira regra
 
+### 13/09/2026 · "quinta, 13/09" na vitrine — e 13/09/2026 é domingo
+
+Publiquei em `lib/exemplos.ts`, como exemplo da mensagem da manhã, a frase
+"☀️ quinta, 13/09 — 2 pra decidir". O par está errado: 13/09/2026 caiu num
+domingo. Foi pro `main` e pro site.
+
+O que dói é o trajeto. Isso passou por mockup aprovado, `tsc --noEmit` limpo,
+`npm run build`, screenshot que eu olhei com atenção (achei três problemas de
+composição nela) e CI com 445 testes verdes. **Nenhum desses passos compara as
+duas metades do par** — o nome do dia e a data são strings independentes, e
+ninguém confronta.
+
+É exatamente o mesmo buraco que a sessão tinha acabado de fechar dentro da Mia,
+onde a mensagem carregava o nome do dia e o banco carregava a data. Lá a
+resposta foi `_shared/dia-semana.ts` no ponto de estrangulamento do
+`tool_result`. Aqui eu tinha reproduzido o defeito à mão, no texto.
+
+**Regra derivada:** dia da semana escrito ao lado de uma data, em QUALQUER
+lugar — mensagem, vitrine, comentário, teste — é par a conferir, não texto.
+Fechado por `_tests/vitrine-datas.test.ts`, que lê `lib/exemplos.ts` e valida
+todo par `"<dia>, DD/MM"`. Verificado nas duas direções: com a data errada de
+volta, ele falha dizendo qual é o dia real.
+
+E o corolário, que é o mais caro: **olhar a tela não é conferir o dado.** Eu
+olhei aquela screenshot procurando composição, e li "quinta, 13/09" três vezes
+sem ver. Revisão visual pega layout; só cálculo pega contradição.
+
 ### 13/09/2026 · escrevi no mapa um cron que o banco não tem
 
 O `docs/mapa.md` saiu desta sessão com `tarefas-atrasadas` em `0 11 * * 1`
